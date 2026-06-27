@@ -18,6 +18,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
 import urllib.request
 import json
+import csv
 import threading
 
 import database
@@ -227,6 +228,8 @@ class SleepTrackerApp:
         except Exception:
             pass
 
+        self.stats_period = "1w"  # 平均睡眠時間の集計期間: 1w / 1m / 1y / all
+
         # 1. UI起動時にモニターが動いていなければ自動起動する (ライフサイクル同期)
         lifecycle.ensure_monitor_running()
 
@@ -297,6 +300,31 @@ class SleepTrackerApp:
         except Exception:
             pass
 
+    def _set_stats_period(self, period: str):
+        self.stats_period = period
+        self.update_prediction_and_stats()
+
+    def export_csv(self):
+        from tkinter import filedialog
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV ファイル", "*.csv")],
+            initialfile=f"sleep_data_{datetime.now().strftime('%Y%m%d')}.csv",
+            title="睡眠データをCSVで保存"
+        )
+        if not file_path:
+            return
+        try:
+            sessions = database.get_all_sessions()
+            with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["就寝時刻", "起床時刻", "睡眠時間(時間)", "種別"])
+                for start, end, dur, stype in sessions:
+                    writer.writerow([start, end or "", f"{dur:.2f}", stype])
+            messagebox.showinfo("エクスポート完了", f"CSVを保存しました:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("エクスポートエラー", str(e))
+
     def monitor_lifecycle_check(self):
         """モニターの生存を確認し、切れている（トレイから終了された）場合はUIも切る"""
         pid_file = lifecycle.PID_FILE
@@ -366,6 +394,8 @@ class SleepTrackerApp:
         threshold_spin.bind("<Return>", lambda e: self.save_threshold())
         threshold_spin.bind("<FocusOut>", lambda e: self.save_threshold())
         tk.Label(settings_frame, text="分", bg="#1e1e2e", fg="#a6adc8", font=("Yu Gothic UI", 9)).pack(side="left")
+
+        ttk.Button(settings_frame, text="CSV出力", command=self.export_csv).pack(side="right", padx=5)
 
         self.warning_frame = tk.Frame(self.root, bg="#f38ba8", bd=1, relief="solid")
         self.warning_label = tk.Label(self.warning_frame, text="", font=("Yu Gothic UI", 10, "bold"), bg="#f38ba8", fg="#11111b")
@@ -455,25 +485,48 @@ class SleepTrackerApp:
         method_ja = pred_method.replace("Heuristic", "簡易統計").replace("Machine Learning", "機械学習").replace("Awake Duration", "連続覚醒時間")
         tk.Label(self.pred_card, text=f"予測起床時刻: {pred_wake_time.strftime('%H:%M')}頃 ({method_ja})", font=("Yu Gothic Italic", 9), bg="#252538", fg="#a6adc8").pack(anchor="w", padx=15, pady=(0, 10))
 
-        avg_sleep = 0.0
-        last_sleep = 0.0
         total_days = len(self.sessions)
+        last_sleep = 0.0
         if total_days > 0:
-            df = pd.DataFrame(self.sessions, columns=['start', 'end', 'dur', 'type'])
-            avg_sleep = df['dur'].mean()
-            last_sleep = df['dur'].iloc[-1]
-            
+            last_sleep = self.sessions[-1][2]
+
+        # 集計期間でフィルタリング
+        now_dt = datetime.now()
+        period_cutoff = {"1w": now_dt - timedelta(days=7), "1m": now_dt - timedelta(days=30),
+                         "1y": now_dt - timedelta(days=365), "all": None}
+        cutoff = period_cutoff.get(self.stats_period)
+        filtered = [s for s in self.sessions
+                    if cutoff is None or datetime.strptime(s[0], "%Y-%m-%d %H:%M:%S") >= cutoff]
+        avg_sleep = sum(s[2] for s in filtered) / len(filtered) if filtered else 0.0
+
         for widget in self.stats_card.winfo_children():
             widget.destroy()
-            
-        tk.Label(self.stats_card, text="睡眠の統計", font=("Yu Gothic UI", 11, "bold"), bg="#252538", fg="#bac2de").pack(anchor="w", padx=15, pady=(10, 2))
+
+        tk.Label(self.stats_card, text="睡眠の統計", font=("Yu Gothic UI", 11, "bold"), bg="#252538", fg="#bac2de").pack(anchor="w", padx=15, pady=(8, 2))
         tk.Label(self.stats_card, text=f"合計記録日数: {total_days} 日", font=("Yu Gothic", 10), bg="#252538", fg="#a6adc8").pack(anchor="w", padx=15)
-        
-        avg_str = f"平均睡眠時間: {int(avg_sleep)}時間 {int((avg_sleep % 1) * 60)}分"
-        tk.Label(self.stats_card, text=avg_str, font=("Yu Gothic UI", 15, "bold"), bg="#252538", fg="#a6e3a1").pack(anchor="w", padx=15, pady=2)
-        
+
+        # 期間切り替えボタン
+        period_frame = tk.Frame(self.stats_card, bg="#252538")
+        period_frame.pack(anchor="w", padx=15, pady=(4, 0))
+        period_labels = [("先週", "1w"), ("先月", "1m"), ("一年", "1y"), ("全期間", "all")]
+        for label, key in period_labels:
+            is_active = (self.stats_period == key)
+            btn = tk.Button(
+                period_frame, text=label, font=("Yu Gothic UI", 8, "bold"),
+                bg="#89b4fa" if is_active else "#313244",
+                fg="#1e1e2e" if is_active else "#a6adc8",
+                activebackground="#89b4fa", activeforeground="#1e1e2e",
+                bd=0, padx=6, pady=2, cursor="hand2",
+                command=lambda k=key: self._set_stats_period(k)
+            )
+            btn.pack(side="left", padx=(0, 3))
+
+        period_ja = {"1w": "過去7日", "1m": "過去30日", "1y": "過去1年", "all": "全期間"}
+        avg_str = f"平均睡眠時間 ({period_ja[self.stats_period]}): {int(avg_sleep)}時間 {int((avg_sleep % 1) * 60)}分"
+        tk.Label(self.stats_card, text=avg_str, font=("Yu Gothic UI", 13, "bold"), bg="#252538", fg="#a6e3a1").pack(anchor="w", padx=15, pady=(4, 2))
+
         last_str = f"前回の睡眠時間: {int(last_sleep)}時間 {int((last_sleep % 1) * 60)}分" if total_days > 0 else "前回の睡眠時間: 記録なし"
-        tk.Label(self.stats_card, text=last_str, font=("Yu Gothic", 10), bg="#252538", fg="#cdd6f4").pack(anchor="w", padx=15, pady=(0, 10))
+        tk.Label(self.stats_card, text=last_str, font=("Yu Gothic", 10), bg="#252538", fg="#cdd6f4").pack(anchor="w", padx=15, pady=(0, 8))
 
     def go_to_prev_week(self):
         self.current_week_start -= timedelta(days=7)
@@ -506,56 +559,99 @@ class SleepTrackerApp:
         fig = Figure(figsize=(7, 4), dpi=100, facecolor="#252538")
         ax = fig.add_subplot(111)
         ax.set_facecolor("#252538")
-        ax.grid(True, color="#313244", linestyle="--", linewidth=0.5)
-        
+        ax.grid(True, color="#313244", linestyle="--", linewidth=0.5, zorder=0)
+
         weekdays_ja = ['月', '火', '水', '木', '金', '土', '日']
-        durations = [0.0] * 7
         days_in_week = [self.current_week_start + timedelta(days=i) for i in range(7)]
         xticklabels = [f"{w}\n({d.strftime('%m/%d')})" for w, d in zip(weekdays_ja, days_in_week)]
-        
-        for start_time_str, _, dur, _ in self.sessions:
+
+        # 各日の最長セッションを「主睡眠」として就寝・起床時刻を取得
+        durations = [0.0] * 7
+        best_session = [None] * 7  # (duration, start_dt, end_dt)
+
+        for start_str, end_str, dur, _ in self.sessions:
             try:
-                start_dt = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
+                start_dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                end_dt = datetime.strptime(end_str, "%Y-%m-%d %H:%M:%S") if end_str else None
                 for idx, day in enumerate(days_in_week):
                     if start_dt.date() == day.date():
                         durations[idx] += dur
+                        if best_session[idx] is None or dur > best_session[idx][0]:
+                            best_session[idx] = (dur, start_dt, end_dt)
                         break
             except Exception:
                 continue
 
-        ax.spines['bottom'].color = '#45475a'
-        ax.spines['left'].color = '#45475a'
-        ax.spines['top'].visible = False
-        ax.spines['right'].visible = False
-        
+        for sp in [ax.spines['top'], ax.spines['right']]:
+            sp.set_visible(False)
+        ax.spines['bottom'].set_color('#45475a')
+        ax.spines['left'].set_color('#45475a')
         ax.set_xticks(range(7))
         ax.set_xticklabels(xticklabels, color='#bac2de', fontsize=9, fontproperties='Yu Gothic')
-        
         ax.tick_params(colors='#bac2de', which='both', labelsize=10)
         ax.set_ylabel("睡眠時間 (時間)", color="#bac2de", fontsize=10, fontproperties='Yu Gothic')
 
         has_data = any(d > 0 for d in durations)
         if has_data:
-            bars = ax.bar(weekdays_ja, durations, color="#89b4fa", width=0.55, edgecolor="#b4befe", linewidth=0.8)
+            bars = ax.bar(range(7), durations, color="#89b4fa", width=0.55, edgecolor="#b4befe", linewidth=0.8, zorder=2)
             for bar in bars:
                 height = bar.get_height()
                 if height > 0:
                     ax.annotate(f'{height:.1f}h',
                                 xy=(bar.get_x() + bar.get_width() / 2, height),
-                                xytext=(0, 3),
-                                textcoords="offset points",
+                                xytext=(0, 3), textcoords="offset points",
                                 ha='center', va='bottom', fontsize=8, color="#cdd6f4")
+
+            # 就寝・起床時刻の傾向ライン（右軸）
+            ax2 = ax.twinx()
+            ax2.set_facecolor("#252538")
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_color('#45475a')
+            ax2.spines['left'].set_visible(False)
+            ax2.spines['bottom'].set_visible(False)
+
+            bed_x, bed_y, wake_x, wake_y = [], [], [], []
+            for i, s in enumerate(best_session):
+                if s is None:
+                    continue
+                _, start_dt, end_dt = s
+                bh = start_dt.hour + start_dt.minute / 60
+                if bh < 12:  # 深夜0-12時は24時以降として表示
+                    bh += 24
+                bed_x.append(i)
+                bed_y.append(bh)
+                if end_dt:
+                    wh = end_dt.hour + end_dt.minute / 60
+                    wake_x.append(i)
+                    wake_y.append(wh)
+
+            if bed_x:
+                ax2.plot(bed_x, bed_y, 'o-', color="#f9e2af", linewidth=1.8, markersize=5, label="就寝", zorder=3)
+            if wake_x:
+                ax2.plot(wake_x, wake_y, 's-', color="#a6e3a1", linewidth=1.8, markersize=5, label="起床", zorder=3)
+
+            # 右軸のティック: 時刻表示（00:00=24, 01:00=25 …）
+            ax2.set_ylim(3, 28)
+            ax2.set_yticks([6, 8, 10, 20, 22, 24, 26])
+            ax2.set_yticklabels([f"{h%24:02d}:00" for h in [6, 8, 10, 20, 22, 24, 26]],
+                                color="#bac2de", fontsize=8)
+            ax2.set_ylabel("就寝 / 起床時刻", color="#bac2de", fontsize=9, fontproperties='Yu Gothic')
+            ax2.tick_params(colors='#bac2de')
+
+            if bed_x or wake_x:
+                lines1, labels1 = ax2.get_legend_handles_labels()
+                ax2.legend(lines1, labels1, loc="upper right", fontsize=8,
+                           facecolor="#313244", edgecolor="#45475a", labelcolor="#cdd6f4")
         else:
-            # プレースホルダーのダミーテキスト配置
-            ax.text(0.5, 0.5, "この週の睡眠ログデータはありません。\n(グラフをクリックして手動で追加できます)", 
-                    ha="center", va="center", color="#a6adc8", fontsize=10, transform=ax.transAxes, fontproperties='Yu Gothic')
+            ax.text(0.5, 0.5, "この週の睡眠ログデータはありません。\n(グラフをクリックして手動で追加できます)",
+                    ha="center", va="center", color="#a6adc8", fontsize=10,
+                    transform=ax.transAxes, fontproperties='Yu Gothic')
             ax.set_ylim(0, 10)
 
         fig.tight_layout()
         self.canvas = FigureCanvasTkAgg(fig, master=self.graph_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        
         self.canvas.mpl_connect("button_press_event", self.on_graph_click)
 
     def on_graph_click(self, event):
