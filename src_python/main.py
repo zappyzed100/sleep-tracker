@@ -251,6 +251,10 @@ class SleepTrackerApp:
         next_btn = ttk.Button(nav_frame, text="次の週 ▶", command=self.go_to_next_week)
         next_btn.pack(side="right", padx=5)
 
+        # 今週ボタン
+        today_btn = ttk.Button(nav_frame, text="今週", command=self.go_to_today)
+        today_btn.pack(side="right", padx=5)
+
         # カレンダー日付選択コントロール (Entry + カレンダーボタンの分離設計)
         # クッキリとした「白背景・黒文字」で視認性を最優先にします
         cal_label = tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10), bg="#1e1e2e", fg="#a6adc8")
@@ -350,6 +354,12 @@ class SleepTrackerApp:
     def go_to_next_week(self):
         """1週間進む"""
         self.current_week_start += timedelta(days=7)
+        self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
+        self.update_week_view()
+
+    def go_to_today(self):
+        """今日を含む週に戻る"""
+        self.current_week_start = self.get_week_start_monday(datetime.now())
         self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
         self.update_week_view()
 
