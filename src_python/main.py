@@ -325,6 +325,44 @@ class SleepTrackerApp:
         except Exception as e:
             messagebox.showerror("エクスポートエラー", str(e))
 
+    def import_csv(self):
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(
+            filetypes=[("CSV ファイル", "*.csv"), ("すべてのファイル", "*.*")],
+            title="インポートするCSVファイルを選択"
+        )
+        if not file_path:
+            return
+        try:
+            sessions = []
+            with open(file_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                headers = reader.fieldnames or []
+                # 列名を柔軟に検出 (日本語/英語どちらでも対応)
+                col_start = next((h for h in headers if "就寝" in h or "start" in h.lower()), headers[0] if headers else None)
+                col_end   = next((h for h in headers if "起床" in h or "end" in h.lower()), headers[1] if len(headers) > 1 else None)
+                col_type  = next((h for h in headers if "種別" in h or "type" in h.lower()), None)
+                if col_start is None or col_end is None:
+                    messagebox.showerror("列検出エラー", "就寝時刻・起床時刻の列が見つかりませんでした。\n列名を確認してください。")
+                    return
+                for row in reader:
+                    start = row.get(col_start, "").strip()
+                    end   = row.get(col_end, "").strip()
+                    stype = row.get(col_type, "sleep").strip() if col_type else "sleep"
+                    if start and end:
+                        sessions.append((start, end, stype or "sleep"))
+            if not sessions:
+                messagebox.showwarning("データなし", "インポートできる行がありませんでした。")
+                return
+            def run():
+                imported, skipped = database.bulk_import_sessions(sessions)
+                msg = f"インポート完了\n\n追加: {imported} 件\nスキップ (重複 / 不正): {skipped} 件"
+                self.root.after(0, self.update_week_view)
+                self.root.after(0, lambda: messagebox.showinfo("インポート完了", msg))
+            threading.Thread(target=run, daemon=True).start()
+        except Exception as e:
+            messagebox.showerror("インポートエラー", f"CSVの読み込みに失敗しました:\n{e}")
+
     def force_sync_ui(self):
         def run():
             try:
@@ -505,17 +543,31 @@ class SleepTrackerApp:
         tk.Label(row, text="分以上続いたらスリープと判定", **_lbl_b).pack(side="left")
         tk.Label(s2, text="※ モニターを再起動すると反映されます", **_lbl_s).pack(anchor="w", padx=15, pady=(0, 12))
 
-        # CSVエクスポート
+        # CSVインポート / エクスポート
         s3 = tk.Frame(self.settings_content, **_card)
         s3.pack(**_kw, pady=8)
-        tk.Label(s3, text="データエクスポート", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
-        tk.Label(s3, text="すべての睡眠データを CSV ファイルとして保存します。Excel で開けます。",
-                 **_lbl_s).pack(anchor="w", padx=15)
+        tk.Label(s3, text="データのインポート / エクスポート", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+
+        ex_row = tk.Frame(s3, bg="#252538")
+        ex_row.pack(anchor="w", padx=15, pady=(0, 4))
+        tk.Label(ex_row, text="エクスポート:", **_lbl_b).pack(side="left")
         tk.Button(
-            s3, text="CSVファイルに書き出す", command=self.export_csv,
+            ex_row, text="CSVに書き出す", command=self.export_csv,
             bg="#89b4fa", fg="#1e1e2e", activebackground="#7ba5f0", activeforeground="#1e1e2e",
-            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
-        ).pack(anchor="w", padx=15, pady=(6, 12))
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=10, pady=4, cursor="hand2"
+        ).pack(side="left", padx=(8, 0))
+
+        im_row = tk.Frame(s3, bg="#252538")
+        im_row.pack(anchor="w", padx=15, pady=(4, 4))
+        tk.Label(im_row, text="インポート:", **_lbl_b).pack(side="left")
+        tk.Button(
+            im_row, text="CSVから読み込む", command=self.import_csv,
+            bg="#a6e3a1", fg="#1e1e2e", activebackground="#94d18f", activeforeground="#1e1e2e",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=10, pady=4, cursor="hand2"
+        ).pack(side="left", padx=(8, 0))
+
+        tk.Label(s3, text="※ 列順: 就寝時刻, 起床時刻, 睡眠時間(時間), 種別 — このアプリのCSV出力と同じ形式",
+                 **_lbl_s).pack(anchor="w", padx=15, pady=(2, 12))
 
         # データ管理
         s4 = tk.Frame(self.settings_content, **_card)

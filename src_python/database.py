@@ -481,6 +481,38 @@ def delete_session_and_rebuild(session_id: int) -> bool:
         print(f"Error deleting session: {e}")
         return False
 
+def bulk_import_sessions(sessions: list) -> tuple[int, int]:
+    """CSVなどから複数セッションを一括挿入する。重複は INSERT OR IGNORE でスキップ。
+    Returns (imported_count, skipped_count)"""
+    imported = 0
+    skipped = 0
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    for start_str, end_str, stype in sessions:
+        try:
+            start_dt = parse_datetime(start_str)
+            end_dt = parse_datetime(end_str)
+            if start_dt >= end_dt:
+                skipped += 1
+                continue
+            duration_hours = (end_dt - start_dt).total_seconds() / 3600.0
+            cursor.execute("""
+                INSERT OR IGNORE INTO sleep_sessions (start_time, end_time, duration_hours, session_type)
+                VALUES (?, ?, ?, ?)
+            """, (start_str, end_str, duration_hours, stype or "sleep"))
+            if cursor.rowcount > 0:
+                imported += 1
+            else:
+                skipped += 1
+        except Exception:
+            skipped += 1
+    conn.commit()
+    conn.close()
+    if imported > 0:
+        rebuild_events_file_from_db()
+        git_push_logs()
+    return imported, skipped
+
 def add_session_and_rebuild(start_time_str: str, end_time_str: str, session_type: str = "sleep") -> tuple[bool, str]:
     """新しい睡眠セッションを手動で挿入し、sleep_events.txt を再構築してプッシュする"""
     try:
