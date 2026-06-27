@@ -394,3 +394,128 @@ def get_all_sessions():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def get_sessions_with_ids():
+    """IDを含むすべての睡眠セッションを取得する"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, start_time, end_time, duration_hours, session_type 
+        FROM sleep_sessions 
+        ORDER BY start_time ASC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def rebuild_events_file_from_db():
+    """SQLite データベースの全セッションと、既存のシステムログから sleep_events.txt を再構築する"""
+    system_events = []
+    
+    if os.path.exists(EVENTS_FILE):
+        try:
+            with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(",", 1)
+                    if len(parts) == 2:
+                        try:
+                            ts = parse_datetime(parts[0])
+                            event_type = parts[1]
+                            if event_type in ("STARTUP", "SHUTDOWN") or event_type.startswith("ERROR") or event_type.startswith("TRAY_ERROR"):
+                                system_events.append((ts, f"{parts[0]},{event_type}\n"))
+                        except ValueError:
+                            continue
+        except Exception as e:
+            print(f"Error reading events file for rebuild: {e}")
+
+    session_events = []
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT start_time, end_time, session_type FROM sleep_sessions")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        for start_time_str, end_time_str, s_type in rows:
+            try:
+                start_dt = parse_datetime(start_time_str)
+                start_ev = "IDLE_START" if s_type == "sleep" else "OUT_START"
+                session_events.append((start_dt, f"{start_time_str},{start_ev}\n"))
+                
+                if end_time_str:
+                    end_dt = parse_datetime(end_time_str)
+                    end_ev = "IDLE_RESUME" if s_type == "sleep" else "OUT_END"
+                    session_events.append((end_dt, f"{end_time_str},{end_ev}\n"))
+            except ValueError:
+                continue
+    except Exception as e:
+        print(f"Error reading DB for rebuild: {e}")
+
+    all_events = system_events + session_events
+    all_events.sort(key=lambda x: x[0])
+
+    try:
+        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+            for _, line_text in all_events:
+                f.write(line_text)
+        print("Successfully rebuilt sleep_events.txt from DB sessions.")
+    except Exception as e:
+        print(f"Error writing rebuilt events file: {e}")
+
+def delete_session_and_rebuild(session_id: int) -> bool:
+    """指定されたIDの睡眠セッションを削除し、sleep_events.txt を再構築してプッシュする"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sleep_sessions WHERE id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+        
+        rebuild_events_file_from_db()
+        git_push_logs()
+        return True
+    except Exception as e:
+        print(f"Error deleting session: {e}")
+        return False
+
+def add_session_and_rebuild(start_time_str: str, end_time_str: str, session_type: str = "sleep") -> tuple[bool, str]:
+    """新しい睡眠セッションを手動で挿入し、sleep_events.txt を再構築してプッシュする"""
+    try:
+        start_dt = parse_datetime(start_time_str)
+        end_dt = parse_datetime(end_time_str)
+        
+        if start_dt >= end_dt:
+            return False, "開始時刻は終了時刻より前である必要があります。"
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT start_time, end_time FROM sleep_sessions")
+        rows = cursor.fetchall()
+        for s_str, e_str in rows:
+            if not e_str:
+                continue
+            s_dt = parse_datetime(s_str)
+            e_dt = parse_datetime(e_str)
+            if (start_dt < e_dt) and (s_dt < end_dt):
+                conn.close()
+                return False, "既存の睡眠記録と時間帯が重複しています。"
+
+        duration_hours = (end_dt - start_dt).total_seconds() / 3600.0
+        
+        cursor.execute("""
+            INSERT INTO sleep_sessions (start_time, end_time, duration_hours, session_type)
+            VALUES (?, ?, ?, ?)
+        """, (start_time_str, end_time_str, duration_hours, session_type))
+        conn.commit()
+        conn.close()
+        
+        rebuild_events_file_from_db()
+        git_push_logs()
+        return True, "成功"
+    except Exception as e:
+        print(f"Error adding session: {e}")
+        return False, str(e)
