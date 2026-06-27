@@ -473,7 +473,7 @@ class SleepTrackerApp:
         _lbl_h = {"font": ("Yu Gothic UI", 11, "bold"), "bg": "#252538", "fg": "#bac2de"}
         _lbl_b = {"font": ("Yu Gothic UI", 10), "bg": "#252538", "fg": "#cdd6f4"}
         _lbl_s = {"font": ("Yu Gothic UI", 9), "bg": "#252538", "fg": "#6c7086"}
-        _kw = {"padx": 40, "pady": 8, "fill": "x"}
+        _kw = {"padx": 40, "fill": "x"}
 
         # 起動設定
         s1 = tk.Frame(self.settings_content, **_card)
@@ -490,7 +490,7 @@ class SleepTrackerApp:
 
         # スリープ判定時間
         s2 = tk.Frame(self.settings_content, **_card)
-        s2.pack(**_kw)
+        s2.pack(**_kw, pady=8)
         tk.Label(s2, text="スリープ判定時間", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
         row = tk.Frame(s2, bg="#252538")
         row.pack(anchor="w", padx=15, pady=(0, 4))
@@ -507,7 +507,7 @@ class SleepTrackerApp:
 
         # CSVエクスポート
         s3 = tk.Frame(self.settings_content, **_card)
-        s3.pack(**_kw)
+        s3.pack(**_kw, pady=8)
         tk.Label(s3, text="データエクスポート", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
         tk.Label(s3, text="すべての睡眠データを CSV ファイルとして保存します。Excel で開けます。",
                  **_lbl_s).pack(anchor="w", padx=15)
@@ -519,7 +519,7 @@ class SleepTrackerApp:
 
         # データ管理
         s4 = tk.Frame(self.settings_content, **_card)
-        s4.pack(**_kw)
+        s4.pack(**_kw, pady=(8, 30))
         tk.Label(s4, text="データ管理", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
         btn_row = tk.Frame(s4, bg="#252538")
         btn_row.pack(anchor="w", padx=15, pady=(0, 12))
