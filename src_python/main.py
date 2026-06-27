@@ -495,6 +495,9 @@ class SleepTrackerApp:
         self._watch_monitor_exit()
         self.root.after(30000, self.monitor_lifecycle_check)
 
+        # 3. sleep_events.txt の変更を監視して IDLE_RESUME 時に自動再描画
+        self._start_events_file_watcher()
+
     def get_week_start_monday(self, dt: datetime) -> datetime:
         return (dt - timedelta(days=dt.weekday())).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -806,6 +809,26 @@ class SleepTrackerApp:
                     return
 
         self.root.after(30000, self.monitor_lifecycle_check)
+
+    def _start_events_file_watcher(self):
+        try:
+            self._events_mtime = os.path.getmtime(database.EVENTS_FILE)
+        except OSError:
+            self._events_mtime = 0
+        self.root.after(30000, self._check_events_file)
+
+    def _check_events_file(self):
+        def run():
+            try:
+                mtime = os.path.getmtime(database.EVENTS_FILE)
+            except OSError:
+                mtime = 0
+            if mtime != self._events_mtime:
+                self._events_mtime = mtime
+                database.sync_logs_to_db()
+                self.root.after(0, self.update_week_view)
+        threading.Thread(target=run, daemon=True).start()
+        self.root.after(30000, self._check_events_file)
 
     def create_widgets(self):
         # ── タイトル行 ───────────────────────────────────────────
