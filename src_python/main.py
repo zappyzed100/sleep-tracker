@@ -619,6 +619,7 @@ class SleepTrackerApp:
             try:
                 database.validate_gist_connection()
                 database.sync_logs_to_db()
+                self.root.after(0, self.hide_connection_warning)
                 self.root.after(
                     0,
                     lambda: messagebox.showinfo(
