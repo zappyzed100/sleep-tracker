@@ -394,6 +394,9 @@ class SleepTrackerApp:
         next_btn = ttk.Button(nav_frame, text="次の週 ▶", command=self.go_to_next_week)
         next_btn.pack(side="right", padx=5)
 
+        today_btn = ttk.Button(nav_frame, text="今週", command=self.go_to_this_week)
+        today_btn.pack(side="right", padx=5)
+
         cal_label = tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10), bg="#1e1e2e", fg="#a6adc8")
         cal_label.pack(side="right", padx=(10, 2))
         
@@ -479,6 +482,11 @@ class SleepTrackerApp:
 
     def go_to_next_week(self):
         self.current_week_start += timedelta(days=7)
+        self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
+        self.update_week_view()
+
+    def go_to_this_week(self):
+        self.current_week_start = self.get_week_start_monday(datetime.now())
         self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
         self.update_week_view()
 
