@@ -1,11 +1,9 @@
 # File: src_python/database.py
-# Description: Processes raw logs, SQLite DB, and synchronizes GitHub Gist mobile events & auto-git push.
+# Description: Parses sleep_events.txt directly for sessions, synchronizes GitHub Gist mobile events & auto-git push.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: init_db, get_db_connection, sync_logs_to_db, get_all_sessions, git_push_logs, sync_mobile_events_from_gist
-# Dependencies: sqlite3, os, datetime, subprocess, threading, json, urllib.request
+# Main Functions: get_all_sessions, get_sessions_with_ids, add_session_and_rebuild, delete_session_and_rebuild, sync_with_gist, git_push_logs, sync_mobile_events_from_gist
 
-import sqlite3
 import os
 import subprocess
 import threading
@@ -16,31 +14,10 @@ from datetime import datetime, timedelta
 # プロジェクトルートディレクトリの設定
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "src_cpp")
-DB_PATH = os.path.join(BASE_DIR, "sleep_tracker.db")
 
 EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
 HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-
-def get_db_connection():
-    """SQLite データベースへの接続を取得する"""
-    return sqlite3.connect(DB_PATH)
-
-def init_db():
-    """データベースとテーブルの初期化"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sleep_sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            start_time TEXT UNIQUE,
-            end_time TEXT,
-            duration_hours REAL,
-            session_type TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
 
 def parse_datetime(dt_str: str) -> datetime:
     """文字列から datetime オブジェクトをパースする"""
@@ -64,11 +41,296 @@ def read_last_heartbeat() -> tuple[datetime, int] | None:
         pass
     return None
 
+def _load_min_duration() -> timedelta:
+    """config.json から idle_threshold_minutes を読み込んで timedelta で返す"""
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            minutes = max(1, int(json.load(f).get("idle_threshold_minutes", 30)))
+    except Exception:
+        minutes = 30
+    return timedelta(minutes=minutes)
+
+def _parse_events_to_sessions() -> list:
+    """sleep_events.txt を状態遷移マシンで解析して睡眠セッションのリストを返す。
+    各要素: (start_time_str, end_time_str, duration_hours, session_type)
+    """
+    if not os.path.exists(EVENTS_FILE):
+        return []
+
+    events = []
+    try:
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split(",", 1)
+                if len(parts) == 2:
+                    try:
+                        events.append((parse_datetime(parts[0]), parts[1]))
+                    except ValueError:
+                        continue
+    except Exception as e:
+        print(f"Error reading events file: {e}")
+        return []
+
+    if not events:
+        return []
+
+    events.sort(key=lambda x: x[0])
+    MIN_SLEEP = _load_min_duration()
+
+    sessions = []
+    state = "ACTIVE"
+    sleep_start = None
+    session_type = None
+    is_out = False
+
+    for i, (ts, event) in enumerate(events):
+        if event == "OUT_START":
+            is_out = True
+            if state == "SLEEPING":
+                dur = ts - sleep_start
+                if dur >= MIN_SLEEP:
+                    sessions.append((
+                        sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        ts.strftime("%Y-%m-%d %H:%M:%S"),
+                        dur.total_seconds() / 3600.0,
+                        session_type,
+                    ))
+                state = "ACTIVE"
+                sleep_start = session_type = None
+            continue
+        elif event == "OUT_END":
+            is_out = False
+            continue
+
+        if state == "ACTIVE":
+            if not is_out and event in ("IDLE_START", "SUSPEND", "SHUTDOWN"):
+                state = "SLEEPING"
+                sleep_start = ts
+                session_type = "IDLE" if event == "IDLE_START" else "POWER"
+            elif event in ("STARTUP", "RESUME") and i > 0:
+                if not is_out:
+                    prev_ts, _ = events[i - 1]
+                    if ts - prev_ts > timedelta(hours=4):
+                        hb = read_last_heartbeat()
+                        if hb and prev_ts < hb[0] < ts:
+                            start = max(prev_ts, hb[0] - timedelta(milliseconds=hb[1]))
+                        else:
+                            start = prev_ts
+                        dur = ts - start
+                        if dur >= MIN_SLEEP:
+                            sessions.append((
+                                start.strftime("%Y-%m-%d %H:%M:%S"),
+                                ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                dur.total_seconds() / 3600.0,
+                                "POWER_LOSS",
+                            ))
+        elif state == "SLEEPING":
+            if event in ("IDLE_RESUME", "RESUME", "STARTUP"):
+                dur = ts - sleep_start
+                if dur >= MIN_SLEEP:
+                    sessions.append((
+                        sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        ts.strftime("%Y-%m-%d %H:%M:%S"),
+                        dur.total_seconds() / 3600.0,
+                        session_type,
+                    ))
+                state = "ACTIVE"
+                sleep_start = session_type = None
+            elif event in ("SUSPEND", "SHUTDOWN"):
+                session_type = "POWER"
+
+    return sessions
+
+def _sort_events_file():
+    """sleep_events.txt をタイムスタンプ順にソートして上書きする"""
+    if not os.path.exists(EVENTS_FILE):
+        return
+    try:
+        parsed = []
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split(",", 1)
+                if len(parts) == 2:
+                    try:
+                        parsed.append((parse_datetime(parts[0]), stripped))
+                    except ValueError:
+                        parsed.append((datetime.min, stripped))
+        parsed.sort(key=lambda x: x[0])
+        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+            for _, line in parsed:
+                f.write(line + "\n")
+    except Exception as e:
+        print(f"Error sorting events file: {e}")
+
+# ── セッション取得 ────────────────────────────────────────────────
+
+def get_all_sessions() -> list:
+    """sleep_events.txt を直接パースして睡眠セッションのリストを返す"""
+    return _parse_events_to_sessions()
+
+def get_sessions_with_ids() -> list:
+    """インデックス付きセッションを返す: (index, start, end, dur, type)"""
+    return [(i, s, e, d, t) for i, (s, e, d, t) in enumerate(_parse_events_to_sessions())]
+
+# ── セッション追加・削除 ──────────────────────────────────────────
+
+def add_session_and_rebuild(start_time_str: str, end_time_str: str, session_type: str = "sleep") -> tuple[bool, str]:
+    """新しい睡眠セッションを IDLE_START/IDLE_RESUME イベントとして追加する"""
+    try:
+        start_dt = parse_datetime(start_time_str)
+        end_dt = parse_datetime(end_time_str)
+    except Exception as e:
+        return False, str(e)
+
+    if start_dt >= end_dt:
+        return False, "開始時刻は終了時刻より前である必要があります。"
+
+    for s, e, _, _ in _parse_events_to_sessions():
+        if not e:
+            continue
+        if parse_datetime(s) < end_dt and start_dt < parse_datetime(e):
+            return False, "既存の睡眠記録と時間帯が重複しています。"
+
+    start_line = f"{start_time_str},IDLE_START"
+    if os.path.exists(EVENTS_FILE):
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            if any(l.strip() == start_line for l in f):
+                return False, "同じ開始時刻の記録が既に存在します。"
+
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(EVENTS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{start_time_str},IDLE_START\n")
+            f.write(f"{end_time_str},IDLE_RESUME\n")
+        _sort_events_file()
+        git_push_logs()
+        return True, "成功"
+    except Exception as e:
+        return False, str(e)
+
+def delete_session_and_rebuild(session_index: int) -> bool:
+    """指定インデックスの睡眠セッションに対応するイベント行を削除してプッシュする"""
+    try:
+        sessions = _parse_events_to_sessions()
+        if session_index < 0 or session_index >= len(sessions):
+            return False
+
+        start_str, end_str, _, stype = sessions[session_index]
+
+        if stype == "IDLE":
+            remove = {f"{start_str},IDLE_START", f"{end_str},IDLE_RESUME"}
+        elif stype == "POWER":
+            remove = {f"{start_str},SHUTDOWN", f"{start_str},SUSPEND",
+                      f"{end_str},STARTUP",  f"{end_str},RESUME"}
+        else:
+            return False  # POWER_LOSS はイベント行が確定できないため削除不可
+
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        new_lines = [l for l in lines if l.strip() not in remove]
+        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+        git_push_logs()
+        return True
+    except Exception as e:
+        print(f"Error deleting session: {e}")
+        return False
+
+def bulk_import_sessions(sessions: list) -> tuple[int, int]:
+    """CSVからのセッションを IDLE_START/IDLE_RESUME イベントとして追記する。
+    sessions: list of (start_str, end_str, stype)
+    Returns: (imported, skipped)
+    """
+    existing = set()
+    if os.path.exists(EVENTS_FILE):
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            existing = {l.strip() for l in f}
+
+    imported = skipped = 0
+    new_lines = []
+
+    for start_str, end_str, _ in sessions:
+        try:
+            s_dt = parse_datetime(start_str)
+            e_dt = parse_datetime(end_str)
+            if s_dt >= e_dt:
+                skipped += 1
+                continue
+        except Exception:
+            skipped += 1
+            continue
+
+        start_line = f"{start_str},IDLE_START"
+        if start_line in existing:
+            skipped += 1
+            continue
+
+        new_lines.append(start_line + "\n")
+        end_line = f"{end_str},IDLE_RESUME"
+        if end_line not in existing:
+            new_lines.append(end_line + "\n")
+        imported += 1
+
+    if new_lines:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(EVENTS_FILE, "a", encoding="utf-8") as f:
+            f.writelines(new_lines)
+        _sort_events_file()
+        git_push_logs()
+
+    return imported, skipped
+
+def clear_all_data():
+    """sleep_events.txt と Gist 上のログを完全に初期化する"""
+    try:
+        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+    except Exception as e:
+        print(f"Failed to clear events file: {e}")
+
+    # Gist の mobile_event.txt を "INIT" に上書き
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            gist_id = config.get("gist_id")
+            token = config.get("github_token")
+            if gist_id and token:
+                url = f"https://api.github.com/gists/{gist_id}"
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "Sleep-Tracker-Client",
+                }
+                data = {"files": {"mobile_event.txt": {"content": "INIT"}}}
+                req = urllib.request.Request(
+                    url, data=json.dumps(data).encode("utf-8"),
+                    headers=headers, method="PATCH"
+                )
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+    except Exception as e:
+        print(f"Failed to reset Gist: {e}")
+
+    try:
+        git_push_logs()
+    except Exception as e:
+        print(f"Failed to push cleared logs to git: {e}")
+
+# ── Gist / Git 同期 ──────────────────────────────────────────────
+
 def sync_mobile_events_from_gist():
     """GitHub Gist から iPhone が記録した外出/帰宅イベントを取得してマージする"""
     if not os.path.exists(CONFIG_PATH):
         return
-        
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -76,329 +338,65 @@ def sync_mobile_events_from_gist():
             github_token = config.get("github_token")
     except Exception:
         return
-        
+
     if not gist_id:
         return
-        
-    # GitHub トークンの取得 (config.jsonのトークンを優先し、無ければ gh CLI から取得)
+
     token = github_token
     if not token:
         try:
             res = subprocess.run(
                 ["gh", "auth", "token"],
                 capture_output=True, text=True, check=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             token = res.stdout.strip()
         except Exception:
             pass
-            
+
     if not token:
         return
-        
-    # Gist API からのフェッチ
+
     url = f"https://api.github.com/gists/{gist_id}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "Sleep-Tracker-Client"
+        "User-Agent": "Sleep-Tracker-Client",
     }
-    
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req) as response:
             res_data = json.loads(response.read().decode("utf-8"))
-            files = res_data.get("files", {})
-            mobile_file = files.get("mobile_event.txt", {})
+            mobile_file = res_data.get("files", {}).get("mobile_event.txt", {})
             content = mobile_file.get("content", "").strip()
-            
             if not content or content.startswith("INIT"):
                 return
-                
-            # パース例: LEAVE,2026-06-27 15:30:00
             parts = content.split(",")
             if len(parts) == 2:
                 event_type = "OUT_START" if parts[0] == "LEAVE" else "OUT_END"
                 event_time_str = parts[1]
-                
-                # 新しいイベントか確認
-                new_event_line = f"{event_time_str},{event_type}\n"
-                
-                # sleep_events.txt にすでに同一のイベントが含まれているか確認
+                new_line = f"{event_time_str},{event_type}"
                 already_exists = False
                 if os.path.exists(EVENTS_FILE):
                     with open(EVENTS_FILE, "r", encoding="utf-8") as ef:
-                        for line in ef:
-                            if line.strip() == f"{event_time_str},{event_type}":
-                                already_exists = True
-                                break
-                                
-                # 存在しない場合のみ追記
+                        already_exists = any(l.strip() == new_line for l in ef)
                 if not already_exists:
                     with open(EVENTS_FILE, "a", encoding="utf-8") as ef:
-                        ef.write(new_event_line)
+                        ef.write(new_line + "\n")
                     print(f"Synced mobile event from Gist: {event_type} at {event_time_str}")
     except Exception as e:
         print(f"Failed to fetch mobile events from Gist: {e}")
 
-def clear_all_data():
-    """生ログファイル、SQLiteデータベース、およびGist上のログを完全に初期化する"""
-    # 1. sleep_events.txt を空にする
-    try:
-        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
-            f.write("")
-    except Exception as e:
-        print(f"Failed to clear events file: {e}")
-        
-    # 2. SQLite データベースの sleep_sessions テーブルをクリア
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM sleep_sessions")
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Failed to clear SQLite DB: {e}")
-        
-    # 3. Gist の mobile_event.txt を "INIT" に上書きして初期化
-    try:
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                gist_id = config.get("gist_id")
-                token = config.get("github_token")
-                
-            if gist_id and token:
-                url = f"https://api.github.com/gists/{gist_id}"
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                    "User-Agent": "Sleep-Tracker-Client"
-                }
-                # Gist初期化用JSONデータ
-                data = {
-                    "files": {
-                        "mobile_event.txt": {
-                            "content": "INIT"
-                        }
-                    }
-                }
-                req = urllib.request.Request(
-                    url, 
-                    data=json.dumps(data).encode("utf-8"), 
-                    headers=headers, 
-                    method="PATCH"
-                )
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    pass
-    except Exception as e:
-        print(f"Failed to reset Gist: {e}")
-        
-    # 4. Git への同期プッシュ (空になったことをリポジトリに反映)
-    try:
-        git_push_logs()
-    except Exception as e:
-        print(f"Failed to push cleared logs to git: {e}")
-
-def sync_logs_to_db():
-    """生ログを解析してデータベースに同期する"""
-    # 0a. sleep_events.txt が存在しない場合（新PC・移植時）は Gist からダウンロード
+def sync_with_gist():
+    """Gist との双方向同期: モバイルイベント取得 + sleep_events.txt プッシュ"""
     if not os.path.exists(EVENTS_FILE):
         _download_events_from_gist()
-
-    # 0b. Gist からモバイルの外出/帰宅イベントを取得してマージ
     sync_mobile_events_from_gist()
-
-    if not os.path.exists(EVENTS_FILE):
-        return
-
-    # 1. ログファイルの読み込みとパース
-    events = []
-    try:
-        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(",", 1)
-                if len(parts) == 2:
-                    try:
-                        ts = parse_datetime(parts[0])
-                        event_type = parts[1]
-                        events.append((ts, event_type))
-                    except ValueError:
-                        continue
-    except Exception as e:
-        print(f"Error reading events file: {e}")
-        return
-
-    if not events:
-        return
-
-    # 時系列順にソート
-    events.sort(key=lambda x: x[0])
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # 2. 状態遷移マシンによる睡眠セッションの抽出
-    # 状態: 'ACTIVE' (PC使用中), 'SLEEPING' (PC未使用/オフ)
-    state = 'ACTIVE'
-    sleep_start = None
-    session_type = None
-    is_out = False  # 外出中フラグ
-
-    # 最小睡眠セッション時間 = idle閾値と同じ（設定変更を即反映）
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as _f:
-            _threshold_minutes = max(1, int(json.load(_f).get("idle_threshold_minutes", 30)))
-    except Exception:
-        _threshold_minutes = 30
-    MIN_SLEEP_DURATION = timedelta(minutes=_threshold_minutes)
-
-    for i, (ts, event) in enumerate(events):
-        # 外出状態の更新
-        if event == 'OUT_START':
-            is_out = True
-            # もし現在睡眠中なら、外出が始まった時点で強制的に睡眠をクローズする
-            if state == 'SLEEPING':
-                duration = ts - sleep_start
-                if duration >= MIN_SLEEP_DURATION:
-                    duration_hours = duration.total_seconds() / 3600.0
-                    try:
-                        cursor.execute("""
-                            INSERT OR IGNORE INTO sleep_sessions 
-                            (start_time, end_time, duration_hours, session_type)
-                            VALUES (?, ?, ?, ?)
-                        """, (
-                            sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
-                            ts.strftime("%Y-%m-%d %H:%M:%S"),
-                            duration_hours,
-                            session_type
-                        ))
-                    except sqlite3.Error:
-                        pass
-                state = 'ACTIVE'
-                sleep_start = None
-                session_type = None
-            continue
-        elif event == 'OUT_END':
-            is_out = False
-            continue
-
-        if state == 'ACTIVE':
-            # 外出中でない場合のみ睡眠を開始する
-            if not is_out and event in ('IDLE_START', 'SUSPEND', 'SHUTDOWN'):
-                state = 'SLEEPING'
-                sleep_start = ts
-                session_type = 'IDLE' if event == 'IDLE_START' else 'POWER'
-            
-            # 突然の電源断の検出 (直前イベントがACTIVEなのに突如STARTUP/RESUMEが来た場合)
-            elif event in ('STARTUP', 'RESUME') and i > 0:
-                # 外出中でない場合のみ電源断睡眠を記録
-                if not is_out:
-                    prev_ts, prev_event = events[i-1]
-                    if ts - prev_ts > timedelta(hours=4):
-                        # 最後のハートビート情報があればそれを開始時刻に補正
-                        hb_info = read_last_heartbeat()
-                        if hb_info and prev_ts < hb_info[0] < ts:
-                            last_active = hb_info[0] - timedelta(milliseconds=hb_info[1])
-                            start_time = max(prev_ts, last_active)
-                        else:
-                            start_time = prev_ts
-
-                        duration = ts - start_time
-                        if duration >= MIN_SLEEP_DURATION:
-                            duration_hours = duration.total_seconds() / 3600.0
-                            try:
-                                cursor.execute("""
-                                    INSERT OR IGNORE INTO sleep_sessions 
-                                    (start_time, end_time, duration_hours, session_type)
-                                    VALUES (?, ?, ?, ?)
-                                """, (
-                                    start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                    ts.strftime("%Y-%m-%d %H:%M:%S"),
-                                    duration_hours,
-                                    'POWER_LOSS'
-                                ))
-                            except sqlite3.Error:
-                                pass
-
-        elif state == 'SLEEPING':
-            # 睡眠終了イベント
-            if event in ('IDLE_RESUME', 'RESUME', 'STARTUP'):
-                duration = ts - sleep_start
-                if duration >= MIN_SLEEP_DURATION:
-                    duration_hours = duration.total_seconds() / 3600.0
-                    try:
-                        cursor.execute("""
-                            INSERT OR IGNORE INTO sleep_sessions 
-                            (start_time, end_time, duration_hours, session_type)
-                            VALUES (?, ?, ?, ?)
-                        """, (
-                            sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
-                            ts.strftime("%Y-%m-%d %H:%M:%S"),
-                            duration_hours,
-                            session_type
-                        ))
-                    except sqlite3.Error:
-                        pass
-                state = 'ACTIVE'
-                sleep_start = None
-                session_type = None
-            
-            # すでにSLEEPING状態で、さらに深い電源状態（SUSPEND/SHUTDOWN）に入った場合はタイプ更新
-            elif event in ('SUSPEND', 'SHUTDOWN'):
-                session_type = 'POWER'
-
-    conn.commit()
-    conn.close()
-
-    # ログ変更の自動 Git Push を非同期で実行
     git_push_logs()
 
-def _get_gist_config() -> tuple[str, str] | tuple[None, None]:
-    """config.json から gist_id と github_token を読み込む"""
-    if not os.path.exists(CONFIG_PATH):
-        return None, None
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        return config.get("gist_id"), config.get("github_token")
-    except Exception:
-        return None, None
-
-def _push_events_to_gist():
-    """sleep_events.txt の内容を Gist に PATCH する（同期・内部用）"""
-    if not os.path.exists(EVENTS_FILE):
-        return
-    gist_id, token = _get_gist_config()
-    if not gist_id or not token:
-        return
-    try:
-        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
-            content = f.read()
-        url = f"https://api.github.com/gists/{gist_id}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "Sleep-Tracker-Client"
-        }
-        data = {"files": {"sleep_events.txt": {"content": content if content.strip() else " "}}}
-        req = urllib.request.Request(
-            url, data=json.dumps(data).encode("utf-8"), headers=headers, method="PATCH"
-        )
-        with urllib.request.urlopen(req, timeout=10) as _:
-            pass
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] sleep_events.txt pushed to Gist.")
-    except Exception as e:
-        print(f"Failed to push events to Gist: {e}")
-
 def validate_gist_connection():
-    """Gist IDとトークンの有効性を確認する。失敗時は ValueError を送出する"""
+    """Gist ID とトークンの有効性を確認する。失敗時は ValueError を送出する"""
     import urllib.error
     gist_id, token = _get_gist_config()
     if not gist_id:
@@ -426,8 +424,46 @@ def validate_gist_connection():
     except urllib.error.URLError as e:
         raise ValueError(f"ネットワークエラー: {e.reason}") from e
 
+def _get_gist_config() -> tuple[str, str] | tuple[None, None]:
+    """config.json から gist_id と github_token を読み込む"""
+    if not os.path.exists(CONFIG_PATH):
+        return None, None
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config.get("gist_id"), config.get("github_token")
+    except Exception:
+        return None, None
+
+def _push_events_to_gist():
+    """sleep_events.txt の内容を Gist に PATCH する"""
+    if not os.path.exists(EVENTS_FILE):
+        return
+    gist_id, token = _get_gist_config()
+    if not gist_id or not token:
+        return
+    try:
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+        url = f"https://api.github.com/gists/{gist_id}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Sleep-Tracker-Client",
+        }
+        data = {"files": {"sleep_events.txt": {"content": content if content.strip() else " "}}}
+        req = urllib.request.Request(
+            url, data=json.dumps(data).encode("utf-8"), headers=headers, method="PATCH"
+        )
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] sleep_events.txt pushed to Gist.")
+    except Exception as e:
+        print(f"Failed to push events to Gist: {e}")
+
 def _download_events_from_gist():
-    """Gist から sleep_events.txt をダウンロードしてローカルに書き出す（移植・初回起動時用）"""
+    """Gist から sleep_events.txt をダウンロードしてローカルに書き出す"""
     gist_id, token = _get_gist_config()
     if not gist_id or not token:
         return
@@ -437,7 +473,7 @@ def _download_events_from_gist():
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "Sleep-Tracker-Client"
+            "User-Agent": "Sleep-Tracker-Client",
         }
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as response:
@@ -479,178 +515,8 @@ def record_out_event(event_type: str):
     git_push_logs()
 
 def git_push_logs(wait: bool = False):
-    """sleep_events.txt を Gist に非同期バックアップする。wait=True で最大8秒ブロック（終了時用）"""
+    """sleep_events.txt を Gist に非同期バックアップする。wait=True で最大8秒ブロック"""
     t = threading.Thread(target=_push_events_to_gist, daemon=True)
     t.start()
     if wait:
         t.join(timeout=8)
-
-def get_all_sessions():
-    """保存されているすべての睡眠セッションを取得する"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT start_time, end_time, duration_hours, session_type 
-        FROM sleep_sessions 
-        ORDER BY start_time ASC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
-def get_sessions_with_ids():
-    """IDを含むすべての睡眠セッションを取得する"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, start_time, end_time, duration_hours, session_type 
-        FROM sleep_sessions 
-        ORDER BY start_time ASC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
-def rebuild_events_file_from_db():
-    """SQLite データベースの全セッションと、既存のシステムログから sleep_events.txt を再構築する"""
-    system_events = []
-    
-    if os.path.exists(EVENTS_FILE):
-        try:
-            with open(EVENTS_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split(",", 1)
-                    if len(parts) == 2:
-                        try:
-                            ts = parse_datetime(parts[0])
-                            event_type = parts[1]
-                            if event_type in ("STARTUP", "SHUTDOWN") or event_type.startswith("ERROR") or event_type.startswith("TRAY_ERROR"):
-                                system_events.append((ts, f"{parts[0]},{event_type}\n"))
-                        except ValueError:
-                            continue
-        except Exception as e:
-            print(f"Error reading events file for rebuild: {e}")
-
-    session_events = []
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT start_time, end_time, session_type FROM sleep_sessions")
-        rows = cursor.fetchall()
-        conn.close()
-        
-        for start_time_str, end_time_str, s_type in rows:
-            try:
-                start_dt = parse_datetime(start_time_str)
-                start_ev = "IDLE_START" if s_type == "sleep" else "OUT_START"
-                session_events.append((start_dt, f"{start_time_str},{start_ev}\n"))
-                
-                if end_time_str:
-                    end_dt = parse_datetime(end_time_str)
-                    end_ev = "IDLE_RESUME" if s_type == "sleep" else "OUT_END"
-                    session_events.append((end_dt, f"{end_time_str},{end_ev}\n"))
-            except ValueError:
-                continue
-    except Exception as e:
-        print(f"Error reading DB for rebuild: {e}")
-
-    all_events = system_events + session_events
-    all_events.sort(key=lambda x: x[0])
-
-    try:
-        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
-            for _, line_text in all_events:
-                f.write(line_text)
-        print("Successfully rebuilt sleep_events.txt from DB sessions.")
-    except Exception as e:
-        print(f"Error writing rebuilt events file: {e}")
-
-def delete_session_and_rebuild(session_id: int) -> bool:
-    """指定されたIDの睡眠セッションを削除し、sleep_events.txt を再構築してプッシュする"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM sleep_sessions WHERE id = ?", (session_id,))
-        conn.commit()
-        conn.close()
-        
-        rebuild_events_file_from_db()
-        git_push_logs()
-        return True
-    except Exception as e:
-        print(f"Error deleting session: {e}")
-        return False
-
-def bulk_import_sessions(sessions: list) -> tuple[int, int]:
-    """CSVなどから複数セッションを一括挿入する。重複は INSERT OR IGNORE でスキップ。
-    Returns (imported_count, skipped_count)"""
-    imported = 0
-    skipped = 0
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    for start_str, end_str, stype in sessions:
-        try:
-            start_dt = parse_datetime(start_str)
-            end_dt = parse_datetime(end_str)
-            if start_dt >= end_dt:
-                skipped += 1
-                continue
-            duration_hours = (end_dt - start_dt).total_seconds() / 3600.0
-            cursor.execute("""
-                INSERT OR IGNORE INTO sleep_sessions (start_time, end_time, duration_hours, session_type)
-                VALUES (?, ?, ?, ?)
-            """, (start_str, end_str, duration_hours, stype or "sleep"))
-            if cursor.rowcount > 0:
-                imported += 1
-            else:
-                skipped += 1
-        except Exception:
-            skipped += 1
-    conn.commit()
-    conn.close()
-    if imported > 0:
-        rebuild_events_file_from_db()
-        git_push_logs()
-    return imported, skipped
-
-def add_session_and_rebuild(start_time_str: str, end_time_str: str, session_type: str = "sleep") -> tuple[bool, str]:
-    """新しい睡眠セッションを手動で挿入し、sleep_events.txt を再構築してプッシュする"""
-    try:
-        start_dt = parse_datetime(start_time_str)
-        end_dt = parse_datetime(end_time_str)
-        
-        if start_dt >= end_dt:
-            return False, "開始時刻は終了時刻より前である必要があります。"
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT start_time, end_time FROM sleep_sessions")
-        rows = cursor.fetchall()
-        for s_str, e_str in rows:
-            if not e_str:
-                continue
-            s_dt = parse_datetime(s_str)
-            e_dt = parse_datetime(e_str)
-            if (start_dt < e_dt) and (s_dt < end_dt):
-                conn.close()
-                return False, "既存の睡眠記録と時間帯が重複しています。"
-
-        duration_hours = (end_dt - start_dt).total_seconds() / 3600.0
-        
-        cursor.execute("""
-            INSERT INTO sleep_sessions (start_time, end_time, duration_hours, session_type)
-            VALUES (?, ?, ?, ?)
-        """, (start_time_str, end_time_str, duration_hours, session_type))
-        conn.commit()
-        conn.close()
-        
-        rebuild_events_file_from_db()
-        git_push_logs()
-        return True, "成功"
-    except Exception as e:
-        print(f"Error adding session: {e}")
-        return False, str(e)

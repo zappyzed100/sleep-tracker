@@ -260,7 +260,7 @@ def monitor_loop():
             if time.time() - last_gist_sync >= 3600:
                 last_gist_sync = time.time()
                 try:
-                    threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
+                    threading.Thread(target=database.sync_mobile_events_from_gist, daemon=True).start()
                 except Exception:
                     pass
 
@@ -279,10 +279,9 @@ def main():
 
     log_event("STARTUP")
 
-    # データベースの初期化と、起動時の初回Gist自動同期（非同期）
-    database.init_db()
+    # 起動時の初回Gist自動同期（非同期）
     try:
-        threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
+        threading.Thread(target=database.sync_mobile_events_from_gist, daemon=True).start()
     except Exception:
         pass
 

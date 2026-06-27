@@ -438,12 +438,6 @@ class SleepTrackerApp:
         # 1. UI起動時にモニターが動いていなければ自動起動する (ライフサイクル同期)
         lifecycle.ensure_monitor_running()
 
-        database.init_db()
-        try:
-            database.sync_logs_to_db()
-        except Exception:
-            pass
-
         self.sessions = database.get_all_sessions()
 
         now = datetime.now()
@@ -621,7 +615,7 @@ class SleepTrackerApp:
         def run():
             try:
                 database.validate_gist_connection()
-                database.sync_logs_to_db()
+                database.sync_with_gist()
                 self.root.after(0, self.hide_connection_warning)
                 self.root.after(
                     0,
@@ -646,7 +640,6 @@ class SleepTrackerApp:
         def run():
             try:
                 database.clear_all_data()
-                database.sync_logs_to_db()
                 self.root.after(0, self.update_week_view)
                 self.root.after(
                     0,
@@ -825,7 +818,6 @@ class SleepTrackerApp:
                 mtime = 0
             if mtime != self._events_mtime:
                 self._events_mtime = mtime
-                database.sync_logs_to_db()
                 self.root.after(0, self.update_week_view)
         threading.Thread(target=run, daemon=True).start()
         self.root.after(30000, self._check_events_file)
