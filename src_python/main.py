@@ -267,6 +267,10 @@ class SleepTrackerApp:
         self.root.after(50, lambda: _apply_dark_titlebar(self.root))
         self.periodic_connection_check()
 
+        # config.json がなければ初回セットアップとして設定タブを自動で開く
+        if not os.path.exists(database.CONFIG_PATH):
+            self.switch_tab("settings")
+
         # 2. モニター終了を定期監視する (トレイ切断時にUIも閉じる)
         self.root.after(5000, self.monitor_lifecycle_check)
 
@@ -386,6 +390,55 @@ class SleepTrackerApp:
                 self.root.after(0, lambda: messagebox.showinfo("削除完了", "すべてのデータを削除しました。"))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("削除エラー", str(e)))
+        threading.Thread(target=run, daemon=True).start()
+
+    def save_github_config(self):
+        token = self.token_var.get().strip()
+        gist_id = self.gist_id_var.get().strip()
+        try:
+            config = {}
+            if os.path.exists(database.CONFIG_PATH):
+                with open(database.CONFIG_PATH, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+            config["github_token"] = token
+            config["gist_id"] = gist_id
+            with open(database.CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            self.github_status_label.config(text="設定を保存しました", fg="#a6e3a1")
+        except Exception as e:
+            self.github_status_label.config(text=f"✗ 保存失敗: {e}", fg="#f38ba8")
+
+    def test_github_connection(self):
+        self.github_status_label.config(text="接続確認中...", fg="#f9e2af")
+        def run():
+            gist_id = self.gist_id_var.get().strip()
+            token = self.token_var.get().strip()
+            if not gist_id or not token:
+                self.root.after(0, lambda: self.github_status_label.config(
+                    text="✗ Gist IDまたはトークンが未入力です", fg="#f38ba8"))
+                return
+            url = f"https://api.github.com/gists/{gist_id}"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "Sleep-Tracker-Client"
+            }
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=8) as _:
+                    now_str = datetime.now().strftime("%H:%M")
+                    self.root.after(0, lambda: self.github_status_label.config(
+                        text=f"✓ 接続成功（確認時刻: {now_str}）", fg="#a6e3a1"))
+            except Exception as e:
+                err = str(e)
+                if "401" in err:
+                    reason = "401 Unauthorized — トークンが無効です"
+                elif "404" in err:
+                    reason = "404 Not Found — Gist IDが無効です"
+                else:
+                    reason = "接続タイムアウト / オフライン"
+                self.root.after(0, lambda: self.github_status_label.config(
+                    text=f"✗ {reason}", fg="#f38ba8"))
         threading.Thread(target=run, daemon=True).start()
 
     def monitor_lifecycle_check(self):
@@ -571,7 +624,7 @@ class SleepTrackerApp:
 
         # データ管理
         s4 = tk.Frame(self.settings_content, **_card)
-        s4.pack(**_kw, pady=(8, 30))
+        s4.pack(**_kw, pady=8)
         tk.Label(s4, text="データ管理", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
         btn_row = tk.Frame(s4, bg="#252538")
         btn_row.pack(anchor="w", padx=15, pady=(0, 12))
@@ -585,6 +638,54 @@ class SleepTrackerApp:
             bg="#f38ba8", fg="#11111b", activebackground="#eba0b2", activeforeground="#11111b",
             font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
         ).pack(side="left")
+
+        # GitHub連携
+        s5 = tk.Frame(self.settings_content, **_card)
+        s5.pack(**_kw, pady=(8, 30))
+        tk.Label(s5, text="GitHub連携", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+
+        tk.Label(s5, text="Personal Access Token (Gist の read/write 権限のみでOK):", **_lbl_b).pack(anchor="w", padx=15, pady=(0, 2))
+        self.token_var = tk.StringVar()
+        tk.Entry(
+            s5, textvariable=self.token_var, show="*",
+            width=52, bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
+            font=("Yu Gothic UI", 10), bd=1, relief="solid"
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+
+        tk.Label(s5, text="Gist ID:", **_lbl_b).pack(anchor="w", padx=15, pady=(0, 2))
+        self.gist_id_var = tk.StringVar()
+        tk.Entry(
+            s5, textvariable=self.gist_id_var,
+            width=52, bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
+            font=("Yu Gothic UI", 10), bd=1, relief="solid"
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+
+        gh_btn_row = tk.Frame(s5, bg="#252538")
+        gh_btn_row.pack(anchor="w", padx=15, pady=(0, 6))
+        tk.Button(
+            gh_btn_row, text="保存", command=self.save_github_config,
+            bg="#89b4fa", fg="#1e1e2e", activebackground="#7ba5f0", activeforeground="#1e1e2e",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        tk.Button(
+            gh_btn_row, text="接続テスト", command=self.test_github_connection,
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
+        ).pack(side="left")
+
+        self.github_status_label = tk.Label(s5, text="", font=("Yu Gothic UI", 10), bg="#252538", fg="#a6adc8")
+        self.github_status_label.pack(anchor="w", padx=15, pady=(4, 4))
+        tk.Label(s5, text="※ config.json にローカル保存されます（gitignore済み）",
+                 **_lbl_s).pack(anchor="w", padx=15, pady=(0, 12))
+
+        # 既存の設定値を入力欄に反映
+        try:
+            with open(database.CONFIG_PATH, "r", encoding="utf-8") as f:
+                _cfg = json.load(f)
+            self.token_var.set(_cfg.get("github_token", ""))
+            self.gist_id_var.set(_cfg.get("gist_id", ""))
+        except Exception:
+            pass
 
     def switch_tab(self, tab_name: str, init: bool = False):
         for name, btn in self.tab_btns.items():
