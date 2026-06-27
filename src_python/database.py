@@ -1,14 +1,16 @@
 # File: src_python/database.py
-# Description: Processes raw logs, extracts sleep sessions, and manages SQLite database with auto-git push.
+# Description: Processes raw logs, SQLite DB, and synchronizes GitHub Gist mobile events & auto-git push.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: init_db, get_db_connection, sync_logs_to_db, get_all_sessions, git_push_logs
-# Dependencies: sqlite3, os, datetime, subprocess, threading
+# Main Functions: init_db, get_db_connection, sync_logs_to_db, get_all_sessions, git_push_logs, sync_mobile_events_from_gist
+# Dependencies: sqlite3, os, datetime, subprocess, threading, json, urllib.request
 
 import sqlite3
 import os
 import subprocess
 import threading
+import json
+import urllib.request
 from datetime import datetime, timedelta
 
 # プロジェクトルートディレクトリの設定
@@ -18,6 +20,7 @@ DB_PATH = os.path.join(BASE_DIR, "sleep_tracker.db")
 
 EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
 HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 def get_db_connection():
     """SQLite データベースへの接続を取得する"""
@@ -61,8 +64,82 @@ def read_last_heartbeat() -> tuple[datetime, int] | None:
         pass
     return None
 
+def sync_mobile_events_from_gist():
+    """GitHub Gist から iPhone が記録した外出/帰宅イベントを取得してマージする"""
+    if not os.path.exists(CONFIG_PATH):
+        return
+        
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            gist_id = config.get("gist_id")
+    except Exception:
+        return
+        
+    if not gist_id:
+        return
+        
+    # GitHub トークンの取得
+    try:
+        res = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True, text=True, check=True
+        )
+        token = res.stdout.strip()
+    except Exception:
+        return
+        
+    # Gist API からのフェッチ
+    url = f"https://api.github.com/gists/{gist_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Sleep-Tracker-Client"
+    }
+    
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            files = res_data.get("files", {})
+            mobile_file = files.get("mobile_event.txt", {})
+            content = mobile_file.get("content", "").strip()
+            
+            if not content or content.startswith("INIT"):
+                return
+                
+            # パース例: LEAVE,2026-06-27 15:30:00
+            parts = content.split(",")
+            if len(parts) == 2:
+                event_type = "OUT_START" if parts[0] == "LEAVE" else "OUT_END"
+                event_time_str = parts[1]
+                
+                # 新しいイベントか確認
+                new_event_line = f"{event_time_str},{event_type}\n"
+                
+                # sleep_events.txt にすでに同一のイベントが含まれているか確認
+                already_exists = False
+                if os.path.exists(EVENTS_FILE):
+                    with open(EVENTS_FILE, "r", encoding="utf-8") as ef:
+                        for line in ef:
+                            if line.strip() == f"{event_time_str},{event_type}":
+                                already_exists = True
+                                break
+                                
+                # 存在しない場合のみ追記
+                if not already_exists:
+                    with open(EVENTS_FILE, "a", encoding="utf-8") as ef:
+                        ef.write(new_event_line)
+                    print(f"Synced mobile event from Gist: {event_type} at {event_time_str}")
+    except Exception as e:
+        print(f"Failed to fetch mobile events from Gist: {e}")
+
 def sync_logs_to_db():
     """生ログを解析してデータベースに同期する"""
+    # 0. Gist からモバイルの外出/帰宅イベントを取得してマージ
+    sync_mobile_events_from_gist()
+
     if not os.path.exists(EVENTS_FILE):
         return
 
@@ -100,49 +177,78 @@ def sync_logs_to_db():
     state = 'ACTIVE'
     sleep_start = None
     session_type = None
+    is_out = False  # 外出中フラグ
 
     # 最小の睡眠判定時間 (例: 30分)
     MIN_SLEEP_DURATION = timedelta(minutes=30)
 
     for i, (ts, event) in enumerate(events):
+        # 外出状態の更新
+        if event == 'OUT_START':
+            is_out = True
+            # もし現在睡眠中なら、外出が始まった時点で強制的に睡眠をクローズする
+            if state == 'SLEEPING':
+                duration = ts - sleep_start
+                if duration >= MIN_SLEEP_DURATION:
+                    duration_hours = duration.total_seconds() / 3600.0
+                    try:
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO sleep_sessions 
+                            (start_time, end_time, duration_hours, session_type)
+                            VALUES (?, ?, ?, ?)
+                        """, (
+                            sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
+                            ts.strftime("%Y-%m-%d %H:%M:%S"),
+                            duration_hours,
+                            session_type
+                        ))
+                    except sqlite3.Error:
+                        pass
+                state = 'ACTIVE'
+                sleep_start = None
+                session_type = None
+            continue
+        elif event == 'OUT_END':
+            is_out = False
+            continue
+
         if state == 'ACTIVE':
-            if event in ('IDLE_START', 'SUSPEND', 'SHUTDOWN'):
+            # 外出中でない場合のみ睡眠を開始する
+            if not is_out and event in ('IDLE_START', 'SUSPEND', 'SHUTDOWN'):
                 state = 'SLEEPING'
                 sleep_start = ts
                 session_type = 'IDLE' if event == 'IDLE_START' else 'POWER'
             
             # 突然の電源断の検出 (直前イベントがACTIVEなのに突如STARTUP/RESUMEが来た場合)
             elif event in ('STARTUP', 'RESUME') and i > 0:
-                # 直前のイベントからギャップがあるか確認する
-                # 前回のイベントから 4時間以上 経過している場合は強制シャットダウンと仮定
-                prev_ts, prev_event = events[i-1]
-                if ts - prev_ts > timedelta(hours=4):
-                    # 最後のハートビート情報があればそれを開始時刻に補正
-                    hb_info = read_last_heartbeat()
-                    if hb_info and prev_ts < hb_info[0] < ts:
-                        # 最後の操作時刻 = ハートビート時刻 - アイドル時間
-                        last_active = hb_info[0] - timedelta(milliseconds=hb_info[1])
-                        # ただし、前回のイベント時刻よりは未来であること
-                        start_time = max(prev_ts, last_active)
-                    else:
-                        start_time = prev_ts
+                # 外出中でない場合のみ電源断睡眠を記録
+                if not is_out:
+                    prev_ts, prev_event = events[i-1]
+                    if ts - prev_ts > timedelta(hours=4):
+                        # 最後のハートビート情報があればそれを開始時刻に補正
+                        hb_info = read_last_heartbeat()
+                        if hb_info and prev_ts < hb_info[0] < ts:
+                            last_active = hb_info[0] - timedelta(milliseconds=hb_info[1])
+                            start_time = max(prev_ts, last_active)
+                        else:
+                            start_time = prev_ts
 
-                    duration = ts - start_time
-                    if duration >= MIN_SLEEP_DURATION:
-                        duration_hours = duration.total_seconds() / 3600.0
-                        try:
-                            cursor.execute("""
-                                INSERT OR IGNORE INTO sleep_sessions 
-                                (start_time, end_time, duration_hours, session_type)
-                                VALUES (?, ?, ?, ?)
-                            """, (
-                                start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                ts.strftime("%Y-%m-%d %H:%M:%S"),
-                                duration_hours,
-                                'POWER_LOSS'
-                            ))
-                        except sqlite3.Error:
-                            pass
+                        duration = ts - start_time
+                        if duration >= MIN_SLEEP_DURATION:
+                            duration_hours = duration.total_seconds() / 3600.0
+                            try:
+                                cursor.execute("""
+                                    INSERT OR IGNORE INTO sleep_sessions 
+                                    (start_time, end_time, duration_hours, session_type)
+                                    VALUES (?, ?, ?, ?)
+                                """, (
+                                    start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                    ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                    duration_hours,
+                                    'POWER_LOSS'
+                                ))
+                            except sqlite3.Error:
+                                pass
 
         elif state == 'SLEEPING':
             # 睡眠終了イベント
@@ -167,8 +273,7 @@ def sync_logs_to_db():
                 sleep_start = None
                 session_type = None
             
-            # すでにSLEEPING状態で、さらに深い電源状態（SUSPEND/SHUTDOWN）に入った場合は
-            # 開始時刻は維持しつつタイプを更新
+            # すでにSLEEPING状態で、さらに深い電源状態（SUSPEND/SHUTDOWN）に入った場合はタイプ更新
             elif event in ('SUSPEND', 'SHUTDOWN'):
                 session_type = 'POWER'
 

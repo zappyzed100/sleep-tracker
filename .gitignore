@@ -17,3 +17,6 @@ src_cpp/*.pdb
 
 # VS Code config (if any)
 .vscode/
+
+# Local config
+config.json
