@@ -1,17 +1,34 @@
 # File: src_python/monitor.py
-# Description: Python fallback monitor to track system idle time and heartbeats, with automatic hourly Gist sync and system tray indicator.
+# Description: Python fallback monitor to track system idle time and heartbeats, with automatic hourly Gist sync.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: get_idle_duration_ms, log_event, update_heartbeat, create_tray_image, quit_action, setup_tray, monitor_loop, main
-# Dependencies: ctypes, time, os, datetime, threading, pystray, PIL, database
+# Main Functions: get_idle_duration_ms, log_event, update_heartbeat, monitor_loop, main
+# Dependencies: ctypes, time, os, sys, datetime, threading, database
+
+import sys
+import os
+
+# 実行時作業ディレクトリをスクリプトの場所基準でリポジトリルートに強制固定 (Windows特有のSystem32起動時クラッシュを100%防止)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(SCRIPT_DIR)
+os.chdir(BASE_DIR)
+
+# pythonw.exe (コンソール非表示) 起動時における sys.stdout/stderr への print/write によるクラッシュを完全に防止
+class DummyStream:
+    def write(self, *args, **kwargs): pass
+    def flush(self, *args, **kwargs): pass
+    encoding = "utf-8"
+    errors = "ignore"
+
+if sys.stdout is None:
+    sys.stdout = DummyStream()
+if sys.stderr is None:
+    sys.stderr = DummyStream()
 
 import ctypes
-import os
 import time
 from datetime import datetime
 import threading
-import pystray
-from PIL import Image, ImageDraw
 
 import database
 
@@ -22,8 +39,6 @@ class LASTINPUTINFO(ctypes.Structure):
         ("dwTime", ctypes.c_uint)
     ]
 
-# ログ保存用ディレクトリの決定
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, "src_cpp")
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -35,13 +50,11 @@ def get_idle_duration_ms() -> int:
     lii = LASTINPUTINFO()
     lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
     if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
-        # GetTickCount はシステムの起動後のミリ秒数を返す
         tick_count = ctypes.windll.kernel32.GetTickCount()
         elapsed = tick_count - lii.dwTime
         if elapsed >= 0:
             return elapsed
         else:
-            # オーバーフロー時の補正
             return (0xFFFFFFFF - lii.dwTime) + tick_count
     return 0
 
@@ -64,41 +77,6 @@ def update_heartbeat(idle_ms: int):
     except Exception as e:
         print(f"Error updating heartbeat: {e}")
 
-def create_tray_image() -> Image:
-    """タスクトレイ表示用の三日月アイコン画像を動的に生成する"""
-    # 64x64 の透明アルファチャンネル画像
-    image = Image.new("RGBA", (64, 64), (30, 30, 46, 255)) # #1e1e2e背景色
-    draw = ImageDraw.Draw(image)
-    # 黄色の円 (月)
-    draw.ellipse((16, 16, 48, 48), fill=(249, 226, 175, 255))
-    # 少しずらした背景色円で重ねることで、三日月の形状に削る
-    draw.ellipse((25, 16, 57, 48), fill=(30, 30, 46, 255))
-    return image
-
-def quit_action(icon, item):
-    """タスクトレイメニューから「終了」が選択された時の処理"""
-    icon.stop()
-    log_event("TERMINATE (System Tray Quit)")
-    os._exit(0)
-
-def setup_tray():
-    """タスクトレイアイコンを生成して常駐開始する"""
-    try:
-        menu = pystray.Menu(
-            pystray.MenuItem("睡眠トラッカー: 監視中", lambda: None, enabled=False),
-            pystray.MenuItem("終了 (Quit)", quit_action)
-        )
-        icon = pystray.Icon(
-            "SleepTracker",
-            create_tray_image(),
-            "睡眠トラッカー (監視中)",
-            menu
-        )
-        # Windowsのメッセージループ処理のため、メインスレッド上でicon.run()を実行しブロックします
-        icon.run()
-    except Exception as e:
-        log_event(f"TRAY_ERROR: {str(e)[:50]}")
-
 def monitor_loop():
     """バックグラウンドでシステムアイドル時間を監視し続けるメインループ"""
     is_idle = False
@@ -113,7 +91,6 @@ def monitor_loop():
             if idle_ms >= idle_threshold_ms:
                 if not is_idle:
                     is_idle = True
-                    # アイドルが始まった正確な過去の時点を計算
                     start_time = datetime.fromtimestamp(time.time() - (idle_ms / 1000.0))
                     time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
                     log_event("IDLE_START", time_str)
@@ -146,11 +123,8 @@ def main():
     except Exception:
         pass
 
-    # 監視メインループを別スレッドで開始
-    threading.Thread(target=monitor_loop, daemon=True).start()
-    
-    # メインスレッドでトレイアイコンのメッセージループを起動（ここでブロックされる）
-    setup_tray()
+    # 監視メインループを実行
+    monitor_loop()
 
 if __name__ == "__main__":
     main()
