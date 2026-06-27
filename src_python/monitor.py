@@ -134,21 +134,18 @@ def force_sync(icon=None, item=None):
 
 def request_clear_data(icon=None, item=None):
     """ユーザー確認のうえ、すべての睡眠データを完全に初期化・削除する"""
-    import ctypes
-    # pystray コールバックは非メインスレッドで呼ばれるため tkinter は使えない
-    # Windows ネイティブ MessageBoxW はどのスレッドからでも安全に呼び出せる
-    MB_YESNO = 0x04
-    MB_ICONWARNING = 0x30
-    MB_TOPMOST = 0x40000
-    IDYES = 6
-    answer = ctypes.windll.user32.MessageBoxW(
-        0,
-        "本当にすべての睡眠データを完全に削除しますか？\n\n※この操作を行うと、生ログファイル、SQLiteデータベース、およびiPhone側のGistデータがすべて消去され、初期状態にリセットされます。この操作は取り消せません。",
-        "全データ削除の確認",
-        MB_YESNO | MB_ICONWARNING | MB_TOPMOST,
-    )
-    if answer == IDYES:
-        def run_clear():
+    # pystray コールバックスレッド上で MessageBoxW を呼ぶと内部メッセージループが
+    # pystray のキューと競合してボタン入力を受け付けなくなるため、独立スレッドで実行する
+    def confirm_and_clear():
+        import ctypes
+        IDYES = 6
+        answer = ctypes.windll.user32.MessageBoxW(
+            0,
+            "本当にすべての睡眠データを完全に削除しますか？\n\n※この操作を行うと、生ログファイル、SQLiteデータベース、およびiPhone側のGistデータがすべて消去され、初期状態にリセットされます。この操作は取り消せません。",
+            "全データ削除の確認",
+            0x04 | 0x30 | 0x40000,  # MB_YESNO | MB_ICONWARNING | MB_TOPMOST
+        )
+        if answer == IDYES:
             try:
                 if icon:
                     icon.notify("すべてのデータを削除・初期化しています...", "睡眠トラッカー")
@@ -158,7 +155,8 @@ def request_clear_data(icon=None, item=None):
             except Exception as e:
                 if icon:
                     icon.notify(f"削除エラー: {str(e)[:50]}", "睡眠トラッカー")
-        threading.Thread(target=run_clear, daemon=True).start()
+
+    threading.Thread(target=confirm_and_clear, daemon=True).start()
 
 def build_tray_icon():
     """pystray のタスクトレイアイコンを構築して返す"""
