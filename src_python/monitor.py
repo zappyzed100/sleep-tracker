@@ -119,6 +119,20 @@ def quit_app(icon=None, item=None):
     if _tray_icon:
         _tray_icon.stop()
 
+def force_sync(icon=None, item=None):
+    """手動でログをGistおよびGitと最新に同期する (トレイバルーン通知付き)"""
+    def run_sync():
+        try:
+            if icon:
+                icon.notify("データの同期を開始しました...", "睡眠トラッカー")
+            database.sync_logs_to_db()
+            if icon:
+                icon.notify("同期が完了し、最新の情報に更新されました！", "睡眠トラッカー")
+        except Exception as e:
+            if icon:
+                icon.notify(f"同期エラー: {str(e)[:50]}", "睡眠トラッカー")
+    threading.Thread(target=run_sync, daemon=True).start()
+
 def build_tray_icon():
     """pystray のタスクトレイアイコンを構築して返す"""
     try:
@@ -138,6 +152,7 @@ def build_tray_icon():
 
         menu = pystray.Menu(
             pystray.MenuItem("睡眠トラッカーを開く", open_main_ui, default=True),
+            pystray.MenuItem("最新の情報に更新", force_sync),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("終了", quit_app),
         )
