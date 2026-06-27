@@ -8,6 +8,7 @@
 import os
 import sys
 import subprocess
+import winreg
 
 def create_shortcut(target: str, shortcut_path: str, arguments: str = "", working_dir: str = "", icon_path: str = ""):
     """PowerShell を使用して Windows のショートカット (.lnk) ファイルを作成する"""
@@ -50,15 +51,18 @@ def get_pythonw_path() -> str:
     return "pythonw.exe"
 
 def get_desktop_dir() -> str:
-    """Windows の特殊フォルダから正確なデスクトップパスを取得する（OneDrive対策）"""
+    """Windows レジストリから正確なデスクトップパスを取得する（OneDrive対策）"""
     try:
-        result = subprocess.run(
-            ["powershell", "-Command", "[Environment]::GetFolderPath('Desktop')"],
-            capture_output=True, text=True, check=True
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
         )
-        path = result.stdout.strip()
-        if os.path.exists(path):
-            return path
+        path, _ = winreg.QueryValueEx(key, "Desktop")
+        winreg.CloseKey(key)
+        # 環境変数 (%USERPROFILE% など) を展開して返す
+        expanded_path = os.path.expandvars(path)
+        if os.path.exists(expanded_path):
+            return expanded_path
     except Exception:
         pass
     # フォールバック
@@ -101,15 +105,38 @@ def main():
     # 2. 睡眠ログ表示UIのショートカット作成 (デスクトップへ)
     # これをユーザーがタスクバーにピン留めすることで、タスクバーからの即時起動が可能になります
     desktop_shortcut_path = os.path.join(desktop_dir, "Sleep Tracker Log.lnk")
-    python_exe = sys.executable
+    pythonw_exe = get_pythonw_path()
 
     print("Setting up UI shortcut on Desktop...")
     create_shortcut(
-        target=python_exe,
+        target=pythonw_exe,
         shortcut_path=desktop_shortcut_path,
         arguments=f'"{python_main_py}"',
         working_dir=base_dir
     )
+
+    # 3. 監視サービスの即時起動 (二重起動防止チェック付き)
+    is_running = False
+    try:
+        res = subprocess.run(["tasklist"], capture_output=True, text=True, check=True)
+        if "sleep_monitor.exe" in res.stdout or "monitor.py" in res.stdout:
+            is_running = True
+    except Exception:
+        pass
+        
+    if not is_running:
+        print("Starting background monitor service now...")
+        # 0x08000000 is CREATE_NO_WINDOW flag for subprocess on Windows
+        try:
+            if os.path.exists(cpp_monitor_exe):
+                subprocess.Popen([cpp_monitor_exe], creationflags=0x08000000, cwd=os.path.dirname(cpp_monitor_exe))
+            else:
+                subprocess.Popen([pythonw_exe, python_monitor_py], creationflags=0x08000000, cwd=base_dir)
+            print("Background monitor service started successfully.")
+        except Exception as e:
+            print(f"Failed to start background monitor service: {e}")
+    else:
+        print("Background monitor service is already running.")
 
     print("\nSetup complete!")
     print("----------------------------------------------------------------")

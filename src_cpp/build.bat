@@ -8,7 +8,7 @@ echo Checking compilers...
 where cl.exe >nul 2>nul
 if %ERRORLEVEL% equ 0 (
     echo MSVC cl.exe detected. Building with MSVC...
-    cl.exe /EHsc /O2 main.cpp /link user32.lib advapi32.lib /OUT:sleep_monitor.exe
+    cl.exe /EHsc /O2 main.cpp /link user32.lib advapi32.lib /subsystem:windows /OUT:sleep_monitor.exe
     if %ERRORLEVEL% equ 0 (
         echo Build successful: sleep_monitor.exe
         exit /b 0
