@@ -43,7 +43,7 @@ sleep-tracker/
 
 ## 要望と実装ステータス一覧
 
-ユーザー様からいただいたご要望に対する現在の実装状況です。
+現在の実装状況。
 
 ### 核心機能（睡眠の記録と検知）
 - [x] **睡眠時間の記録**
@@ -58,6 +58,9 @@ sleep-tracker/
 - [x] **PC電源オフ（スリープ・シャットダウン）も睡眠として扱う**
   - **実装状態**: 実装済み。電源イベント監視に加え、突然の電源断でも1分ごとの「生存信号（ハートビート）」の途絶と次回起動時刻のギャップから睡眠時間を自動逆算します。
   - **関連コード**: [main.cpp](file:///c:/code/lifestyle/sleep-tracker/src_cpp/main.cpp) (ハートビート送信), [database.py](file:///c:/code/lifestyle/sleep-tracker/src_python/database.py) (ギャップ解析)
+- [x] **iPhone GPS による外出検知と睡眠除外**
+  - **実装状態**: 実装済み。GitHub Gist を中継して iPhone の位置情報トリガーから外出・帰宅をPCに同期。外出期間中にPCが放置されても、睡眠時間としてカウントせず自動除外します。
+  - **関連コード**: [gist_setup.py](file:///c:/code/lifestyle/sleep-tracker/src_python/gist_setup.py) (中継自動構築), [database.py](file:///c:/code/lifestyle/sleep-tracker/src_python/database.py) (Gist同期 & 外出除外ロジック)
 
 ### 自動化とアクセス性
 - [x] **PC起動時の自動実行**
@@ -93,3 +96,46 @@ sleep-tracker/
   - **実装状態**: 厳守。リポジトリルート、`src_cpp/`、`src_python/` にそれぞれ `README.md` を設置しました。
 - [x] **AIエージェント間の共通規則を同期する**
   - **実装状態**: 完了。ルートの `.agents/AGENTS.md` にルールを定義し、同期指示を明記。
+
+---
+
+## iPhone 外出検知（iOS ショートカット）のセットアップ手順
+
+Macを持たない環境でも、iPhoneの位置情報トリガーと GitHub Gist API を連携させて外出検知を行うための設定方法です。
+
+### 1. PC側での中継 Gist 作成
+1. コマンドプロンプト等で、以下のコマンドを実行します：
+   ```bash
+   uv run python src_python/gist_setup.py
+   ```
+2. 画面に **Gist ID** と、iPhone設定用の **アクセストークン (Token)** が表示されます。この2つをiPhone側で設定します。
+
+### 2. iPhone 側のオートメーション作成
+iPhoneの「ショートカット」アプリを開き、「オートメーション」タブから以下の2つのオートメーションを新規作成します。
+
+#### ① 外出時 (自宅から出発したとき)
+1. 個人用オートメーションを新規作成 ➡ **「出発」** を選択。
+2. 位置情報に「自宅」を指定し、「いつでも」チェックを入れて「次へ」を選択。
+3. アクションとして **「URLの内容を取得」** を追加します。
+4. 設定値を以下のように指定します：
+   - **URL**: `https://api.github.com/gists/<GIST_ID>` （PCの画面に出力されたURL）
+   - **方法 (Method)**: `PATCH`
+   - **ヘッダ**: 2行追加
+     - `Authorization`: `Bearer <TOKEN>` （PCの画面に出力された完全なToken）
+     - `User-Agent`: `iOS-Shortcut`
+   - **要求本文 (Body)**: `JSON`
+     - **新規フィールドを追加** ➡ キーを `files`、タイプを `ディクショナリ` に指定。
+     - **`files` の中に入力** ➡ キーを `mobile_event.txt`、タイプを `ディクショナリ` に指定。
+     - **`mobile_event.txt` の中に入力** ➡ キーを `content`、タイプを `テキスト` に指定。
+     - **`content` の値**: `LEAVE,` に続けて「現在の日付」を選択。
+       - ※「現在の日付」をタップし、日付フォーマットを「カスタム」に設定し、フォーマット文字列を `yyyy-MM-dd HH:mm:ss` に指定します。
+5. 「実行の前に尋ねる」をオフにして保存します。
+
+#### ② 帰宅時 (自宅に到着したとき)
+1. 新しい個人用オートメーションを作成 ➡ **「到着」** を選択。
+2. 位置情報に「自宅」を指定。
+3. アクションとして同様に **「URLの内容を取得」** を設定（URL、ヘッダ、要求本文の構造は「外出時」と同一）。
+4. 要求本文 (Body) 内の `content` の値のみ、以下に変更します：
+   - **`content` の値**: `ARRIVE,` に続けて「現在の日付」（カスタムフォーマット: `yyyy-MM-dd HH:mm:ss`）
+5. 同様に「実行の前に尋ねる」をオフにして保存します。
+
