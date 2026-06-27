@@ -46,7 +46,7 @@ def _apply_taskbar_relaunch(hwnd: int):
             _fields_ = [
                 ("vt", ctypes.c_ushort),
                 ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
-                ("pwszVal", ctypes.c_wchar_p),
+                ("data", ctypes.c_void_p),
             ]
 
         # {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3} System.AppUserModel.*
@@ -64,31 +64,32 @@ def _apply_taskbar_relaunch(hwnd: int):
         vtbl = ctypes.c_void_p.from_address(ps.value).value
         sz = ctypes.sizeof(ctypes.c_void_p)
 
-        def fn(idx, ftype):
-            return ftype(ctypes.c_void_p.from_address(vtbl + idx * sz).value)
-
         # vtable: 0=QI 1=AddRef 2=Release 3=GetCount 4=GetAt 5=GetValue 6=SetValue 7=Commit
-        SetValue = fn(6, ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p,
-                                             ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT)))
-        Commit   = fn(7, ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p))
-        Release  = fn(2, ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p))
+        SetValue = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p,
+                                       ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT))(
+            ctypes.c_void_p.from_address(vtbl + 6 * sz).value)
+        Commit = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p)(
+            ctypes.c_void_p.from_address(vtbl + 7 * sz).value)
+        Release = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p)(
+            ctypes.c_void_p.from_address(vtbl + 2 * sz).value)
 
-        def set_prop(pid: int, value: str):
+        propsys = ctypes.windll.propsys
+
+        def set_str_prop(pid: int, value: str):
             pk = PROPERTYKEY(); pk.fmtid = FMTID; pk.pid = pid
-            buf = ctypes.create_unicode_buffer(value)
-            pv = PROPVARIANT(); pv.vt = 31; pv.pwszVal = ctypes.cast(buf, ctypes.c_wchar_p)
+            pv = PROPVARIANT()
+            propsys.InitPropVariantFromString(value, ctypes.byref(pv))
             SetValue(ps, ctypes.byref(pk), ctypes.byref(pv))
+            propsys.PropVariantClear(ctypes.byref(pv))
 
         pythonw = os.path.join(_BASE_DIR, ".venv", "Scripts", "pythonw.exe")
         if not os.path.exists(pythonw):
             pythonw = sys.executable.replace("python.exe", "pythonw.exe")
         main_py = os.path.join(_BASE_DIR, "src_python", "main.py")
 
-        set_prop(5, "SleepTracker.UI.1")                  # AppUserModel.ID
-        set_prop(2, f'"{pythonw}" "{main_py}"')           # RelaunchCommand
-        set_prop(3, "睡眠トラッカー")                        # RelaunchDisplayNameResource
-        if os.path.exists(_ICO_PATH):
-            set_prop(4, f"{_ICO_PATH},0")                 # RelaunchIconResource
+        # アイコンは WM_SETICON 済み、表示名はウィンドウタイトルを自動使用 — 両方設定不要
+        set_str_prop(5, "SleepTracker.UI.1")          # AppUserModel.ID
+        set_str_prop(2, f'"{pythonw}" "{main_py}"')   # RelaunchCommand
 
         Commit(ps)
         Release(ps)

@@ -10,6 +10,7 @@ sleep_tracker.db
 src_cpp/sleep_heartbeat.txt
 src_cpp/sleep_events.txt
 src_cpp/monitor.pid
+src_python/*.lnk
 
 # C++ Build outputs & intermediate files
 src_cpp/sleep_monitor.exe
