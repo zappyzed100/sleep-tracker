@@ -111,6 +111,7 @@ def quit_app(icon=None, item=None):
     """タスクトレイアイコンを停止してプロセスを終了する"""
     global _tray_icon
     log_event("SHUTDOWN")
+    database.git_push_logs(wait=True)  # 終了前に sleep_events.txt を Gist へバックアップ（最大8秒待機）
     try:
         os.remove(PID_FILE)
     except Exception:

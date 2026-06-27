@@ -6,8 +6,9 @@ __pycache__/
 # Local Database
 sleep_tracker.db
 
-# Dynamic runtime files (only raw events are tracked)
+# Dynamic runtime files (Gist にバックアップ、ローカルのみ)
 src_cpp/sleep_heartbeat.txt
+src_cpp/sleep_events.txt
 
 # C++ Build outputs & intermediate files
 src_cpp/sleep_monitor.exe

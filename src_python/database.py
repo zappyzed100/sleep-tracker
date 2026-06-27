@@ -204,7 +204,11 @@ def clear_all_data():
 
 def sync_logs_to_db():
     """生ログを解析してデータベースに同期する"""
-    # 0. Gist からモバイルの外出/帰宅イベントを取得してマージ
+    # 0a. sleep_events.txt が存在しない場合（新PC・移植時）は Gist からダウンロード
+    if not os.path.exists(EVENTS_FILE):
+        _download_events_from_gist()
+
+    # 0b. Gist からモバイルの外出/帰宅イベントを取得してマージ
     sync_mobile_events_from_gist()
 
     if not os.path.exists(EVENTS_FILE):
@@ -350,37 +354,75 @@ def sync_logs_to_db():
     # ログ変更の自動 Git Push を非同期で実行
     git_push_logs()
 
-def git_push_logs():
-    """非同期でログファイルを Git リポジトリに push する"""
-    def _push():
-        NW = subprocess.CREATE_NO_WINDOW
-        try:
-            # 変更があるか確認 (--porcelain)
-            res = subprocess.run(
-                ["git", "status", "--porcelain", EVENTS_FILE],
-                capture_output=True, text=True, cwd=BASE_DIR, creationflags=NW
-            )
-            if not res.stdout.strip():
-                return
+def _get_gist_config() -> tuple[str, str] | tuple[None, None]:
+    """config.json から gist_id と github_token を読み込む"""
+    if not os.path.exists(CONFIG_PATH):
+        return None, None
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config.get("gist_id"), config.get("github_token")
+    except Exception:
+        return None, None
 
-            # コミット対象に追加
-            subprocess.run(["git", "add", EVENTS_FILE], cwd=BASE_DIR, check=True, creationflags=NW)
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            subprocess.run(
-                ["git", "commit", "-m", f"Auto-update sleep logs: {timestamp}"],
-                cwd=BASE_DIR, check=True, creationflags=NW
-            )
+def _push_events_to_gist():
+    """sleep_events.txt の内容を Gist に PATCH する（同期・内部用）"""
+    if not os.path.exists(EVENTS_FILE):
+        return
+    gist_id, token = _get_gist_config()
+    if not gist_id or not token:
+        return
+    try:
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+        url = f"https://api.github.com/gists/{gist_id}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Sleep-Tracker-Client"
+        }
+        data = {"files": {"sleep_events.txt": {"content": content if content.strip() else " "}}}
+        req = urllib.request.Request(
+            url, data=json.dumps(data).encode("utf-8"), headers=headers, method="PATCH"
+        )
+        with urllib.request.urlopen(req, timeout=10) as _:
+            pass
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] sleep_events.txt pushed to Gist.")
+    except Exception as e:
+        print(f"Failed to push events to Gist: {e}")
 
-            # リモート競合対策でリベースプルを行い、その後にプッシュ
-            subprocess.run(["git", "pull", "--rebase", "origin", "master"], cwd=BASE_DIR, check=True, creationflags=NW)
-            subprocess.run(["git", "push", "origin", "master"], cwd=BASE_DIR, check=True, creationflags=NW)
-            print(f"[{timestamp}] Sleep logs successfully pushed to GitHub.")
-        except Exception as e:
-            # 常駐プロセスなのでエラーで落ちないようにキャッチするだけにする
-            print(f"Failed to auto-push logs to Git: {e}")
+def _download_events_from_gist():
+    """Gist から sleep_events.txt をダウンロードしてローカルに書き出す（移植・初回起動時用）"""
+    gist_id, token = _get_gist_config()
+    if not gist_id or not token:
+        return
+    try:
+        url = f"https://api.github.com/gists/{gist_id}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "Sleep-Tracker-Client"
+        }
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            content = data.get("files", {}).get("sleep_events.txt", {}).get("content", "").strip()
+            if content and content != " ":
+                os.makedirs(LOG_DIR, exist_ok=True)
+                with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print("sleep_events.txt restored from Gist.")
+    except Exception as e:
+        print(f"Failed to download events from Gist: {e}")
 
-    thread = threading.Thread(target=_push, daemon=True)
-    thread.start()
+def git_push_logs(wait: bool = False):
+    """sleep_events.txt を Gist に非同期バックアップする。wait=True で最大8秒ブロック（終了時用）"""
+    t = threading.Thread(target=_push_events_to_gist, daemon=True)
+    t.start()
+    if wait:
+        t.join(timeout=8)
 
 def get_all_sessions():
     """保存されているすべての睡眠セッションを取得する"""
