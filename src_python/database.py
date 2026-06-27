@@ -83,7 +83,8 @@ def sync_mobile_events_from_gist():
     try:
         res = subprocess.run(
             ["gh", "auth", "token"],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True, check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         token = res.stdout.strip()
     except Exception:
@@ -286,26 +287,27 @@ def sync_logs_to_db():
 def git_push_logs():
     """非同期でログファイルを Git リポジトリに push する"""
     def _push():
+        NW = subprocess.CREATE_NO_WINDOW
         try:
             # 変更があるか確認 (--porcelain)
             res = subprocess.run(
                 ["git", "status", "--porcelain", EVENTS_FILE],
-                capture_output=True, text=True, cwd=BASE_DIR
+                capture_output=True, text=True, cwd=BASE_DIR, creationflags=NW
             )
             if not res.stdout.strip():
                 return
-            
+
             # コミット対象に追加
-            subprocess.run(["git", "add", EVENTS_FILE], cwd=BASE_DIR, check=True)
+            subprocess.run(["git", "add", EVENTS_FILE], cwd=BASE_DIR, check=True, creationflags=NW)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             subprocess.run(
                 ["git", "commit", "-m", f"Auto-update sleep logs: {timestamp}"],
-                cwd=BASE_DIR, check=True
+                cwd=BASE_DIR, check=True, creationflags=NW
             )
-            
+
             # リモート競合対策でリベースプルを行い、その後にプッシュ
-            subprocess.run(["git", "pull", "--rebase", "origin", "master"], cwd=BASE_DIR, check=True)
-            subprocess.run(["git", "push", "origin", "master"], cwd=BASE_DIR, check=True)
+            subprocess.run(["git", "pull", "--rebase", "origin", "master"], cwd=BASE_DIR, check=True, creationflags=NW)
+            subprocess.run(["git", "push", "origin", "master"], cwd=BASE_DIR, check=True, creationflags=NW)
             print(f"[{timestamp}] Sleep logs successfully pushed to GitHub.")
         except Exception as e:
             # 常駐プロセスなのでエラーで落ちないようにキャッチするだけにする

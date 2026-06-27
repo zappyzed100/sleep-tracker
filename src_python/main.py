@@ -469,7 +469,7 @@ def ensure_monitor_running():
         subprocess.Popen(
             [python_exe, monitor_path],
             cwd=base_dir,
-            creationflags=0x00000008,  # DETACHED_PROCESS
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except Exception:
         pass

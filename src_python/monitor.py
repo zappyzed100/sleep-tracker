@@ -88,7 +88,11 @@ def open_main_ui(icon=None, item=None):
     if python_exe.lower().endswith("pythonw.exe"):
         python_exe = python_exe[:-len("pythonw.exe")] + "python.exe"
     try:
-        subprocess.Popen([python_exe, main_path], cwd=BASE_DIR)
+        subprocess.Popen(
+            [python_exe, main_path],
+            cwd=BASE_DIR,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
     except Exception as e:
         print(f"Failed to open main UI: {e}")
 
