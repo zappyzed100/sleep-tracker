@@ -133,6 +133,36 @@ def force_sync(icon=None, item=None):
                 icon.notify(f"同期エラー: {str(e)[:50]}", "睡眠トラッカー")
     threading.Thread(target=run_sync, daemon=True).start()
 
+def request_clear_data(icon=None, item=None):
+    """ユーザー確認のうえ、すべての睡眠データを完全に初期化・削除する"""
+    import tkinter as tk
+    from tkinter import messagebox
+    
+    # ダイアログを最前面に出すためのダミーウィンドウ
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    
+    result = messagebox.askyesno(
+        "全データ削除の確認",
+        "本当にすべての睡眠データを完全に削除しますか？\n\n※この操作を行うと、生ログファイル、SQLiteデータベース、およびiPhone側のGistデータがすべて消去され、初期状態にリセットされます。この操作は取り消せません。",
+        icon="warning"
+    )
+    root.destroy()
+    
+    if result:
+        def run_clear():
+            try:
+                if icon:
+                    icon.notify("すべてのデータを削除・初期化しています...", "睡眠トラッカー")
+                database.clear_all_data()
+                if icon:
+                    icon.notify("すべての睡眠データを正常に削除・リセットしました。", "睡眠トラッカー")
+            except Exception as e:
+                if icon:
+                    icon.notify(f"削除エラー: {str(e)[:50]}", "睡眠トラッカー")
+        threading.Thread(target=run_clear, daemon=True).start()
+
 def build_tray_icon():
     """pystray のタスクトレイアイコンを構築して返す"""
     try:
@@ -153,6 +183,7 @@ def build_tray_icon():
         menu = pystray.Menu(
             pystray.MenuItem("睡眠トラッカーを開く", open_main_ui, default=True),
             pystray.MenuItem("データを今すぐ同期", force_sync),
+            pystray.MenuItem("全データを削除", request_clear_data),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("終了", quit_app),
         )

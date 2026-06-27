@@ -142,6 +142,66 @@ def sync_mobile_events_from_gist():
     except Exception as e:
         print(f"Failed to fetch mobile events from Gist: {e}")
 
+def clear_all_data():
+    """生ログファイル、SQLiteデータベース、およびGist上のログを完全に初期化する"""
+    # 1. sleep_events.txt を空にする
+    try:
+        with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+    except Exception as e:
+        print(f"Failed to clear events file: {e}")
+        
+    # 2. SQLite データベースの sleep_sessions テーブルをクリア
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sleep_sessions")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Failed to clear SQLite DB: {e}")
+        
+    # 3. Gist の mobile_event.txt を "INIT" に上書きして初期化
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                gist_id = config.get("gist_id")
+                token = config.get("github_token")
+                
+            if gist_id and token:
+                url = f"https://api.github.com/gists/{gist_id}"
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "Sleep-Tracker-Client"
+                }
+                # Gist初期化用JSONデータ
+                data = {
+                    "files": {
+                        "mobile_event.txt": {
+                            "content": "INIT"
+                        }
+                    }
+                }
+                req = urllib.request.Request(
+                    url, 
+                    data=json.dumps(data).encode("utf-8"), 
+                    headers=headers, 
+                    method="PATCH"
+                )
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    pass
+    except Exception as e:
+        print(f"Failed to reset Gist: {e}")
+        
+    # 4. Git への同期プッシュ (空になったことをリポジトリに反映)
+    try:
+        git_push_logs()
+    except Exception as e:
+        print(f"Failed to push cleared logs to git: {e}")
+
 def sync_logs_to_db():
     """生ログを解析してデータベースに同期する"""
     # 0. Gist からモバイルの外出/帰宅イベントを取得してマージ
