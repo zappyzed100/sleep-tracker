@@ -325,6 +325,31 @@ class SleepTrackerApp:
         except Exception as e:
             messagebox.showerror("エクスポートエラー", str(e))
 
+    def force_sync_ui(self):
+        def run():
+            try:
+                database.sync_logs_to_db()
+                self.root.after(0, lambda: messagebox.showinfo("同期完了", "データの同期が完了しました。"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("同期エラー", str(e)))
+        threading.Thread(target=run, daemon=True).start()
+
+    def clear_all_data_ui(self):
+        if not messagebox.askyesno(
+            "全データ削除の確認",
+            "本当にすべての睡眠データを削除しますか？\n\nこの操作は取り消せません。",
+            icon="warning"
+        ):
+            return
+        def run():
+            try:
+                database.clear_all_data()
+                self.root.after(0, self.update_week_view)
+                self.root.after(0, lambda: messagebox.showinfo("削除完了", "すべてのデータを削除しました。"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("削除エラー", str(e)))
+        threading.Thread(target=run, daemon=True).start()
+
     def monitor_lifecycle_check(self):
         """モニターの生存を確認し、切れている（トレイから終了された）場合はUIも切る"""
         pid_file = lifecycle.PID_FILE
@@ -358,101 +383,170 @@ class SleepTrackerApp:
         self.root.after(5000, self.monitor_lifecycle_check)
 
     def create_widgets(self):
+        # ── タイトル行 ───────────────────────────────────────────
         title_frame = tk.Frame(self.root, bg="#1e1e2e")
-        title_frame.pack(fill="x", padx=25, pady=(15, 10))
-        
-        title_label = tk.Label(title_frame, text="睡眠トラッカー", font=("Yu Gothic UI", 22, "bold"), bg="#1e1e2e", fg="#89b4fa")
-        title_label.pack(side="left")
-        
+        title_frame.pack(fill="x", padx=25, pady=(15, 5))
+
+        tk.Label(title_frame, text="睡眠トラッカー", font=("Yu Gothic UI", 22, "bold"),
+                 bg="#1e1e2e", fg="#89b4fa").pack(side="left")
+
         is_running, status_text = lifecycle.is_monitor_running()
         status_color = "#a6e3a1" if is_running else "#f38ba8"
-        status_label = tk.Label(title_frame, text=f"監視サービス: {status_text}", font=("Yu Gothic UI", 10, "bold"), bg="#1e1e2e", fg=status_color)
-        status_label.pack(side="right", pady=8)
+        tk.Label(title_frame, text=f"監視サービス: {status_text}",
+                 font=("Yu Gothic UI", 10, "bold"), bg="#1e1e2e", fg=status_color).pack(side="right", pady=8)
 
-        # 設定行
-        settings_frame = tk.Frame(self.root, bg="#1e1e2e")
-        settings_frame.pack(fill="x", padx=25, pady=(0, 4))
+        # ── タブバー ──────────────────────────────────────────────
+        tab_bar = tk.Frame(self.root, bg="#1e1e2e")
+        tab_bar.pack(fill="x", padx=25, pady=(0, 0))
+        self.tab_btns = {}
+        for name, label in [("home", "ホーム"), ("settings", "設定")]:
+            btn = tk.Button(
+                tab_bar, text=label, font=("Yu Gothic UI", 10, "bold"),
+                bg="#313244", fg="#cdd6f4",
+                activebackground="#313244", activeforeground="#cdd6f4",
+                bd=0, padx=14, pady=6, cursor="hand2",
+                command=lambda t=name: self.switch_tab(t)
+            )
+            btn.pack(side="left")
+            self.tab_btns[name] = btn
+        self.switch_tab("home", init=True)  # 初期スタイル設定のみ
 
-        self.startup_var = tk.BooleanVar(value=os.path.exists(lifecycle.STARTUP_SHORTCUT_PATH))
-        tk.Checkbutton(
-            settings_frame, text="PC起動時に自動実行",
-            variable=self.startup_var, command=self.toggle_startup,
-            bg="#1e1e2e", fg="#a6adc8", selectcolor="#313244",
-            activebackground="#1e1e2e", activeforeground="#cdd6f4",
-            font=("Yu Gothic UI", 9)
-        ).pack(side="left", padx=(0, 20))
+        ttk.Separator(self.root, orient="horizontal").pack(fill="x")
 
-        tk.Label(settings_frame, text="スリープ判定:", bg="#1e1e2e", fg="#a6adc8", font=("Yu Gothic UI", 9)).pack(side="left")
-        self.threshold_var = tk.StringVar(value=str(self._load_threshold()))
-        threshold_spin = tk.Spinbox(
-            settings_frame, from_=5, to=120, increment=5,
-            textvariable=self.threshold_var, width=4,
-            bg="white", fg="black", font=("Yu Gothic UI", 9),
-            command=self.save_threshold
-        )
-        threshold_spin.pack(side="left", padx=2)
-        threshold_spin.bind("<Return>", lambda e: self.save_threshold())
-        threshold_spin.bind("<FocusOut>", lambda e: self.save_threshold())
-        tk.Label(settings_frame, text="分", bg="#1e1e2e", fg="#a6adc8", font=("Yu Gothic UI", 9)).pack(side="left")
+        # ── ホームタブ本体 ────────────────────────────────────────
+        self.home_content = tk.Frame(self.root, bg="#1e1e2e")
+        self.home_content.pack(fill="both", expand=True)
 
-        ttk.Button(settings_frame, text="CSV出力", command=self.export_csv).pack(side="right", padx=5)
-
-        self.warning_frame = tk.Frame(self.root, bg="#f38ba8", bd=1, relief="solid")
-        self.warning_label = tk.Label(self.warning_frame, text="", font=("Yu Gothic UI", 10, "bold"), bg="#f38ba8", fg="#11111b")
+        self.warning_frame = tk.Frame(self.home_content, bg="#f38ba8", bd=1, relief="solid")
+        self.warning_label = tk.Label(self.warning_frame, text="",
+                                      font=("Yu Gothic UI", 10, "bold"), bg="#f38ba8", fg="#11111b")
         self.warning_label.pack(fill="x", padx=15, pady=6)
 
-        self.summary_frame = tk.Frame(self.root, bg="#1e1e2e")
+        self.summary_frame = tk.Frame(self.home_content, bg="#1e1e2e")
         self.summary_frame.pack(fill="x", padx=25, pady=5)
-        
+
         self.pred_card = ttk.Frame(self.summary_frame, style="Card.TFrame")
         self.pred_card.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
+
         self.stats_card = ttk.Frame(self.summary_frame, style="Card.TFrame")
         self.stats_card.pack(side="right", fill="both", expand=True, padx=(10, 0))
 
         self.update_prediction_and_stats()
 
-        nav_frame = tk.Frame(self.root, bg="#1e1e2e")
+        nav_frame = tk.Frame(self.home_content, bg="#1e1e2e")
         nav_frame.pack(fill="x", padx=25, pady=(15, 5))
 
-        prev_btn = ttk.Button(nav_frame, text="◀ 前の週", command=self.go_to_prev_week)
-        prev_btn.pack(side="left", padx=5)
+        ttk.Button(nav_frame, text="◀ 前の週", command=self.go_to_prev_week).pack(side="left", padx=5)
 
-        self.week_label = tk.Label(nav_frame, text="", font=("Yu Gothic UI", 13, "bold"), bg="#1e1e2e", fg="#cdd6f4")
+        self.week_label = tk.Label(nav_frame, text="", font=("Yu Gothic UI", 13, "bold"),
+                                   bg="#1e1e2e", fg="#cdd6f4")
         self.week_label.pack(side="left", expand=True)
 
-        next_btn = ttk.Button(nav_frame, text="次の週 ▶", command=self.go_to_next_week)
-        next_btn.pack(side="right", padx=5)
+        ttk.Button(nav_frame, text="次の週 ▶", command=self.go_to_next_week).pack(side="right", padx=5)
+        ttk.Button(nav_frame, text="今週", command=self.go_to_this_week).pack(side="right", padx=5)
 
-        today_btn = ttk.Button(nav_frame, text="今週", command=self.go_to_this_week)
-        today_btn.pack(side="right", padx=5)
+        tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10),
+                 bg="#1e1e2e", fg="#a6adc8").pack(side="right", padx=(10, 2))
 
-        cal_label = tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10), bg="#1e1e2e", fg="#a6adc8")
-        cal_label.pack(side="right", padx=(10, 2))
-        
         self.date_var = tk.StringVar(value=self.current_week_start.strftime("%Y-%m-%d"))
         self.date_entry = tk.Entry(
-            nav_frame, 
-            textvariable=self.date_var, 
-            width=12, 
-            bg="white", 
-            fg="black", 
-            insertbackground="black", 
-            font=("Yu Gothic UI", 10, "bold"), 
-            bd=1, 
-            relief="solid",
-            state="readonly"
+            nav_frame, textvariable=self.date_var, width=12,
+            bg="white", fg="black", insertbackground="black",
+            font=("Yu Gothic UI", 10, "bold"), bd=1, relief="solid", state="readonly"
         )
         self.date_entry.pack(side="right", padx=2)
-        
-        cal_btn = ttk.Button(nav_frame, text="📅", width=3, command=self.open_calendar_popup)
-        cal_btn.pack(side="right", padx=5)
+        ttk.Button(nav_frame, text="📅", width=3, command=self.open_calendar_popup).pack(side="right", padx=5)
 
-        self.graph_frame = ttk.Frame(self.root, style="Card.TFrame")
+        self.graph_frame = ttk.Frame(self.home_content, style="Card.TFrame")
         self.graph_frame.pack(fill="both", expand=True, padx=25, pady=(5, 25))
-        
+
         self.canvas = None
         self.update_week_view()
+
+        # ── 設定タブ本体（初期非表示）────────────────────────────
+        self.settings_content = tk.Frame(self.root, bg="#1e1e2e")
+        self._build_settings_tab()
+
+    def _build_settings_tab(self):
+        """設定タブの中身を構築する"""
+        _card = {"bg": "#252538", "bd": 1, "relief": "solid"}
+        _lbl_h = {"font": ("Yu Gothic UI", 11, "bold"), "bg": "#252538", "fg": "#bac2de"}
+        _lbl_b = {"font": ("Yu Gothic UI", 10), "bg": "#252538", "fg": "#cdd6f4"}
+        _lbl_s = {"font": ("Yu Gothic UI", 9), "bg": "#252538", "fg": "#6c7086"}
+        _kw = {"padx": 40, "pady": 8, "fill": "x"}
+
+        # 起動設定
+        s1 = tk.Frame(self.settings_content, **_card)
+        s1.pack(**_kw, pady=(30, 8))
+        tk.Label(s1, text="起動設定", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+        self.startup_var = tk.BooleanVar(value=os.path.exists(lifecycle.STARTUP_SHORTCUT_PATH))
+        tk.Checkbutton(
+            s1, text="PC起動時に自動でモニターを起動する",
+            variable=self.startup_var, command=self.toggle_startup,
+            bg="#252538", fg="#cdd6f4", selectcolor="#313244",
+            activebackground="#252538", activeforeground="#cdd6f4",
+            font=("Yu Gothic UI", 10)
+        ).pack(anchor="w", padx=15, pady=(0, 12))
+
+        # スリープ判定時間
+        s2 = tk.Frame(self.settings_content, **_card)
+        s2.pack(**_kw)
+        tk.Label(s2, text="スリープ判定時間", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+        row = tk.Frame(s2, bg="#252538")
+        row.pack(anchor="w", padx=15, pady=(0, 4))
+        tk.Label(row, text="キーボード/マウス操作がない状態が", **_lbl_b).pack(side="left")
+        self.threshold_var = tk.StringVar(value=str(self._load_threshold()))
+        spin = tk.Spinbox(row, from_=5, to=120, increment=5, textvariable=self.threshold_var,
+                          width=4, bg="white", fg="black", font=("Yu Gothic UI", 10),
+                          command=self.save_threshold)
+        spin.pack(side="left", padx=5)
+        spin.bind("<Return>", lambda e: self.save_threshold())
+        spin.bind("<FocusOut>", lambda e: self.save_threshold())
+        tk.Label(row, text="分以上続いたらスリープと判定", **_lbl_b).pack(side="left")
+        tk.Label(s2, text="※ モニターを再起動すると反映されます", **_lbl_s).pack(anchor="w", padx=15, pady=(0, 12))
+
+        # CSVエクスポート
+        s3 = tk.Frame(self.settings_content, **_card)
+        s3.pack(**_kw)
+        tk.Label(s3, text="データエクスポート", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+        tk.Label(s3, text="すべての睡眠データを CSV ファイルとして保存します。Excel で開けます。",
+                 **_lbl_s).pack(anchor="w", padx=15)
+        tk.Button(
+            s3, text="CSVファイルに書き出す", command=self.export_csv,
+            bg="#89b4fa", fg="#1e1e2e", activebackground="#7ba5f0", activeforeground="#1e1e2e",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
+        ).pack(anchor="w", padx=15, pady=(6, 12))
+
+        # データ管理
+        s4 = tk.Frame(self.settings_content, **_card)
+        s4.pack(**_kw)
+        tk.Label(s4, text="データ管理", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+        btn_row = tk.Frame(s4, bg="#252538")
+        btn_row.pack(anchor="w", padx=15, pady=(0, 12))
+        tk.Button(
+            btn_row, text="今すぐ同期", command=self.force_sync_ui,
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        tk.Button(
+            btn_row, text="全データを削除", command=self.clear_all_data_ui,
+            bg="#f38ba8", fg="#11111b", activebackground="#eba0b2", activeforeground="#11111b",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
+        ).pack(side="left")
+
+    def switch_tab(self, tab_name: str, init: bool = False):
+        for name, btn in self.tab_btns.items():
+            active = (name == tab_name)
+            btn.config(bg="#313244" if active else "#1e1e2e",
+                       fg="#cdd6f4" if active else "#6c7086")
+        if init:
+            return
+        if tab_name == "home":
+            self.settings_content.pack_forget()
+            self.home_content.pack(fill="both", expand=True)
+        else:
+            self.home_content.pack_forget()
+            self.settings_content.pack(fill="both", expand=True)
 
     def open_calendar_popup(self):
         try:
