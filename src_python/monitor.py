@@ -134,22 +134,20 @@ def force_sync(icon=None, item=None):
 
 def request_clear_data(icon=None, item=None):
     """ユーザー確認のうえ、すべての睡眠データを完全に初期化・削除する"""
-    import tkinter as tk
-    from tkinter import messagebox
-    
-    # ダイアログを最前面に出すためのダミーウィンドウ
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    
-    result = messagebox.askyesno(
-        "全データ削除の確認",
+    import ctypes
+    # pystray コールバックは非メインスレッドで呼ばれるため tkinter は使えない
+    # Windows ネイティブ MessageBoxW はどのスレッドからでも安全に呼び出せる
+    MB_YESNO = 0x04
+    MB_ICONWARNING = 0x30
+    MB_TOPMOST = 0x40000
+    IDYES = 6
+    answer = ctypes.windll.user32.MessageBoxW(
+        0,
         "本当にすべての睡眠データを完全に削除しますか？\n\n※この操作を行うと、生ログファイル、SQLiteデータベース、およびiPhone側のGistデータがすべて消去され、初期状態にリセットされます。この操作は取り消せません。",
-        icon="warning"
+        "全データ削除の確認",
+        MB_YESNO | MB_ICONWARNING | MB_TOPMOST,
     )
-    root.destroy()
-    
-    if result:
+    if answer == IDYES:
         def run_clear():
             try:
                 if icon:
