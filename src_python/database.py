@@ -50,10 +50,31 @@ def _load_min_duration() -> timedelta:
         minutes = 30
     return timedelta(minutes=minutes)
 
+_PARSE_EXE = os.path.join(LOG_DIR, "parse_sessions.exe")
+
 def _parse_events_to_sessions() -> list:
     """sleep_events.txt を状態遷移マシンで解析して睡眠セッションのリストを返す。
+    parse_sessions.exe が存在すれば C++ 実装を呼び出し、なければ Python フォールバックを使う。
     各要素: (start_time_str, end_time_str, duration_hours, session_type)
     """
+    if os.path.exists(_PARSE_EXE):
+        try:
+            result = subprocess.run(
+                [_PARSE_EXE, EVENTS_FILE, HEARTBEAT_FILE, CONFIG_PATH],
+                capture_output=True, text=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                rows = json.loads(result.stdout)
+                return [(r["start"], r["end"], r["duration"], r["type"]) for r in rows]
+            print(f"parse_sessions.exe error: {result.stderr.strip()}")
+        except Exception as e:
+            print(f"parse_sessions.exe failed, falling back to Python: {e}")
+
+    return _parse_events_to_sessions_py()
+
+def _parse_events_to_sessions_py() -> list:
+    """Python によるフォールバック実装"""
     if not os.path.exists(EVENTS_FILE):
         return []
 
