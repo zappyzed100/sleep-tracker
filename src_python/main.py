@@ -455,16 +455,22 @@ def ensure_monitor_running():
             return  # 既に稼働中
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    monitor_path = os.path.join(script_dir, "monitor.py")
-    python_exe = sys.executable
-    # pythonw.exe で起動されている場合はそのまま使用 (コンソール非表示)
-    # python.exe の場合は pythonw.exe に切り替える
-    if not python_exe.lower().endswith("pythonw.exe"):
-        pythonw = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
-        if os.path.exists(pythonw):
-            python_exe = pythonw
-
     base_dir = os.path.dirname(script_dir)
+    monitor_path = os.path.join(script_dir, "monitor.py")
+
+    # sys.executable が uv や別環境の Python の場合でも常に .venv を使う
+    # (pystray 等の依存パッケージは .venv にしかインストールされていないため)
+    venv_pythonw = os.path.join(base_dir, ".venv", "Scripts", "pythonw.exe")
+    if os.path.exists(venv_pythonw):
+        python_exe = venv_pythonw
+    else:
+        # .venv がない場合は sys.executable と同階層の pythonw.exe にフォールバック
+        python_exe = sys.executable
+        if not python_exe.lower().endswith("pythonw.exe"):
+            candidate = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
+            if os.path.exists(candidate):
+                python_exe = candidate
+
     try:
         subprocess.Popen(
             [python_exe, monitor_path],
