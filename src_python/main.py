@@ -25,14 +25,26 @@ import analyzer
 from calendar_ui import CustomCalendar
 import lifecycle
 
+_ICO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sleep_tracker.ico")
+
 def _apply_dark_titlebar(widget):
-    """Windows のタイトルバーをダークモードにする (Windows 10 19041+)"""
+    """Windows のタイトルバーをダークモードにし、タスクバーアイコンを .ico から設定する"""
     try:
         hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
         if not hwnd:
             hwnd = widget.winfo_id()
+        # ダークタイトルバー
         value = ctypes.c_int(1)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        # タスクバー/ウィンドウアイコンを .ico から直接読み込んで設定
+        if os.path.exists(_ICO_PATH):
+            LR_LOADFROMFILE = 0x10
+            IMAGE_ICON = 1
+            WM_SETICON = 0x80
+            hbig = ctypes.windll.user32.LoadImageW(None, _ICO_PATH, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+            hsml = ctypes.windll.user32.LoadImageW(None, _ICO_PATH, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 1, hbig)  # ICON_BIG
+            ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 0, hsml)  # ICON_SMALL
     except Exception:
         pass
 
@@ -605,6 +617,11 @@ class SleepTrackerApp:
         self.root.after(180000, self.periodic_connection_check)
 
 def main():
+    # ウィンドウ作成前に AUMID を設定しないとタスクバーが pythonw.exe のアイコングループに入る
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SleepTracker.UI.1")
+    except Exception:
+        pass
     lifecycle.ensure_startup_registered()
     root = tk.Tk()
     app = SleepTrackerApp(root)
