@@ -50,6 +50,71 @@ class LASTINPUTINFO(ctypes.Structure):
         ("dwTime", ctypes.c_uint)
     ]
 
+# XInput 用の構造体定義
+class XINPUT_GAMEPAD(ctypes.Structure):
+    _fields_ = [
+        ("wButtons",      ctypes.c_ushort),
+        ("bLeftTrigger",  ctypes.c_ubyte),
+        ("bRightTrigger", ctypes.c_ubyte),
+        ("sThumbLX",      ctypes.c_short),
+        ("sThumbLY",      ctypes.c_short),
+        ("sThumbRX",      ctypes.c_short),
+        ("sThumbRY",      ctypes.c_short),
+    ]
+
+class XINPUT_STATE(ctypes.Structure):
+    _fields_ = [
+        ("dwPacketNumber", ctypes.c_ulong),
+        ("Gamepad",        XINPUT_GAMEPAD),
+    ]
+
+_GAMEPAD_DEADZONE   = 8000
+_TRIGGER_THRESHOLD  = 30
+_last_gamepad_input_time: float = 0.0
+_last_gamepad_packets: dict     = {}
+_xinput = None
+_xinput_checked     = False
+
+def _get_xinput():
+    global _xinput, _xinput_checked
+    if _xinput_checked:
+        return _xinput
+    _xinput_checked = True
+    for dll in ("xinput1_4", "xinput1_3", "xinput9_1_0"):
+        try:
+            _xinput = ctypes.windll[dll]
+            return _xinput
+        except OSError:
+            continue
+    return None
+
+def _poll_gamepad():
+    """全コントローラーをスキャンし、有意な入力があれば _last_gamepad_input_time を更新する"""
+    global _last_gamepad_input_time, _last_gamepad_packets
+    xi = _get_xinput()
+    if xi is None:
+        return
+    for i in range(4):
+        state = XINPUT_STATE()
+        if xi.XInputGetState(i, ctypes.byref(state)) != 0:
+            _last_gamepad_packets.pop(i, None)
+            continue
+        prev = _last_gamepad_packets.get(i)
+        curr = state.dwPacketNumber
+        _last_gamepad_packets[i] = curr
+        if prev is None or curr == prev:
+            continue
+        gp = state.Gamepad
+        if (gp.wButtons
+                or gp.bLeftTrigger  > _TRIGGER_THRESHOLD
+                or gp.bRightTrigger > _TRIGGER_THRESHOLD
+                or abs(gp.sThumbLX) > _GAMEPAD_DEADZONE
+                or abs(gp.sThumbLY) > _GAMEPAD_DEADZONE
+                or abs(gp.sThumbRX) > _GAMEPAD_DEADZONE
+                or abs(gp.sThumbRY) > _GAMEPAD_DEADZONE):
+            _last_gamepad_input_time = time.time()
+            return
+
 import lifecycle
 
 EVENTS_FILE = lifecycle.EVENTS_FILE
@@ -60,17 +125,21 @@ PID_FILE = lifecycle.PID_FILE
 _tray_icon = None
 
 def get_idle_duration_ms() -> int:
-    """Windows API を使用して、最後の入力から経過した時間（ミリ秒）を取得する"""
+    """キーボード・マウス・ゲームパッドの最後の入力から経過した時間（ミリ秒）を返す"""
     lii = LASTINPUTINFO()
     lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
     if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
         tick_count = ctypes.windll.kernel32.GetTickCount()
         elapsed = tick_count - lii.dwTime
-        if elapsed >= 0:
-            return elapsed
-        else:
-            return (0xFFFFFFFF - lii.dwTime) + tick_count
-    return 0
+        km_idle_ms = elapsed if elapsed >= 0 else (0xFFFFFFFF - lii.dwTime) + tick_count
+    else:
+        km_idle_ms = 0
+
+    _poll_gamepad()
+    if _last_gamepad_input_time > 0 and _last_gamepad_packets:
+        gp_idle_ms = int((time.time() - _last_gamepad_input_time) * 1000)
+        return min(km_idle_ms, gp_idle_ms)
+    return km_idle_ms
 
 def log_event(event_type: str, timestamp: str = None):
     """イベントログ（起動、終了など）を sleep_events.txt に記録する"""
