@@ -9,6 +9,7 @@ sleep_tracker.db
 # Dynamic runtime files (Gist にバックアップ、ローカルのみ)
 src_cpp/sleep_heartbeat.txt
 src_cpp/sleep_events.txt
+src_cpp/monitor.pid
 
 # C++ Build outputs & intermediate files
 src_cpp/sleep_monitor.exe
