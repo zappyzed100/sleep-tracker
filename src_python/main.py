@@ -1,5 +1,5 @@
 # File: src_python/main.py
-# Description: GUI application for viewing sleep history (with calendar/weekly navigation) and predictions.
+# Description: GUI application for viewing sleep history (with calendar popup and weekly navigation) and predictions.
 # Date: 2026-06-27
 # Author: Antigravity
 # Main Functions: SleepTrackerApp, main
@@ -16,7 +16,7 @@ matplotlib.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
-from tkcalendar import DateEntry
+from tkcalendar import Calendar
 
 import database
 import analyzer
@@ -52,13 +52,6 @@ class SleepTrackerApp:
             background=[('active', '#45475a'), ('pressed', '#585b70')],
             foreground=[('active', '#cdd6f4')]
         )
-        
-        # DateEntry (カレンダー入力フィールド) のスタイルをダークテーマに設定
-        self.style.configure("DateEntry", 
-                             fieldbackground="#252538", 
-                             foreground="#cdd6f4", 
-                             background="#313244", 
-                             selectbackground="#89b4fa")
         
         self.create_widgets()
 
@@ -121,30 +114,31 @@ class SleepTrackerApp:
         next_btn = ttk.Button(nav_frame, text="次の週 ▶", command=self.go_to_next_week)
         next_btn.pack(side="right", padx=5)
 
-        # カレンダー日付選択
+        # カレンダー日付選択コントロール (Entry + カレンダーボタンの分離設計)
+        # 生の Entry を使うことで OS のテーマ設定を完全にバイパスし、確実に黒系背景・白文字を反映させます
         cal_label = tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10), bg="#1e1e2e", fg="#a6adc8")
-        cal_label.pack(side="right", padx=(20, 5))
+        cal_label.pack(side="right", padx=(10, 2))
         
-        self.date_entry = DateEntry(
-            nav_frame, width=12,
-            background="#313244",      # ヘッダー背景
-            foreground="#cdd6f4",      # ヘッダー文字
-            entrybackground="#252538", # 入力セル背景
-            entryforeground="#cdd6f4", # 入力セル文字
-            selectbackground="#89b4fa",# 選択日背景
-            selectforeground="#1e1e2e",# 選択日文字
-            normalbackground="#252538",# 通常日背景
-            normalforeground="#cdd6f4",# 通常日文字
-            headersbackground="#313244",
-            headersforeground="#cdd6f4",
-            borderwidth=2, 
-            year=datetime.now().year, month=datetime.now().month, 
-            day=datetime.now().day, 
-            date_pattern="yyyy-mm-dd", 
-            font=("Yu Gothic", 10)
+        self.date_var = tk.StringVar(value=self.current_week_start.strftime("%Y-%m-%d"))
+        
+        # 黒背景・白文字・白カーソルの入力セルを強制指定
+        self.date_entry = tk.Entry(
+            nav_frame, 
+            textvariable=self.date_var, 
+            width=12, 
+            bg="#252538", 
+            fg="#cdd6f4", 
+            insertbackground="white", 
+            font=("Yu Gothic", 10), 
+            bd=1, 
+            relief="solid",
+            state="readonly" # 直接入力を防ぎカレンダーからの入力を強制
         )
-        self.date_entry.pack(side="right", padx=5)
-        self.date_entry.bind("<<DateEntrySelected>>", self.on_date_selected)
+        self.date_entry.pack(side="right", padx=2)
+        
+        # カレンダー起動ボタン
+        cal_btn = ttk.Button(nav_frame, text="📅", width=3, command=self.open_calendar_popup)
+        cal_btn.pack(side="right", padx=5)
 
         # 4. グラフ表示エリア
         self.graph_frame = ttk.Frame(self.root, style="Card.TFrame")
@@ -152,6 +146,56 @@ class SleepTrackerApp:
         
         self.canvas = None
         self.update_week_view()
+
+    def open_calendar_popup(self):
+        """日付選択用のダークテーマカレンダーポップアップを開く"""
+        cal_win = tk.Toplevel(self.root)
+        cal_win.title("日付の選択")
+        cal_win.configure(bg="#1e1e2e")
+        cal_win.transient(self.root)
+        cal_win.grab_set() # ポップアップ以外の入力を一時ブロック
+        
+        # ウィンドウ位置の調整 (親ウィジェットの近くに配置)
+        x = self.root.winfo_x() + 500
+        y = self.root.winfo_y() + 200
+        cal_win.geometry(f"+{x}+{y}")
+        
+        # 現在の日付を取得してカレンダーの初期値にする
+        try:
+            current_date = datetime.strptime(self.date_var.get(), "%Y-%m-%d")
+        except Exception:
+            current_date = datetime.now()
+
+        # ダークモード配色を施した Calendar
+        cal = Calendar(
+            cal_win,
+            background="#313244",      # ヘッダー背景 (ダークグレー)
+            foreground="#cdd6f4",      # ヘッダー文字 (白系)
+            selectbackground="#89b4fa",# 選択日背景 (ライトブルー)
+            selectforeground="#1e1e2e",# 選択日文字 (ダーク)
+            normalbackground="#252538",# 通常日背景 (黒系)
+            normalforeground="#cdd6f4",# 通常日文字 (白系)
+            headersbackground="#313244",
+            headersforeground="#cdd6f4",
+            font=("Yu Gothic", 10),
+            date_pattern="yyyy-mm-dd",
+            year=current_date.year,
+            month=current_date.month,
+            day=current_date.day
+        )
+        cal.pack(padx=15, pady=15)
+        
+        def confirm_selection():
+            selected_date_str = cal.get_date()
+            self.date_var.set(selected_date_str)
+            selected_dt = datetime.strptime(selected_date_str, "%Y-%m-%d")
+            self.current_week_start = self.get_week_start_monday(selected_dt)
+            self.update_week_view()
+            cal_win.destroy()
+
+        # 選択確定ボタン
+        confirm_btn = ttk.Button(cal_win, text="選択する", command=confirm_selection)
+        confirm_btn.pack(pady=(0, 15))
 
     def update_prediction_and_stats(self):
         """予測データと統計情報を更新してUIに描画する"""
@@ -195,30 +239,23 @@ class SleepTrackerApp:
         last_str = f"前回の睡眠時間: {int(last_sleep)}時間 {int((last_sleep % 1) * 60)}分" if total_days > 0 else "前回の睡眠時間: 記録なし"
         tk.Label(self.stats_card, text=last_str, font=("Yu Gothic", 10), bg="#252538", fg="#cdd6f4").pack(anchor="w", padx=15, pady=(0, 10))
 
-    def on_date_selected(self, event):
+    def on_date_selected(self, date_str):
         """カレンダーから日付が選択された時のイベント"""
-        selected_date = self.date_entry.get_date()
-        selected_dt = datetime.combine(selected_date, datetime.min.time())
+        selected_dt = datetime.strptime(date_str, "%Y-%m-%d")
         self.current_week_start = self.get_week_start_monday(selected_dt)
         self.update_week_view()
 
     def go_to_prev_week(self):
         """1週間戻る"""
         self.current_week_start -= timedelta(days=7)
-        self.update_date_entry_to_match_week()
+        self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
         self.update_week_view()
 
     def go_to_next_week(self):
         """1週間進む"""
         self.current_week_start += timedelta(days=7)
-        self.update_date_entry_to_match_week()
+        self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
         self.update_week_view()
-
-    def update_date_entry_to_match_week(self):
-        """週が切り替わった時にカレンダーウィジェットの日付を合わせる"""
-        self.date_entry.unbind("<<DateEntrySelected>>")
-        self.date_entry.set_date(self.current_week_start.date())
-        self.date_entry.bind("<<DateEntrySelected>>", self.on_date_selected)
 
     def update_week_view(self):
         """現在選択されている週の月曜〜日曜の睡眠時間を再集計してグラフを描画する"""
