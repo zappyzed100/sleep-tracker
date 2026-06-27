@@ -30,7 +30,10 @@ class SleepTrackerApp:
 
         # データベースの初期化とログの同期
         database.init_db()
-        database.sync_logs_to_db()
+        try:
+            database.sync_logs_to_db()
+        except Exception:
+            pass # ネット未接続等によるクラッシュ防止
         
         self.sessions = database.get_all_sessions()
         
@@ -49,6 +52,13 @@ class SleepTrackerApp:
             background=[('active', '#45475a'), ('pressed', '#585b70')],
             foreground=[('active', '#cdd6f4')]
         )
+        
+        # DateEntry (カレンダー入力フィールド) のスタイルをダークテーマに設定
+        self.style.configure("DateEntry", 
+                             fieldbackground="#252538", 
+                             foreground="#cdd6f4", 
+                             background="#313244", 
+                             selectbackground="#89b4fa")
         
         self.create_widgets()
 
@@ -117,14 +127,14 @@ class SleepTrackerApp:
         
         self.date_entry = DateEntry(
             nav_frame, width=12,
-            background="#313244",      # ヘッダー背景 (ダークグレー)
-            foreground="#cdd6f4",      # ヘッダー文字 (白系)
-            entrybackground="#252538", # 入力セル背景 (黒系)
-            entryforeground="#cdd6f4", # 入力セル文字 (白系)
-            selectbackground="#89b4fa",# 選択日背景 (ライトブルー)
-            selectforeground="#1e1e2e",# 選択日文字 (ダーク)
-            normalbackground="#252538",# カレンダー通常日背景 (黒系)
-            normalforeground="#cdd6f4",# カレンダー通常日文字 (白系)
+            background="#313244",      # ヘッダー背景
+            foreground="#cdd6f4",      # ヘッダー文字
+            entrybackground="#252538", # 入力セル背景
+            entryforeground="#cdd6f4", # 入力セル文字
+            selectbackground="#89b4fa",# 選択日背景
+            selectforeground="#1e1e2e",# 選択日文字
+            normalbackground="#252538",# 通常日背景
+            normalforeground="#cdd6f4",# 通常日文字
             headersbackground="#313244",
             headersforeground="#cdd6f4",
             borderwidth=2, 
@@ -135,9 +145,6 @@ class SleepTrackerApp:
         )
         self.date_entry.pack(side="right", padx=5)
         self.date_entry.bind("<<DateEntrySelected>>", self.on_date_selected)
-        
-        # Windowsのシステムテーマ制限を強制上書きし、入力欄の「黒背景・白文字」を完全に反映させる
-        self.date_entry._entry.config(bg="#252538", fg="#cdd6f4", insertbackground="white")
 
         # 4. グラフ表示エリア
         self.graph_frame = ttk.Frame(self.root, style="Card.TFrame")
