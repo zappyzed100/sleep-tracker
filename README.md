@@ -38,3 +38,58 @@ sleep-tracker/
 - OS: Windows 10 / 11
 - C++ビルド環境: MSVC (cl) または GCC (g++)
 - Python環境: Python 3.12+ (uv ツールを使用)
+
+---
+
+## 要望と実装ステータス一覧
+
+ユーザー様からいただいたご要望に対する現在の実装状況です。
+
+### 核心機能（睡眠の記録と検知）
+- [x] **睡眠時間の記録**
+  - **実装状態**: 実装済み。PC未使用時間および電源オフ期間を自動で記録します。
+  - **関連コード**: [database.py](file:///c:/code/lifestyle/sleep-tracker/src_python/database.py)
+- [x] **PC未使用時は眠っていると仮定**
+  - **実装状態**: 実装済み。一定時間（20分）PC操作がない場合に睡眠とみなします。
+  - **関連コード**: [main.cpp](file:///c:/code/lifestyle/sleep-tracker/src_cpp/main.cpp), [monitor.py](file:///c:/code/lifestyle/sleep-tracker/src_python/monitor.py)
+- [x] **PCの電源が入っていても長時間放置されたら睡眠と判定**
+  - **実装状態**: 実装済み。`IDLE_START`から`IDLE_RESUME`までの時間を抽出してSQLiteへ記録。
+  - **関連コード**: [database.py](file:///c:/code/lifestyle/sleep-tracker/src_python/database.py)
+- [x] **PC電源オフ（スリープ・シャットダウン）も睡眠として扱う**
+  - **実装状態**: 実装済み。電源イベント監視に加え、突然の電源断でも1分ごとの「生存信号（ハートビート）」の途絶と次回起動時刻のギャップから睡眠時間を自動逆算します。
+  - **関連コード**: [main.cpp](file:///c:/code/lifestyle/sleep-tracker/src_cpp/main.cpp) (ハートビート送信), [database.py](file:///c:/code/lifestyle/sleep-tracker/src_python/database.py) (ギャップ解析)
+
+### 自動化とアクセス性
+- [x] **PC起動時の自動実行**
+  - **実装状態**: 実装済み。Windowsスタートアップフォルダへのショートカット自動登録処理を用意。
+  - **関連コード**: [setup_shortcuts.py](file:///c:/code/lifestyle/sleep-tracker/src_python/setup_shortcuts.py)
+- [x] **タスクバー（またはデスクトップ）のショートカットからログ閲覧**
+  - **実装状態**: 実装済み。デスクトップに起動ショートカットを作成。これをユーザーがタスクバーにドラッグ＆ドロップしてピン留めすることで要求を満たせます。
+  - **関連コード**: [setup_shortcuts.py](file:///c:/code/lifestyle/sleep-tracker/src_python/setup_shortcuts.py), [main.py](file:///c:/code/lifestyle/sleep-tracker/src_python/main.py) (GUI本体)
+- [x] **PC操作開始時に自動でGitへ変更（ログ）をpush**
+  - **実装状態**: 実装済み。PC操作再開時のログ同期のタイミングで、生ログテキスト (`sleep_events.txt`) を非同期スレッドで自動コミット＆プッシュ（競合防止のリベースプル付き）します。
+  - **関連コード**: [database.py](file:///c:/code/lifestyle/sleep-tracker/src_python/database.py) (`git_push_logs()`)
+- [x] **GitHub プライベートリポジトリの作成**
+  - **実装状態**: 完了。`https://github.com/zappyzed100/sleep-tracker` を private で作成・同期済み。
+
+### 睡眠時間予測ロジック
+- [x] **今眠ったら何時間眠ることになるかを予測**
+  - **実装状態**: 実装済み。データが少ない内は「同時刻帯の平均」を用いる統計モデル、ログが10件以上揃うと `scikit-learn` の Random Forest Regressor を用いた機械学習モデルによる予測に自動で切り替わります。
+  - **関連コード**: [analyzer.py](file:///c:/code/lifestyle/sleep-tracker/src_python/analyzer.py)
+- [x] **予測特徴量に入眠時刻と「連続覚醒時間」を導入**
+  - **実装状態**: 実装済み。入眠時刻の周期特徴量（sin/cos変換）、曜日（One-Hot）、および「最後の睡眠セッションが終了（起床）してから現在までの経過時間（連続覚醒時間）」を特徴量に組み込んで予測します。
+  - **関連コード**: [analyzer.py](file:///c:/code/lifestyle/sleep-tracker/src_python/analyzer.py) (`predict_with_ml()`)
+
+### 開発プロセス・ルール
+- [x] **いきなり実装せずに実装方法を議論**
+  - **実装状態**: 完了。実装計画書を作成し合意を得た上で開発しました。
+- [x] **Pythonはuvを使用、C++も併用**
+  - **実装状態**: 完了。`uv add` で依存環境を構築し、軽量常駐監視をC++、GUI・分析・Git操作をPythonで実装しました。
+- [x] **全ファイル500行以下**
+  - **実装状態**: 厳守。すべてのソースコードが500行以下で構築されています。
+- [x] **ファイルの先頭10行にファイル情報コメントを記述**
+  - **実装状態**: 厳守。すべてのソースファイルにヘッダーコメントを記述。
+- [x] **各フォルダにREADME.mdを設置し、ナビゲーションを提供**
+  - **実装状態**: 厳守。リポジトリルート、`src_cpp/`、`src_python/` にそれぞれ `README.md` を設置しました。
+- [x] **AIエージェント間の共通規則を同期する**
+  - **実装状態**: 完了。ルートの `.agents/AGENTS.md` にルールを定義し、同期指示を明記。
