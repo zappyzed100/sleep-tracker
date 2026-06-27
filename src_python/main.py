@@ -732,14 +732,14 @@ class SleepTrackerApp:
         if self._is_out:
             self.out_status_label.config(text="検知中断中", fg="#f9e2af")
             self.out_toggle_btn.config(
-                text="再開する", bg="#a6e3a1", fg="#1e1e2e",
-                activebackground="#94d3a2", activeforeground="#1e1e2e",
+                text="再開する", bg="#45475a", fg="#cdd6f4",
+                activebackground="#585b70", activeforeground="#cdd6f4",
             )
         else:
             self.out_status_label.config(text="検知中", fg="#a6e3a1")
             self.out_toggle_btn.config(
-                text="中断する", bg="#f9e2af", fg="#1e1e2e",
-                activebackground="#e8d09c", activeforeground="#1e1e2e",
+                text="中断する", bg="#45475a", fg="#cdd6f4",
+                activebackground="#585b70", activeforeground="#cdd6f4",
             )
 
     def _watch_monitor_exit(self):
@@ -830,15 +830,15 @@ class SleepTrackerApp:
         out_frame = tk.Frame(title_frame, bg="#1e1e2e")
         out_frame.pack(side="right", padx=(0, 20))
         self.out_status_label = tk.Label(
-            out_frame, text="", font=("Yu Gothic UI", 10), bg="#1e1e2e"
+            out_frame, text="", font=("Yu Gothic UI", 14, "bold"), bg="#1e1e2e"
         )
-        self.out_status_label.pack(side="left", padx=(0, 6))
+        self.out_status_label.pack(side="left", padx=(0, 8))
         self.out_toggle_btn = tk.Button(
             out_frame,
             text="",
-            font=("Yu Gothic UI", 10, "bold"),
+            font=("Yu Gothic UI", 9),
             bd=0,
-            padx=10,
+            padx=8,
             pady=2,
             cursor="hand2",
             relief="flat",

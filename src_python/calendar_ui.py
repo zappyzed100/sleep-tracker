@@ -43,21 +43,23 @@ class CustomCalendar(tk.Toplevel):
         header_frame.pack(fill="x", padx=15, pady=12)
         
         prev_btn = tk.Button(
-            header_frame, text="◀", font=("Yu Gothic UI", 10, "bold"), 
+            header_frame, text="◀", font=("Yu Gothic UI", 10, "bold"),
             bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
-            bd=0, relief="flat", width=3, cursor="hand2"
+            bd=0, relief="flat", width=3, cursor="hand2",
+            command=self.prev_month
         )
-        prev_btn.pack(side="left", command=self.prev_month)
-        
+        prev_btn.pack(side="left")
+
         self.title_label = tk.Label(header_frame, text="", font=("Yu Gothic UI", 12, "bold"), bg="#1e1e2e", fg="#89b4fa")
         self.title_label.pack(side="left", expand=True)
-        
+
         next_btn = tk.Button(
-            header_frame, text="▶", font=("Yu Gothic UI", 10, "bold"), 
+            header_frame, text="▶", font=("Yu Gothic UI", 10, "bold"),
             bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
-            bd=0, relief="flat", width=3, cursor="hand2"
+            bd=0, relief="flat", width=3, cursor="hand2",
+            command=self.next_month
         )
-        next_btn.pack(side="right", command=self.next_month)
+        next_btn.pack(side="right")
         
         # 曜日ヘッダー (月曜始まり)
         week_frame = tk.Frame(self, bg="#1e1e2e")
