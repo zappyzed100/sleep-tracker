@@ -721,6 +721,27 @@ class SleepTrackerApp:
 
         threading.Thread(target=run, daemon=True).start()
 
+    def toggle_out_state(self):
+        """監視中断 / 再開をトグルして sleep_events.txt に記録する"""
+        event = "OUT_END" if self._is_out else "OUT_START"
+        database.record_out_event(event)
+        self._is_out = not self._is_out
+        self._update_out_ui()
+
+    def _update_out_ui(self):
+        if self._is_out:
+            self.out_status_label.config(text="中断中", fg="#f9e2af")
+            self.out_toggle_btn.config(
+                text="再開する", bg="#a6e3a1", fg="#1e1e2e",
+                activebackground="#94d3a2", activeforeground="#1e1e2e",
+            )
+        else:
+            self.out_status_label.config(text="監視中", fg="#a6e3a1")
+            self.out_toggle_btn.config(
+                text="中断する", bg="#f9e2af", fg="#1e1e2e",
+                activebackground="#e8d09c", activeforeground="#1e1e2e",
+            )
+
     def _watch_monitor_exit(self):
         """モニタープロセスの終了を WaitForSingleObject で即時検知し、UI を閉じる"""
 
@@ -803,6 +824,28 @@ class SleepTrackerApp:
             bg="#1e1e2e",
             fg=status_color,
         ).pack(side="right", pady=8)
+
+        # ── 監視中断トグル ─────────────────────────────────────────
+        self._is_out = database.get_current_out_state()
+        out_frame = tk.Frame(title_frame, bg="#1e1e2e")
+        out_frame.pack(side="right", padx=(0, 20))
+        self.out_status_label = tk.Label(
+            out_frame, text="", font=("Yu Gothic UI", 10), bg="#1e1e2e"
+        )
+        self.out_status_label.pack(side="left", padx=(0, 6))
+        self.out_toggle_btn = tk.Button(
+            out_frame,
+            text="",
+            font=("Yu Gothic UI", 10, "bold"),
+            bd=0,
+            padx=10,
+            pady=2,
+            cursor="hand2",
+            relief="flat",
+            command=self.toggle_out_state,
+        )
+        self.out_toggle_btn.pack(side="left")
+        self._update_out_ui()
 
         # ── タブバー ──────────────────────────────────────────────
         tab_bar = tk.Frame(self.root, bg="#1e1e2e")

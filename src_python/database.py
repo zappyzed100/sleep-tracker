@@ -417,6 +417,33 @@ def _download_events_from_gist():
     except Exception as e:
         print(f"Failed to download events from Gist: {e}")
 
+def get_current_out_state() -> bool:
+    """sleep_events.txt の最後の OUT_START/OUT_END から現在の監視中断状態を返す"""
+    if not os.path.exists(EVENTS_FILE):
+        return False
+    last_out = None
+    try:
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if ",OUT_START" in s or ",OUT_END" in s:
+                    last_out = s
+    except Exception:
+        pass
+    return last_out is not None and ",OUT_START" in last_out
+
+def record_out_event(event_type: str):
+    """OUT_START / OUT_END を sleep_events.txt に直接記録し Gist へ非同期バックアップする"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(EVENTS_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{timestamp},{event_type}\n")
+    except Exception as e:
+        print(f"Failed to record out event: {e}")
+        return
+    git_push_logs()
+
 def git_push_logs(wait: bool = False):
     """sleep_events.txt を Gist に非同期バックアップする。wait=True で最大8秒ブロック（終了時用）"""
     t = threading.Thread(target=_push_events_to_gist, daemon=True)
