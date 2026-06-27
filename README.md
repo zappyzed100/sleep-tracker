@@ -41,6 +41,46 @@ sleep-tracker/
 
 ---
 
+## 新PCへの移植手順
+
+過去の睡眠記録は `sleep_events.txt` に蓄積され Git で管理されています。新PCでは以下の手順だけで過去の記録ごと引き継げます。
+
+### 1. リポジトリのクローンと環境構築
+
+```bash
+git clone https://github.com/zappyzed100/sleep-tracker.git
+cd sleep-tracker
+uv sync          # .venv を作成し依存パッケージをインストール
+```
+
+### 2. デスクトップショートカットの作成
+
+エクスプローラーで `.venv\Scripts\pythonw.exe` を右クリックしてショートカットを作成し、プロパティの「リンク先」を以下のように変更してデスクトップに置く。
+
+```
+C:\...\sleep-tracker\.venv\Scripts\pythonw.exe "C:\...\sleep-tracker\src_python\main.py"
+```
+
+または、既存の `setup_shortcuts.py` を実行する:
+
+```bash
+uv run python src_python/setup_shortcuts.py
+```
+
+### 3. ショートカットを起動するだけで完了
+
+UIを初回起動すると自動で以下を実行します:
+
+| 処理 | 内容 |
+|------|------|
+| **SQLite 再構築** | `sleep_events.txt` から過去の全睡眠セッションを再生成 |
+| **スタートアップ登録** | Windows 起動時に監視モニターが自動起動するよう登録 |
+| **監視モニター起動** | タスクトレイにアイコンが表示され、即座に記録開始 |
+
+> **データの引き継ぎ範囲**: `sleep_events.txt` に記録された全イベントが復元されます。SQLite は派生データのため git 管理対象外ですが、毎回 `sleep_events.txt` から完全再生成できます。
+
+---
+
 ## 要望と実装ステータス一覧
 
 現在の実装状況。
