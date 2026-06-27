@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
 import os
+import sys
 import ctypes
 import matplotlib
 matplotlib.use("TkAgg")
@@ -27,9 +28,75 @@ from calendar_ui import CustomCalendar
 import lifecycle
 
 _ICO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sleep_tracker.ico")
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _apply_taskbar_relaunch(hwnd: int):
+    """タスクバーピン留め時に正しいアイコン・コマンドで再起動できるよう RelaunchCommand を設定する"""
+    try:
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        class PROPERTYKEY(ctypes.Structure):
+            _fields_ = [("fmtid", GUID), ("pid", ctypes.c_ulong)]
+
+        class PROPVARIANT(ctypes.Structure):
+            _fields_ = [
+                ("vt", ctypes.c_ushort),
+                ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
+                ("pwszVal", ctypes.c_wchar_p),
+            ]
+
+        # {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3} System.AppUserModel.*
+        FMTID = GUID(0x9F4C2855, 0x9F79, 0x4B39,
+                     (ctypes.c_ubyte * 8)(0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3))
+        # {886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99} IPropertyStore
+        IID_IPS = GUID(0x886D8EEB, 0x8CF2, 0x4446,
+                       (ctypes.c_ubyte * 8)(0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99))
+
+        ps = ctypes.c_void_p()
+        if ctypes.windll.shell32.SHGetPropertyStoreForWindow(
+                hwnd, ctypes.byref(IID_IPS), ctypes.byref(ps)) != 0 or not ps.value:
+            return
+
+        vtbl = ctypes.c_void_p.from_address(ps.value).value
+        sz = ctypes.sizeof(ctypes.c_void_p)
+
+        def fn(idx, ftype):
+            return ftype(ctypes.c_void_p.from_address(vtbl + idx * sz).value)
+
+        # vtable: 0=QI 1=AddRef 2=Release 3=GetCount 4=GetAt 5=GetValue 6=SetValue 7=Commit
+        SetValue = fn(6, ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p,
+                                             ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT)))
+        Commit   = fn(7, ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p))
+        Release  = fn(2, ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p))
+
+        def set_prop(pid: int, value: str):
+            pk = PROPERTYKEY(); pk.fmtid = FMTID; pk.pid = pid
+            buf = ctypes.create_unicode_buffer(value)
+            pv = PROPVARIANT(); pv.vt = 31; pv.pwszVal = ctypes.cast(buf, ctypes.c_wchar_p)
+            SetValue(ps, ctypes.byref(pk), ctypes.byref(pv))
+
+        pythonw = os.path.join(_BASE_DIR, ".venv", "Scripts", "pythonw.exe")
+        if not os.path.exists(pythonw):
+            pythonw = sys.executable.replace("python.exe", "pythonw.exe")
+        main_py = os.path.join(_BASE_DIR, "src_python", "main.py")
+
+        set_prop(5, "SleepTracker.UI.1")                  # AppUserModel.ID
+        set_prop(2, f'"{pythonw}" "{main_py}"')           # RelaunchCommand
+        set_prop(3, "睡眠トラッカー")                        # RelaunchDisplayNameResource
+        if os.path.exists(_ICO_PATH):
+            set_prop(4, f"{_ICO_PATH},0")                 # RelaunchIconResource
+
+        Commit(ps)
+        Release(ps)
+    except Exception:
+        pass
 
 def _apply_dark_titlebar(widget):
-    """Windows のタイトルバーをダークモードにし、タスクバーアイコンを .ico から設定する"""
+    """Windows のタイトルバーをダークモードにし、タスクバーアイコンと RelaunchCommand を設定する"""
     try:
         hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
         if not hwnd:
@@ -46,6 +113,8 @@ def _apply_dark_titlebar(widget):
             hsml = ctypes.windll.user32.LoadImageW(None, _ICO_PATH, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
             ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 1, hbig)  # ICON_BIG
             ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, 0, hsml)  # ICON_SMALL
+        # タスクバーピン留め用 RelaunchCommand / Icon を設定
+        _apply_taskbar_relaunch(hwnd)
     except Exception:
         pass
 
