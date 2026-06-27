@@ -2,7 +2,7 @@
 # Description: Python fallback monitor to track system idle time and heartbeats, with automatic hourly Gist sync and system tray indicator.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: get_idle_duration_ms, log_event, update_heartbeat, create_tray_image, setup_tray, main
+# Main Functions: get_idle_duration_ms, log_event, update_heartbeat, create_tray_image, quit_action, setup_tray, monitor_loop, main
 # Dependencies: ctypes, time, os, datetime, threading, pystray, PIL, database
 
 import ctypes
@@ -66,7 +66,7 @@ def update_heartbeat(idle_ms: int):
 
 def create_tray_image() -> Image:
     """タスクトレイ表示用の三日月アイコン画像を動的に生成する"""
-    # 64x64 の透過アルファチャンネル画像
+    # 64x64 の透明アルファチャンネル画像
     image = Image.new("RGBA", (64, 64), (30, 30, 46, 255)) # #1e1e2e背景色
     draw = ImageDraw.Draw(image)
     # 黄色の円 (月)
@@ -94,24 +94,13 @@ def setup_tray():
             "睡眠トラッカー (監視中)",
             menu
         )
-        # バックグラウンドスレッドでシステムトレイアイコンを起動
-        icon.run_detached()
+        # Windowsのメッセージループ処理のため、メインスレッド上でicon.run()を実行しブロックします
+        icon.run()
     except Exception as e:
         log_event(f"TRAY_ERROR: {str(e)[:50]}")
 
-def main():
-    log_event("STARTUP")
-    
-    # タスクトレイアイコンの常駐開始
-    setup_tray()
-    
-    # データベースの初期化と、起動時の初回Gist自動同期（非同期）
-    database.init_db()
-    try:
-        threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
-    except Exception:
-        pass
-
+def monitor_loop():
+    """バックグラウンドでシステムアイドル時間を監視し続けるメインループ"""
     is_idle = False
     idle_threshold_ms = 20 * 60 * 1000  # 20分
     loop_count = 0
@@ -144,10 +133,24 @@ def main():
                 except Exception:
                     pass
                     
-    except KeyboardInterrupt:
-        log_event("TERMINATE")
     except Exception as e:
         log_event(f"ERROR: {str(e)[:50]}")
+
+def main():
+    log_event("STARTUP")
+    
+    # データベースの初期化と、起動時の初回Gist自動同期（非同期）
+    database.init_db()
+    try:
+        threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
+    except Exception:
+        pass
+
+    # 監視メインループを別スレッドで開始
+    threading.Thread(target=monitor_loop, daemon=True).start()
+    
+    # メインスレッドでトレイアイコンのメッセージループを起動（ここでブロックされる）
+    setup_tray()
 
 if __name__ == "__main__":
     main()
