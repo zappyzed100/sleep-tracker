@@ -94,6 +94,42 @@ def ensure_monitor_running():
     except Exception as e:
         print(f"Failed to auto-start monitor.py: {e}")
 
+MAIN_PATH = os.path.join(BASE_DIR, "src_python", "main.py")
+
+def create_desktop_shortcut() -> bool:
+    """デスクトップに睡眠トラッカー UI のショートカットを作成する"""
+    pythonw_exe = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+
+    ico_path = os.path.join(BASE_DIR, "src_python", "sleep_tracker.ico")
+    icon_arg = f"$Shortcut.IconLocation = '{ico_path.replace(chr(39), chr(39)*2)}'" if os.path.exists(ico_path) else ""
+
+    main_path_esc = MAIN_PATH.replace("'", "''")
+    pythonw_exe_esc = pythonw_exe.replace("'", "''")
+    base_dir_esc = BASE_DIR.replace("'", "''")
+
+    ps_script = f"""
+$WshShell = New-Object -ComObject WScript.Shell
+$Desktop = $WshShell.SpecialFolders('Desktop')
+$Shortcut = $WshShell.CreateShortcut("$Desktop\\睡眠トラッカー.lnk")
+$Shortcut.TargetPath = '{pythonw_exe_esc}'
+$Shortcut.Arguments = '"{main_path_esc}"'
+$Shortcut.WorkingDirectory = '{base_dir_esc}'
+{icon_arg}
+$Shortcut.Save()
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command", ps_script],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Failed to create desktop shortcut: {e}")
+        return False
+
 def remove_startup_registration():
     """Windows スタートアップフォルダのショートカットを削除し、PC 起動時の自動実行を解除する"""
     try:

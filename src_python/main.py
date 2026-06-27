@@ -392,6 +392,12 @@ class SleepTrackerApp:
                 self.root.after(0, lambda: messagebox.showerror("削除エラー", str(e)))
         threading.Thread(target=run, daemon=True).start()
 
+    def create_desktop_shortcut_ui(self):
+        if lifecycle.create_desktop_shortcut():
+            messagebox.showinfo("完了", "デスクトップにショートカットを作成しました。")
+        else:
+            messagebox.showerror("失敗", "ショートカットの作成に失敗しました。")
+
     def save_github_config(self):
         token = self.token_var.get().strip()
         gist_id = self.gist_id_var.get().strip()
@@ -554,8 +560,20 @@ class SleepTrackerApp:
         self.canvas = None
         self.update_week_view()
 
-        # ── 設定タブ本体（初期非表示）────────────────────────────
-        self.settings_content = tk.Frame(self.root, bg="#1e1e2e")
+        # ── 設定タブ本体（初期非表示、スクロール対応）────────────────────────────
+        self.settings_wrapper = tk.Frame(self.root, bg="#1e1e2e")
+        _sc = tk.Canvas(self.settings_wrapper, bg="#1e1e2e", highlightthickness=0)
+        _sb = ttk.Scrollbar(self.settings_wrapper, orient="vertical", command=_sc.yview)
+        _sc.configure(yscrollcommand=_sb.set)
+        _sb.pack(side="right", fill="y")
+        _sc.pack(side="left", fill="both", expand=True)
+        self.settings_content = tk.Frame(_sc, bg="#1e1e2e")
+        _sw = _sc.create_window((0, 0), window=self.settings_content, anchor="nw")
+        self.settings_content.bind("<Configure>", lambda e: _sc.configure(scrollregion=_sc.bbox("all")))
+        _sc.bind("<Configure>", lambda e: _sc.itemconfig(_sw, width=e.width))
+        _sc.bind("<Enter>", lambda e: self.root.bind_all("<MouseWheel>",
+            lambda ev: _sc.yview_scroll(int(-1 * (ev.delta / 120)), "units")))
+        _sc.bind("<Leave>", lambda e: self.root.unbind_all("<MouseWheel>"))
         self._build_settings_tab()
 
     def _build_settings_tab(self):
@@ -577,6 +595,11 @@ class SleepTrackerApp:
             bg="#252538", fg="#cdd6f4", selectcolor="#313244",
             activebackground="#252538", activeforeground="#cdd6f4",
             font=("Yu Gothic UI", 10)
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        tk.Button(
+            s1, text="デスクトップにショートカットを作成", command=self.create_desktop_shortcut_ui,
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=5, cursor="hand2"
         ).pack(anchor="w", padx=15, pady=(0, 12))
 
         # スリープ判定時間
@@ -622,14 +645,55 @@ class SleepTrackerApp:
         tk.Label(s3, text="※ 列順: 就寝時刻, 起床時刻, 睡眠時間(時間), 種別 — このアプリのCSV出力と同じ形式",
                  **_lbl_s).pack(anchor="w", padx=15, pady=(2, 12))
 
-        # データ管理
+        # GitHub連携
         s4 = tk.Frame(self.settings_content, **_card)
         s4.pack(**_kw, pady=8)
-        tk.Label(s4, text="データ管理", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
-        btn_row = tk.Frame(s4, bg="#252538")
+        tk.Label(s4, text="GitHub連携", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+
+        tk.Label(s4, text="Gist ID:", **_lbl_b).pack(anchor="w", padx=15, pady=(0, 2))
+        self.gist_id_var = tk.StringVar()
+        tk.Entry(
+            s4, textvariable=self.gist_id_var,
+            width=52, bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
+            font=("Yu Gothic UI", 10), bd=1, relief="solid"
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+
+        tk.Label(s4, text="Personal Access Token (Gist の read/write 権限のみでOK):", **_lbl_b).pack(anchor="w", padx=15, pady=(0, 2))
+        self.token_var = tk.StringVar()
+        tk.Entry(
+            s4, textvariable=self.token_var, show="*",
+            width=52, bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
+            font=("Yu Gothic UI", 10), bd=1, relief="solid"
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+
+        gh_btn_row = tk.Frame(s4, bg="#252538")
+        gh_btn_row.pack(anchor="w", padx=15, pady=(0, 6))
+        tk.Button(
+            gh_btn_row, text="保存", command=self.save_github_config,
+            bg="#89b4fa", fg="#1e1e2e", activebackground="#7ba5f0", activeforeground="#1e1e2e",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=20, pady=6, width=10, cursor="hand2"
+        ).pack(side="left", padx=(0, 10))
+        tk.Button(
+            gh_btn_row, text="接続テスト", command=self.test_github_connection,
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
+            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=20, pady=6, width=10, cursor="hand2"
+        ).pack(side="left")
+
+        self.github_status_label = tk.Label(s4, text="", font=("Yu Gothic UI", 10), bg="#252538", fg="#a6adc8")
+        self.github_status_label.pack(anchor="w", padx=15, pady=(4, 4))
+        tk.Label(s4, text="※ config.json にローカル保存されます（gitignore済み）",
+                 **_lbl_s).pack(anchor="w", padx=15, pady=(0, 12))
+
+        # データ管理
+        s5 = tk.Frame(self.settings_content, **_card)
+        s5.pack(**_kw, pady=(8, 30))
+        tk.Label(s5, text="データ管理", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
+        tk.Label(s5, text="sleep_events.txt を Gist にバックアップ / Gist からデータを復元します",
+                 **_lbl_s).pack(anchor="w", padx=15, pady=(0, 6))
+        btn_row = tk.Frame(s5, bg="#252538")
         btn_row.pack(anchor="w", padx=15, pady=(0, 12))
         tk.Button(
-            btn_row, text="今すぐ同期", command=self.force_sync_ui,
+            btn_row, text="今すぐ Gist と同期", command=self.force_sync_ui,
             bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
             font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
         ).pack(side="left", padx=(0, 10))
@@ -638,45 +702,6 @@ class SleepTrackerApp:
             bg="#f38ba8", fg="#11111b", activebackground="#eba0b2", activeforeground="#11111b",
             font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
         ).pack(side="left")
-
-        # GitHub連携
-        s5 = tk.Frame(self.settings_content, **_card)
-        s5.pack(**_kw, pady=(8, 30))
-        tk.Label(s5, text="GitHub連携", **_lbl_h).pack(anchor="w", padx=15, pady=(10, 4))
-
-        tk.Label(s5, text="Personal Access Token (Gist の read/write 権限のみでOK):", **_lbl_b).pack(anchor="w", padx=15, pady=(0, 2))
-        self.token_var = tk.StringVar()
-        tk.Entry(
-            s5, textvariable=self.token_var, show="*",
-            width=52, bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
-            font=("Yu Gothic UI", 10), bd=1, relief="solid"
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-
-        tk.Label(s5, text="Gist ID:", **_lbl_b).pack(anchor="w", padx=15, pady=(0, 2))
-        self.gist_id_var = tk.StringVar()
-        tk.Entry(
-            s5, textvariable=self.gist_id_var,
-            width=52, bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
-            font=("Yu Gothic UI", 10), bd=1, relief="solid"
-        ).pack(anchor="w", padx=15, pady=(0, 8))
-
-        gh_btn_row = tk.Frame(s5, bg="#252538")
-        gh_btn_row.pack(anchor="w", padx=15, pady=(0, 6))
-        tk.Button(
-            gh_btn_row, text="保存", command=self.save_github_config,
-            bg="#89b4fa", fg="#1e1e2e", activebackground="#7ba5f0", activeforeground="#1e1e2e",
-            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
-        ).pack(side="left", padx=(0, 10))
-        tk.Button(
-            gh_btn_row, text="接続テスト", command=self.test_github_connection,
-            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
-            font=("Yu Gothic UI", 10, "bold"), bd=0, padx=12, pady=6, cursor="hand2"
-        ).pack(side="left")
-
-        self.github_status_label = tk.Label(s5, text="", font=("Yu Gothic UI", 10), bg="#252538", fg="#a6adc8")
-        self.github_status_label.pack(anchor="w", padx=15, pady=(4, 4))
-        tk.Label(s5, text="※ config.json にローカル保存されます（gitignore済み）",
-                 **_lbl_s).pack(anchor="w", padx=15, pady=(0, 12))
 
         # 既存の設定値を入力欄に反映
         try:
@@ -695,11 +720,11 @@ class SleepTrackerApp:
         if init:
             return
         if tab_name == "home":
-            self.settings_content.pack_forget()
+            self.settings_wrapper.pack_forget()
             self.home_content.pack(fill="both", expand=True)
         else:
             self.home_content.pack_forget()
-            self.settings_content.pack(fill="both", expand=True)
+            self.settings_wrapper.pack(fill="both", expand=True)
 
     def open_calendar_popup(self):
         try:
