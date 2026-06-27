@@ -119,45 +119,6 @@ def quit_app(icon=None, item=None):
     if _tray_icon:
         _tray_icon.stop()
 
-def force_sync(icon=None, item=None):
-    """手動でログをGistおよびGitと最新に同期する (トレイバルーン通知付き)"""
-    def run_sync():
-        try:
-            if icon:
-                icon.notify("データの同期を開始しました...", "睡眠トラッカー")
-            database.sync_logs_to_db()
-            if icon:
-                icon.notify("同期が完了し、最新の情報に更新されました！", "睡眠トラッカー")
-        except Exception as e:
-            if icon:
-                icon.notify(f"同期エラー: {str(e)[:50]}", "睡眠トラッカー")
-    threading.Thread(target=run_sync, daemon=True).start()
-
-def request_clear_data(icon=None, item=None):
-    """ユーザー確認のうえ、すべての睡眠データを完全に初期化・削除する"""
-    # pystray コールバックスレッド上で MessageBoxW を呼ぶと内部メッセージループが
-    # pystray のキューと競合してボタン入力を受け付けなくなるため、独立スレッドで実行する
-    def confirm_and_clear():
-        import ctypes
-        IDYES = 6
-        answer = ctypes.windll.user32.MessageBoxW(
-            0,
-            "本当にすべての睡眠データを完全に削除しますか？\n\n※この操作を行うと、生ログファイル、SQLiteデータベース、およびiPhone側のGistデータがすべて消去され、初期状態にリセットされます。この操作は取り消せません。",
-            "全データ削除の確認",
-            0x04 | 0x30 | 0x40000,  # MB_YESNO | MB_ICONWARNING | MB_TOPMOST
-        )
-        if answer == IDYES:
-            try:
-                if icon:
-                    icon.notify("すべてのデータを削除・初期化しています...", "睡眠トラッカー")
-                database.clear_all_data()
-                if icon:
-                    icon.notify("すべての睡眠データを正常に削除・リセットしました。", "睡眠トラッカー")
-            except Exception as e:
-                if icon:
-                    icon.notify(f"削除エラー: {str(e)[:50]}", "睡眠トラッカー")
-
-    threading.Thread(target=confirm_and_clear, daemon=True).start()
 
 def build_tray_icon():
     """pystray のタスクトレイアイコンを構築して返す"""
@@ -178,8 +139,6 @@ def build_tray_icon():
 
         menu = pystray.Menu(
             pystray.MenuItem("睡眠トラッカーを開く", open_main_ui, default=True),
-            pystray.MenuItem("データを今すぐ同期", force_sync),
-            pystray.MenuItem("全データを削除", request_clear_data),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("終了", quit_app),
         )

@@ -617,11 +617,12 @@ class SleepTrackerApp:
     def force_sync_ui(self):
         def run():
             try:
+                database.validate_gist_connection()
                 database.sync_logs_to_db()
                 self.root.after(
                     0,
                     lambda: messagebox.showinfo(
-                        "同期完了", "データの同期が完了しました。"
+                        "同期完了", "Gistとの同期が完了しました。"
                     ),
                 )
             except Exception as e:
@@ -640,6 +641,7 @@ class SleepTrackerApp:
         def run():
             try:
                 database.clear_all_data()
+                database.sync_logs_to_db()
                 self.root.after(0, self.update_week_view)
                 self.root.after(
                     0,

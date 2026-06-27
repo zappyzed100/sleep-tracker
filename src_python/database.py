@@ -392,6 +392,35 @@ def _push_events_to_gist():
     except Exception as e:
         print(f"Failed to push events to Gist: {e}")
 
+def validate_gist_connection():
+    """Gist IDとトークンの有効性を確認する。失敗時は ValueError を送出する"""
+    import urllib.error
+    gist_id, token = _get_gist_config()
+    if not gist_id:
+        raise ValueError("Gist IDが設定されていません。")
+    if not token:
+        raise ValueError("GitHub トークンが設定されていません。")
+    url = f"https://api.github.com/gists/{gist_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "Sleep-Tracker-Client",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ValueError(f"Gist IDが見つかりません (404):\n{gist_id}") from e
+        elif e.code == 401:
+            raise ValueError("GitHub トークンが無効です (401)。") from e
+        else:
+            raise ValueError(f"Gist API エラー (HTTP {e.code})。") from e
+    except urllib.error.URLError as e:
+        raise ValueError(f"ネットワークエラー: {e.reason}") from e
+
 def _download_events_from_gist():
     """Gist から sleep_events.txt をダウンロードしてローカルに書き出す（移植・初回起動時用）"""
     gist_id, token = _get_gist_config()
