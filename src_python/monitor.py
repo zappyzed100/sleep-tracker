@@ -50,12 +50,11 @@ class LASTINPUTINFO(ctypes.Structure):
         ("dwTime", ctypes.c_uint)
     ]
 
-LOG_DIR = os.path.join(BASE_DIR, "src_cpp")
-os.makedirs(LOG_DIR, exist_ok=True)
+import lifecycle
 
-EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
-HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
-PID_FILE = os.path.join(LOG_DIR, "monitor.pid")
+EVENTS_FILE = lifecycle.EVENTS_FILE
+HEARTBEAT_FILE = lifecycle.HEARTBEAT_FILE
+PID_FILE = lifecycle.PID_FILE
 
 # タスクトレイアイコン (グローバル参照)
 _tray_icon = None
