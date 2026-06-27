@@ -9,6 +9,8 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import datetime, timedelta
 import os
+import sys
+import subprocess
 import threading
 import matplotlib
 matplotlib.use("TkAgg")
@@ -434,7 +436,36 @@ class SleepTrackerApp:
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
+def ensure_monitor_running():
+    """monitor.py がバックグラウンドで動いていなければ起動する"""
+    hb_info = database.read_last_heartbeat()
+    if hb_info:
+        hb_time, _ = hb_info
+        if datetime.now() - hb_time < timedelta(minutes=3):
+            return  # 既に稼働中
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    monitor_path = os.path.join(script_dir, "monitor.py")
+    python_exe = sys.executable
+    # pythonw.exe で起動されている場合はそのまま使用 (コンソール非表示)
+    # python.exe の場合は pythonw.exe に切り替える
+    if not python_exe.lower().endswith("pythonw.exe"):
+        pythonw = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
+        if os.path.exists(pythonw):
+            python_exe = pythonw
+
+    base_dir = os.path.dirname(script_dir)
+    try:
+        subprocess.Popen(
+            [python_exe, monitor_path],
+            cwd=base_dir,
+            creationflags=0x00000008,  # DETACHED_PROCESS
+        )
+    except Exception:
+        pass
+
 def main():
+    ensure_monitor_running()
     root = tk.Tk()
     app = SleepTrackerApp(root)
     root.mainloop()
