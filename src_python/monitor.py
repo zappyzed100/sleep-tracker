@@ -152,7 +152,7 @@ def build_tray_icon():
 
         menu = pystray.Menu(
             pystray.MenuItem("睡眠トラッカーを開く", open_main_ui, default=True),
-            pystray.MenuItem("最新の情報に更新", force_sync),
+            pystray.MenuItem("データを今すぐ同期", force_sync),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("終了", quit_app),
         )

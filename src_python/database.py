@@ -73,21 +73,27 @@ def sync_mobile_events_from_gist():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
             gist_id = config.get("gist_id")
+            github_token = config.get("github_token")
     except Exception:
         return
         
     if not gist_id:
         return
         
-    # GitHub トークンの取得
-    try:
-        res = subprocess.run(
-            ["gh", "auth", "token"],
-            capture_output=True, text=True, check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        token = res.stdout.strip()
-    except Exception:
+    # GitHub トークンの取得 (config.jsonのトークンを優先し、無ければ gh CLI から取得)
+    token = github_token
+    if not token:
+        try:
+            res = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True, text=True, check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            token = res.stdout.strip()
+        except Exception:
+            pass
+            
+    if not token:
         return
         
     # Gist API からのフェッチ
