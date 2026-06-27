@@ -626,7 +626,8 @@ class SleepTrackerApp:
                     ),
                 )
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("同期エラー", str(e)))
+                err_msg = str(e)
+                self.root.after(0, lambda: messagebox.showerror("同期エラー", err_msg))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -650,7 +651,8 @@ class SleepTrackerApp:
                     ),
                 )
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("削除エラー", str(e)))
+                err_msg = str(e)
+                self.root.after(0, lambda: messagebox.showerror("削除エラー", err_msg))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1064,26 +1066,8 @@ class SleepTrackerApp:
             anchor="w", padx=15, pady=(10, 4)
         )
 
-        ex_row = tk.Frame(s3, bg="#252538")
-        ex_row.pack(anchor="w", padx=15, pady=(0, 4))
-        tk.Label(ex_row, text="エクスポート:", **_lbl_b).pack(side="left")
-        tk.Button(
-            ex_row,
-            text="CSVに書き出す",
-            command=self.export_csv,
-            bg="#89b4fa",
-            fg="#1e1e2e",
-            activebackground="#7ba5f0",
-            activeforeground="#1e1e2e",
-            font=("Yu Gothic UI", 10, "bold"),
-            bd=0,
-            padx=10,
-            pady=4,
-            cursor="hand2",
-        ).pack(side="left", padx=(8, 0))
-
         im_row = tk.Frame(s3, bg="#252538")
-        im_row.pack(anchor="w", padx=15, pady=(4, 4))
+        im_row.pack(anchor="w", padx=15, pady=(0, 4))
         tk.Label(im_row, text="インポート:", **_lbl_b).pack(side="left")
         tk.Button(
             im_row,
@@ -1092,6 +1076,24 @@ class SleepTrackerApp:
             bg="#a6e3a1",
             fg="#1e1e2e",
             activebackground="#94d18f",
+            activeforeground="#1e1e2e",
+            font=("Yu Gothic UI", 10, "bold"),
+            bd=0,
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
+
+        ex_row = tk.Frame(s3, bg="#252538")
+        ex_row.pack(anchor="w", padx=15, pady=(4, 4))
+        tk.Label(ex_row, text="エクスポート:", **_lbl_b).pack(side="left")
+        tk.Button(
+            ex_row,
+            text="CSVに書き出す",
+            command=self.export_csv,
+            bg="#89b4fa",
+            fg="#1e1e2e",
+            activebackground="#7ba5f0",
             activeforeground="#1e1e2e",
             font=("Yu Gothic UI", 10, "bold"),
             bd=0,
