@@ -1,9 +1,8 @@
 # File: src_python/monitor.py
-# Description: Python fallback monitor to track system idle time and heartbeats, with automatic hourly Gist sync.
+# Description: Background monitor tracking system idle time and heartbeats, with tray icon and hourly Gist sync.
 # Date: 2026-06-27
 # Author: Antigravity
 # Main Functions: get_idle_duration_ms, log_event, update_heartbeat, monitor_loop, main
-# Dependencies: ctypes, time, os, sys, datetime, threading, database
 
 import sys
 import os
@@ -27,6 +26,7 @@ if sys.stderr is None:
 
 import ctypes
 import time
+import subprocess
 from datetime import datetime
 import threading
 
@@ -44,6 +44,9 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
 HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
+
+# タスクトレイアイコン (グローバル参照)
+_tray_icon = None
 
 def get_idle_duration_ms() -> int:
     """Windows API を使用して、最後の入力から経過した時間（ミリ秒）を取得する"""
@@ -77,17 +80,64 @@ def update_heartbeat(idle_ms: int):
     except Exception as e:
         print(f"Error updating heartbeat: {e}")
 
+def open_main_ui(icon=None, item=None):
+    """メイン UI (main.py) を別プロセスで起動する"""
+    main_path = os.path.join(SCRIPT_DIR, "main.py")
+    python_exe = sys.executable
+    # pythonw.exe で起動していた場合も GUI は python.exe で開く
+    if python_exe.lower().endswith("pythonw.exe"):
+        python_exe = python_exe[:-len("pythonw.exe")] + "python.exe"
+    try:
+        subprocess.Popen([python_exe, main_path], cwd=BASE_DIR)
+    except Exception as e:
+        print(f"Failed to open main UI: {e}")
+
+def quit_app(icon=None, item=None):
+    """タスクトレイアイコンを停止してプロセスを終了する"""
+    global _tray_icon
+    log_event("SHUTDOWN")
+    if _tray_icon:
+        _tray_icon.stop()
+
+def build_tray_icon():
+    """pystray のタスクトレイアイコンを構築して返す"""
+    try:
+        import pystray
+        from PIL import Image
+
+        ico_path = os.path.join(SCRIPT_DIR, "sleep_tracker.ico")
+        if os.path.exists(ico_path):
+            image = Image.open(ico_path)
+        else:
+            # .ico がない場合は三日月形を描画してフォールバック
+            image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(image)
+            draw.ellipse([4, 4, 60, 60], fill=(30, 30, 46, 255))
+            draw.ellipse([16, 4, 72, 60], fill=(0, 0, 0, 0))
+
+        menu = pystray.Menu(
+            pystray.MenuItem("睡眠トラッカーを開く", open_main_ui, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("終了", quit_app),
+        )
+        icon = pystray.Icon("sleep_tracker", image, "睡眠トラッカー 監視中", menu)
+        return icon
+    except Exception as e:
+        print(f"Tray icon unavailable: {e}")
+        return None
+
 def monitor_loop():
     """バックグラウンドでシステムアイドル時間を監視し続けるメインループ"""
     is_idle = False
     idle_threshold_ms = 20 * 60 * 1000  # 20分
     loop_count = 0
-    
+
     try:
         while True:
             idle_ms = get_idle_duration_ms()
             update_heartbeat(idle_ms)
-            
+
             if idle_ms >= idle_threshold_ms:
                 if not is_idle:
                     is_idle = True
@@ -98,10 +148,10 @@ def monitor_loop():
                 if is_idle:
                     is_idle = False
                     log_event("IDLE_RESUME")
-                    
+
             time.sleep(60)  # 1分待機
             loop_count += 1
-            
+
             # 1時間（60ループ）ごとに自動でGist同期（非同期）を実行
             if loop_count >= 60:
                 loop_count = 0
@@ -109,13 +159,15 @@ def monitor_loop():
                     threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
                 except Exception:
                     pass
-                    
+
     except Exception as e:
         log_event(f"ERROR: {str(e)[:50]}")
 
 def main():
+    global _tray_icon
+
     log_event("STARTUP")
-    
+
     # データベースの初期化と、起動時の初回Gist自動同期（非同期）
     database.init_db()
     try:
@@ -123,8 +175,17 @@ def main():
     except Exception:
         pass
 
-    # 監視メインループを実行
-    monitor_loop()
+    # 監視ループを別スレッドで起動
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
+
+    # タスクトレイアイコンをメインスレッドで実行 (pystray はメインスレッド必須)
+    _tray_icon = build_tray_icon()
+    if _tray_icon:
+        _tray_icon.run()
+    else:
+        # pystray が使えない環境ではスレッドが終わるまで待機
+        monitor_thread.join()
 
 if __name__ == "__main__":
     main()

@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import datetime, timedelta
 import os
+import threading
 import matplotlib
 matplotlib.use("TkAgg")
 # Windows用の滑らかな日本語フォント (游ゴシック, メイリオ) を最優先に設定
@@ -162,12 +163,12 @@ class SleepTrackerApp:
         except Exception:
             pass
 
-        # データベースの初期化とログの同期
+        # データベースの初期化 (同期) とログの同期 (非同期: Gist HTTP リクエストでブロックしないため)
         database.init_db()
         try:
-            database.sync_logs_to_db()
+            threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
         except Exception:
-            pass # ネット未接続等によるクラッシュ防止
+            pass
         
         self.sessions = database.get_all_sessions()
         
