@@ -1042,8 +1042,8 @@ class SleepTrackerApp:
         self.threshold_var = tk.StringVar(value=str(self._load_threshold()))
         spin = tk.Spinbox(
             row,
-            from_=5,
-            to=120,
+            from_=1,
+            to=9999,
             increment=5,
             textvariable=self.threshold_var,
             width=4,
