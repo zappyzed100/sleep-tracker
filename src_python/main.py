@@ -1,9 +1,9 @@
 # File: src_python/main.py
-# Description: GUI application for viewing sleep history (with calendar popup and weekly navigation) and predictions.
+# Description: GUI application for viewing sleep history (with premium custom calendar popup and weekly navigation) and predictions.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: SleepTrackerApp, main
-# Dependencies: tkinter, tkcalendar, matplotlib, pandas, datetime, database, analyzer
+# Main Functions: SleepTrackerApp, CustomCalendar, main
+# Dependencies: tkinter, matplotlib, pandas, datetime, calendar, database, analyzer
 
 import tkinter as tk
 from tkinter import ttk
@@ -16,10 +16,129 @@ matplotlib.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
-from tkcalendar import Calendar
+import calendar
 
 import database
 import analyzer
+
+class CustomCalendar(tk.Toplevel):
+    """プレミアムな外観を持つフラットデザインのカスタムカレンダーポップアップ"""
+    def __init__(self, parent, current_date, callback):
+        super().__init__(parent)
+        self.title("日付の選択")
+        self.configure(bg="#1e1e2e")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.callback = callback
+        self.year = current_date.year
+        self.month = current_date.month
+        self.selected_day = current_date.day
+        
+        # ウィンドウ位置の調整 (親の近くに表示)
+        x = parent.winfo_x() + 450
+        y = parent.winfo_y() + 180
+        self.geometry(f"+{x}+{y}")
+        self.resizable(False, False)
+        
+        # ヘッダーコントロール
+        header_frame = tk.Frame(self, bg="#1e1e2e")
+        header_frame.pack(fill="x", padx=15, pady=12)
+        
+        prev_btn = tk.Button(
+            header_frame, text="◀", font=("Yu Gothic UI", 10, "bold"), 
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
+            bd=0, relief="flat", width=3, cursor="hand2"
+        )
+        prev_btn.pack(side="left")
+        prev_btn.config(command=self.prev_month)
+        
+        self.title_label = tk.Label(header_frame, text="", font=("Yu Gothic UI", 12, "bold"), bg="#1e1e2e", fg="#89b4fa")
+        self.title_label.pack(side="left", expand=True)
+        
+        next_btn = tk.Button(
+            header_frame, text="▶", font=("Yu Gothic UI", 10, "bold"), 
+            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
+            bd=0, relief="flat", width=3, cursor="hand2"
+        )
+        next_btn.pack(side="right")
+        next_btn.config(command=self.next_month)
+        
+        # 曜日ヘッダー (月曜始まり)
+        week_frame = tk.Frame(self, bg="#1e1e2e")
+        week_frame.pack(fill="x", padx=15, pady=(5, 2))
+        weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+        for w in weekdays:
+            lbl = tk.Label(week_frame, text=w, font=("Yu Gothic UI", 9, "bold"), bg="#1e1e2e", fg="#a6adc8", width=4, height=1)
+            lbl.pack(side="left", padx=3)
+            
+        # 日付グリッド
+        self.grid_frame = tk.Frame(self, bg="#1e1e2e")
+        self.grid_frame.pack(padx=15, pady=(2, 15))
+        
+        self.draw_calendar()
+        
+    def draw_calendar(self):
+        # 既存の日付ボタンをクリア
+        for widget in self.grid_frame.winfo_children():
+            widget.destroy()
+            
+        self.title_label.config(text=f"{self.year}年 {self.month}月")
+        
+        # 月のカレンダーマトリクスを取得 (月曜始まり)
+        cal = calendar.Calendar(firstweekday=0)
+        month_days = cal.monthdayscalendar(self.year, self.month)
+        
+        for r_idx, week in enumerate(month_days):
+            for c_idx, day in enumerate(week):
+                if day == 0:
+                    # 当月以外の日付スロットは空欄にする
+                    lbl = tk.Label(self.grid_frame, text="", bg="#1e1e2e", width=4, height=2)
+                    lbl.grid(row=r_idx, column=c_idx, padx=3, pady=3)
+                else:
+                    is_selected = (day == self.selected_day)
+                    bg_color = "#89b4fa" if is_selected else "#252538"
+                    fg_color = "#1e1e2e" if is_selected else "#cdd6f4"
+                    
+                    btn = tk.Button(
+                        self.grid_frame, 
+                        text=str(day), 
+                        font=("Yu Gothic UI", 9, "bold"),
+                        bg=bg_color, 
+                        fg=fg_color, 
+                        bd=0, 
+                        activebackground="#45475a", 
+                        activeforeground="#cdd6f4",
+                        width=4, 
+                        height=2,
+                        cursor="hand2",
+                        command=lambda d=day: self.select_day(d)
+                    )
+                    btn.grid(row=r_idx, column=c_idx, padx=3, pady=3)
+                    
+    def prev_month(self):
+        if self.month == 1:
+            self.month = 12
+            self.year -= 1
+        else:
+            self.month -= 1
+        self.selected_day = 1
+        self.draw_calendar()
+        
+    def next_month(self):
+        if self.month == 12:
+            self.month = 1
+            self.year += 1
+        else:
+            self.month += 1
+        self.selected_day = 1
+        self.draw_calendar()
+        
+    def select_day(self, day):
+        selected_date = f"{self.year}-{self.month:02d}-{day:02d}"
+        self.callback(selected_date)
+        self.destroy()
+
 
 class SleepTrackerApp:
     def __init__(self, root):
@@ -115,24 +234,23 @@ class SleepTrackerApp:
         next_btn.pack(side="right", padx=5)
 
         # カレンダー日付選択コントロール (Entry + カレンダーボタンの分離設計)
-        # 生の Entry を使うことで OS のテーマ設定を完全にバイパスし、確実に黒系背景・白文字を反映させます
+        # クッキリとした「白背景・黒文字」で視認性を最優先にします
         cal_label = tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10), bg="#1e1e2e", fg="#a6adc8")
         cal_label.pack(side="right", padx=(10, 2))
         
         self.date_var = tk.StringVar(value=self.current_week_start.strftime("%Y-%m-%d"))
         
-        # 黒背景・白文字・白カーソルの入力セルを強制指定
         self.date_entry = tk.Entry(
             nav_frame, 
             textvariable=self.date_var, 
             width=12, 
-            bg="#252538", 
-            fg="#cdd6f4", 
-            insertbackground="white", 
-            font=("Yu Gothic", 10), 
+            bg="white", 
+            fg="black", 
+            insertbackground="black", 
+            font=("Yu Gothic UI", 10, "bold"), 
             bd=1, 
             relief="solid",
-            state="readonly" # 直接入力を防ぎカレンダーからの入力を強制
+            state="readonly" # カレンダーボタンからの入力を強制
         )
         self.date_entry.pack(side="right", padx=2)
         
@@ -148,54 +266,20 @@ class SleepTrackerApp:
         self.update_week_view()
 
     def open_calendar_popup(self):
-        """日付選択用のダークテーマカレンダーポップアップを開く"""
-        cal_win = tk.Toplevel(self.root)
-        cal_win.title("日付の選択")
-        cal_win.configure(bg="#1e1e2e")
-        cal_win.transient(self.root)
-        cal_win.grab_set() # ポップアップ以外の入力を一時ブロック
-        
-        # ウィンドウ位置の調整 (親ウィジェットの近くに配置)
-        x = self.root.winfo_x() + 500
-        y = self.root.winfo_y() + 200
-        cal_win.geometry(f"+{x}+{y}")
-        
-        # 現在の日付を取得してカレンダーの初期値にする
+        """カスタムポップアップカレンダーを開く"""
         try:
             current_date = datetime.strptime(self.date_var.get(), "%Y-%m-%d")
         except Exception:
             current_date = datetime.now()
+            
+        CustomCalendar(self.root, current_date, self.on_date_selected_from_popup)
 
-        # ダークモード配色を施した Calendar
-        cal = Calendar(
-            cal_win,
-            background="#313244",      # ヘッダー背景 (ダークグレー)
-            foreground="#cdd6f4",      # ヘッダー文字 (白系)
-            selectbackground="#89b4fa",# 選択日背景 (ライトブルー)
-            selectforeground="#1e1e2e",# 選択日文字 (ダーク)
-            normalbackground="#252538",# 通常日背景 (黒系)
-            normalforeground="#cdd6f4",# 通常日文字 (白系)
-            headersbackground="#313244",
-            headersforeground="#cdd6f4",
-            font=("Yu Gothic", 10),
-            date_pattern="yyyy-mm-dd",
-            year=current_date.year,
-            month=current_date.month,
-            day=current_date.day
-        )
-        cal.pack(padx=15, pady=15)
-        
-        def confirm_selection():
-            selected_date_str = cal.get_date()
-            self.date_var.set(selected_date_str)
-            selected_dt = datetime.strptime(selected_date_str, "%Y-%m-%d")
-            self.current_week_start = self.get_week_start_monday(selected_dt)
-            self.update_week_view()
-            cal_win.destroy()
-
-        # 選択確定ボタン
-        confirm_btn = ttk.Button(cal_win, text="選択する", command=confirm_selection)
-        confirm_btn.pack(pady=(0, 15))
+    def on_date_selected_from_popup(self, date_str):
+        """ポップアップカレンダーで日付が選択された時のコールバック"""
+        self.date_var.set(date_str)
+        selected_dt = datetime.strptime(date_str, "%Y-%m-%d")
+        self.current_week_start = self.get_week_start_monday(selected_dt)
+        self.update_week_view()
 
     def update_prediction_and_stats(self):
         """予測データと統計情報を更新してUIに描画する"""
@@ -238,12 +322,6 @@ class SleepTrackerApp:
         
         last_str = f"前回の睡眠時間: {int(last_sleep)}時間 {int((last_sleep % 1) * 60)}分" if total_days > 0 else "前回の睡眠時間: 記録なし"
         tk.Label(self.stats_card, text=last_str, font=("Yu Gothic", 10), bg="#252538", fg="#cdd6f4").pack(anchor="w", padx=15, pady=(0, 10))
-
-    def on_date_selected(self, date_str):
-        """カレンダーから日付が選択された時のイベント"""
-        selected_dt = datetime.strptime(date_str, "%Y-%m-%d")
-        self.current_week_start = self.get_week_start_monday(selected_dt)
-        self.update_week_view()
 
     def go_to_prev_week(self):
         """1週間戻る"""
