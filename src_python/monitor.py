@@ -6,11 +6,23 @@
 
 import sys
 import os
+import subprocess
 
 # 実行時作業ディレクトリをスクリプトの場所基準でリポジトリルートに強制固定 (Windows特有のSystem32起動時クラッシュを100%防止)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 os.chdir(BASE_DIR)
+
+# .venv 以外の Python で起動された場合は .venv の pythonw.exe で自分自身を再起動する
+# (pystray 等の依存パッケージは .venv にしかインストールされていないため)
+_VENV_PYTHONW = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
+if os.path.exists(_VENV_PYTHONW) and os.path.abspath(sys.executable).lower() != os.path.abspath(_VENV_PYTHONW).lower():
+    subprocess.Popen(
+        [_VENV_PYTHONW, os.path.abspath(__file__)],
+        cwd=BASE_DIR,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    sys.exit(0)
 
 # pythonw.exe (コンソール非表示) 起動時における sys.stdout/stderr への print/write によるクラッシュを完全に防止
 class DummyStream:
@@ -26,7 +38,6 @@ if sys.stderr is None:
 
 import ctypes
 import time
-import subprocess
 from datetime import datetime
 import threading
 
@@ -128,7 +139,7 @@ def build_tray_icon():
         icon = pystray.Icon("sleep_tracker", image, "睡眠トラッカー 監視中", menu)
         return icon
     except Exception as e:
-        print(f"Tray icon unavailable: {e}")
+        log_event(f"TRAY_ERROR: {str(e)[:80]}")
         return None
 
 def monitor_loop():
