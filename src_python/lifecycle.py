@@ -2,7 +2,7 @@
 # Description: Shared lifecycle synchronization helpers and paths for UI and monitor.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: is_monitor_running, ensure_monitor_running, check_process_exists, read_last_heartbeat
+# Main Functions: ensure_monitor_running, ensure_startup_registered, check_process_exists, read_last_heartbeat, is_monitor_running
 # Dependencies: os, sys, subprocess, datetime
 
 import os
@@ -35,34 +35,6 @@ def read_last_heartbeat() -> tuple[datetime, int] | None:
         pass
     return None
 
-def is_monitor_running() -> tuple[bool, str]:
-    """監視サービスが稼働しているかをハートビートファイルから確認する"""
-    hb_info = read_last_heartbeat()
-    if not hb_info:
-        return False, "停止中 (生存信号なし)"
-    
-    hb_time, _ = hb_info
-    if datetime.now() - hb_time < timedelta(minutes=3):
-        return True, f"稼働中 (最終更新: {hb_time.strftime('%H:%M:%S')})"
-    else:
-        return False, f"停止中 (最終更新: {hb_time.strftime('%m-%d %H:%M')})"
-
-def ensure_monitor_running():
-    """バックグラウンド監視モニターが稼働していない場合、自動起動する"""
-    is_running, _ = is_monitor_running()
-    if not is_running:
-        pythonw_exe = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
-        if not os.path.exists(pythonw_exe):
-            pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
-        
-        try:
-            # 親の死による巻き添え終了を防ぐため PowerShell の Start-Process 経由で独立起動
-            ps_cmd = f"Start-Process -WindowStyle Hidden -FilePath '{pythonw_exe}' -ArgumentList '\"{MONITOR_PATH}\"'"
-            subprocess.Popen(["powershell", "-Command", ps_cmd], creationflags=subprocess.CREATE_NO_WINDOW)
-            print("Auto-started background monitor.py successfully.")
-        except Exception as e:
-            print(f"Failed to auto-start monitor.py: {e}")
-
 def check_process_exists(pid: int) -> bool:
     """指定された PID のプロセスが OS 上にアクティブに存在するか確認する"""
     try:
@@ -74,3 +46,87 @@ def check_process_exists(pid: int) -> bool:
         return "No tasks are running" not in res.stdout and str(pid) in res.stdout
     except Exception:
         return False
+
+def is_monitor_running() -> tuple[bool, str]:
+    """監視サービスが稼働しているかを PID ファイルで確認し、フォールバックでハートビートを使う"""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, "r") as f:
+                pid = int(f.read().strip())
+            if check_process_exists(pid):
+                return True, f"稼働中 (PID: {pid})"
+        except Exception:
+            pass
+
+    # PID ファイルがないか無効な場合はハートビートにフォールバック
+    hb_info = read_last_heartbeat()
+    if not hb_info:
+        return False, "停止中 (生存信号なし)"
+    hb_time, _ = hb_info
+    if datetime.now() - hb_time < timedelta(minutes=3):
+        return True, f"稼働中 (最終更新: {hb_time.strftime('%H:%M:%S')})"
+    return False, f"停止中 (最終更新: {hb_time.strftime('%m-%d %H:%M')})"
+
+def ensure_monitor_running():
+    """バックグラウンド監視モニターが稼働していない場合、自動起動する (PIDファイルで判定)"""
+    # PID ファイルが存在し、プロセスが生きていれば何もしない
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, "r") as f:
+                pid = int(f.read().strip())
+            if check_process_exists(pid):
+                return
+        except Exception:
+            pass
+
+    pythonw_exe = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+
+    try:
+        # PowerShell の Start-Process 経由で独立プロセスとして起動 (親終了の巻き添えを防ぐ)
+        ps_cmd = f"Start-Process -WindowStyle Hidden -FilePath '{pythonw_exe}' -ArgumentList '\"{MONITOR_PATH}\"'"
+        subprocess.Popen(["powershell", "-Command", ps_cmd], creationflags=subprocess.CREATE_NO_WINDOW)
+        print("Auto-started background monitor.py successfully.")
+    except Exception as e:
+        print(f"Failed to auto-start monitor.py: {e}")
+
+def ensure_startup_registered():
+    """Windows スタートアップフォルダへのショートカットを作成し、PC 起動時に monitor が自動実行されるよう登録する"""
+    startup_dir = os.path.expandvars(r'%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup')
+    shortcut_path = os.path.join(startup_dir, "SleepTrackerMonitor.lnk")
+
+    # すでに正しいショートカットが存在する場合はスキップ
+    if os.path.exists(shortcut_path):
+        return
+
+    pythonw_exe = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+
+    ico_path = os.path.join(BASE_DIR, "src_python", "sleep_tracker.ico")
+    icon_arg = f"$Shortcut.IconLocation = '{ico_path.replace(chr(39), chr(39)*2)}'" if os.path.exists(ico_path) else ""
+
+    monitor_path_esc = MONITOR_PATH.replace("'", "''")
+    pythonw_exe_esc = pythonw_exe.replace("'", "''")
+    shortcut_path_esc = shortcut_path.replace("'", "''")
+    base_dir_esc = BASE_DIR.replace("'", "''")
+
+    ps_script = f"""
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut('{shortcut_path_esc}')
+$Shortcut.TargetPath = '{pythonw_exe_esc}'
+$Shortcut.Arguments = '"{monitor_path_esc}"'
+$Shortcut.WorkingDirectory = '{base_dir_esc}'
+{icon_arg}
+$Shortcut.Save()
+"""
+    try:
+        subprocess.run(
+            ["powershell", "-Command", ps_script],
+            capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+        print(f"Startup shortcut registered: {shortcut_path}")
+    except Exception as e:
+        print(f"Failed to register startup shortcut: {e}")

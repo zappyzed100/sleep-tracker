@@ -3,14 +3,12 @@
 # Date: 2026-06-27
 # Author: Antigravity
 # Main Functions: SleepTrackerApp, SleepSessionDetailDialog, main
-# Dependencies: tkinter, messagebox, matplotlib, pandas, datetime, calendar, database, analyzer, urllib.request, threading, subprocess, sys
+# Dependencies: tkinter, messagebox, matplotlib, pandas, datetime, calendar, database, analyzer, urllib.request, threading, lifecycle
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
 import os
-import sys
-import subprocess
 import matplotlib
 matplotlib.use("TkAgg")
 matplotlib.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-serif']
@@ -24,6 +22,7 @@ import threading
 import database
 import analyzer
 from calendar_ui import CustomCalendar
+import lifecycle
 
 class SleepSessionDetailDialog(tk.Toplevel):
     """選択された日の睡眠記録を表示・削除・手動追加するプレミアムダイアログ"""
@@ -202,7 +201,7 @@ class SleepTrackerApp:
             pass
 
         # 1. UI起動時にモニターが動いていなければ自動起動する (ライフサイクル同期)
-        self.ensure_monitor_running()
+        lifecycle.ensure_monitor_running()
 
         database.init_db()
         try:
@@ -235,39 +234,9 @@ class SleepTrackerApp:
     def get_week_start_monday(self, dt: datetime) -> datetime:
         return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    def check_monitor_status(self) -> tuple[bool, str]:
-        hb_info = database.read_last_heartbeat()
-        if not hb_info:
-            return False, "停止中 (生存信号なし)"
-        
-        hb_time, _ = hb_info
-        if datetime.now() - hb_time < timedelta(minutes=3):
-            return True, f"稼働中 (最終更新: {hb_time.strftime('%H:%M:%S')})"
-        else:
-            return False, f"停止中 (最終更新: {hb_time.strftime('%m-%d %H:%M')})"
-
-    def ensure_monitor_running(self):
-        """バックグラウンド監視モニターが稼働していない場合、自動起動する"""
-        is_running, _ = self.check_monitor_status()
-        if not is_running:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            monitor_path = os.path.join(base_dir, "src_python", "monitor.py")
-            pythonw_exe = os.path.join(base_dir, ".venv", "Scripts", "pythonw.exe")
-            if not os.path.exists(pythonw_exe):
-                pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
-            
-            try:
-                # 親の死による巻き添え終了を防ぐため PowerShell の Start-Process 経由で独立起動
-                ps_cmd = f"Start-Process -WindowStyle Hidden -FilePath '{pythonw_exe}' -ArgumentList '\"{monitor_path}\"'"
-                subprocess.Popen(["powershell", "-Command", ps_cmd], creationflags=subprocess.CREATE_NO_WINDOW)
-                print("Auto-started background monitor.py successfully.")
-            except Exception as e:
-                print(f"Failed to auto-start monitor.py: {e}")
-
     def monitor_lifecycle_check(self):
         """モニターの生存を確認し、切れている（トレイから終了された）場合はUIも切る"""
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        pid_file = os.path.join(base_dir, "src_cpp", "monitor.pid")
+        pid_file = lifecycle.PID_FILE
         
         # 1. PIDファイルが削除されている場合
         if not os.path.exists(pid_file):
@@ -280,19 +249,13 @@ class SleepTrackerApp:
             with open(pid_file, "r") as f:
                 pid = int(f.read().strip())
             
-            # WMI/tasklist で該当 PID プロセスの生存判定
-            res = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            if "No tasks are running" in res.stdout or str(pid) not in res.stdout:
+            if not lifecycle.check_process_exists(pid):
                 print("Monitor process was killed. Shutting down UI.")
                 self.root.destroy()
                 return
         except Exception:
             # 取得失敗時はハートビート時間でフォールバック確認
-            hb_info = database.read_last_heartbeat()
+            hb_info = lifecycle.read_last_heartbeat()
             if hb_info:
                 hb_time, _ = hb_info
                 if datetime.now() - hb_time > timedelta(minutes=3):
@@ -310,7 +273,7 @@ class SleepTrackerApp:
         title_label = tk.Label(title_frame, text="睡眠トラッカー", font=("Yu Gothic UI", 22, "bold"), bg="#1e1e2e", fg="#89b4fa")
         title_label.pack(side="left")
         
-        is_running, status_text = self.check_monitor_status()
+        is_running, status_text = lifecycle.is_monitor_running()
         status_color = "#a6e3a1" if is_running else "#f38ba8"
         status_label = tk.Label(title_frame, text=f"監視サービス: {status_text}", font=("Yu Gothic UI", 10, "bold"), bg="#1e1e2e", fg=status_color)
         status_label.pack(side="right", pady=8)
@@ -564,6 +527,7 @@ class SleepTrackerApp:
         self.root.after(180000, self.periodic_connection_check)
 
 def main():
+    lifecycle.ensure_startup_registered()
     root = tk.Tk()
     app = SleepTrackerApp(root)
     root.mainloop()
