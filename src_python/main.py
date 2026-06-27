@@ -1608,6 +1608,7 @@ class SleepTrackerApp:
             ax.set_ylim(0, 10)
 
         fig.tight_layout()
+        self._graph_ax = ax
         self.canvas = FigureCanvasTkAgg(fig, master=self.graph_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(
@@ -1616,10 +1617,17 @@ class SleepTrackerApp:
         self.canvas.mpl_connect("button_press_event", self.on_graph_click)
 
     def on_graph_click(self, event):
-        if event.inaxes is None or event.xdata is None:
+        # event.inaxes ではなくディスプレイ座標→データ座標変換を使う
+        # → 月曜(0)・日曜(6) の軸外半分にも正しく反応させるため
+        ax = getattr(self, "_graph_ax", None)
+        if ax is None or event.x is None:
+            return
+        try:
+            xdata, _ = ax.transData.inverted().transform((event.x, event.y))
+        except Exception:
             return
 
-        day_idx = int(round(event.xdata))
+        day_idx = int(round(xdata))
         if 0 <= day_idx < 7:
             target_date = self.current_week_start + timedelta(days=day_idx)
             SleepSessionDetailDialog(self.root, target_date, self.update_week_view)
