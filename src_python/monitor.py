@@ -1,14 +1,17 @@
 # File: src_python/monitor.py
-# Description: Python fallback monitor to track system idle time and heartbeats.
+# Description: Python fallback monitor to track system idle time and heartbeats, with automatic hourly Gist sync.
 # Date: 2026-06-27
 # Author: Antigravity
 # Main Functions: get_idle_duration_ms, log_event, update_heartbeat, main
-# Dependencies: ctypes, time, os, datetime
+# Dependencies: ctypes, time, os, datetime, threading, database
 
 import ctypes
 import os
 import time
 from datetime import datetime
+import threading
+
+import database
 
 # Windows API 用の構造体定義
 class LASTINPUTINFO(ctypes.Structure):
@@ -62,8 +65,18 @@ def update_heartbeat(idle_ms: int):
 
 def main():
     log_event("STARTUP")
+    
+    # データベースの初期化と、起動時の初回Gist自動同期（非同期）
+    database.init_db()
+    try:
+        threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
+    except Exception:
+        pass
+
     is_idle = False
     idle_threshold_ms = 20 * 60 * 1000  # 20分
+    loop_count = 0
+    
     try:
         while True:
             idle_ms = get_idle_duration_ms()
@@ -72,7 +85,7 @@ def main():
             if idle_ms >= idle_threshold_ms:
                 if not is_idle:
                     is_idle = True
-                    # アイドルが始まった正確な過去の時刻を計算
+                    # アイドルが始まった正確な過去の時点を計算
                     start_time = datetime.fromtimestamp(time.time() - (idle_ms / 1000.0))
                     time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
                     log_event("IDLE_START", time_str)
@@ -81,7 +94,17 @@ def main():
                     is_idle = False
                     log_event("IDLE_RESUME")
                     
-            time.sleep(60)  # 1分（60秒）待機
+            time.sleep(60)  # 1分待機
+            loop_count += 1
+            
+            # 1時間（60ループ）ごとに自動でGist同期（非同期）を実行
+            if loop_count >= 60:
+                loop_count = 0
+                try:
+                    threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
+                except Exception:
+                    pass
+                    
     except KeyboardInterrupt:
         log_event("TERMINATE")
     except Exception as e:

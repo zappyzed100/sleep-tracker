@@ -111,7 +111,7 @@ class SleepTrackerApp:
         next_btn = ttk.Button(nav_frame, text="次の週 ▶", command=self.go_to_next_week)
         next_btn.pack(side="right", padx=5)
 
-        # カレンダー日付選択 (黒系背景・白文字、およびポップアップもダーク調に統一)
+        # カレンダー日付選択
         cal_label = tk.Label(nav_frame, text="日付選択: ", font=("Yu Gothic", 10), bg="#1e1e2e", fg="#a6adc8")
         cal_label.pack(side="right", padx=(20, 5))
         
@@ -135,6 +135,9 @@ class SleepTrackerApp:
         )
         self.date_entry.pack(side="right", padx=5)
         self.date_entry.bind("<<DateEntrySelected>>", self.on_date_selected)
+        
+        # Windowsのシステムテーマ制限を強制上書きし、入力欄の「黒背景・白文字」を完全に反映させる
+        self.date_entry._entry.config(bg="#252538", fg="#cdd6f4", insertbackground="white")
 
         # 4. グラフ表示エリア
         self.graph_frame = ttk.Frame(self.root, style="Card.TFrame")
@@ -236,6 +239,9 @@ class SleepTrackerApp:
         # 各曜日（月〜日）の日付範囲
         days_in_week = [self.current_week_start + timedelta(days=i) for i in range(7)]
         
+        # 曜日名に実際の日付 (月/日) を結合して改行付きラベルを作成 (例: "月\n(06/22)")
+        xticklabels = [f"{w}\n({d.strftime('%m/%d')})" for w, d in zip(weekdays_ja, days_in_week)]
+        
         # 選択された週に含まれる睡眠データを集計
         for start_time_str, _, dur, _ in self.sessions:
             try:
@@ -254,7 +260,8 @@ class SleepTrackerApp:
         ax.spines['right'].visible = False
         
         ax.set_xticks(range(7))
-        ax.set_xticklabels(weekdays_ja, color='#bac2de', fontsize=10, fontproperties='Yu Gothic')
+        # 横軸ラベル（曜日＋日付）を設定
+        ax.set_xticklabels(xticklabels, color='#bac2de', fontsize=9, fontproperties='Yu Gothic')
         
         # 縦軸の目盛りテキストの設定
         ax.tick_params(colors='#bac2de', which='both', labelsize=10)
