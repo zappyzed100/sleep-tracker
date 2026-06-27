@@ -1067,11 +1067,12 @@ class SleepTrackerApp:
             anchor="w", padx=15, pady=(10, 4)
         )
 
-        im_row = tk.Frame(s3, bg="#252538")
-        im_row.pack(anchor="w", padx=15, pady=(0, 4))
-        tk.Label(im_row, text="インポート:", **_lbl_b).pack(side="left")
+        csv_grid = tk.Frame(s3, bg="#252538")
+        csv_grid.pack(anchor="w", padx=15, pady=(0, 4))
+
+        tk.Label(csv_grid, text="インポート:", **_lbl_b).grid(row=0, column=0, sticky="w", pady=(0, 6))
         tk.Button(
-            im_row,
+            csv_grid,
             text="CSVから読み込む",
             command=self.import_csv,
             bg="#a6e3a1",
@@ -1083,13 +1084,11 @@ class SleepTrackerApp:
             padx=10,
             pady=4,
             cursor="hand2",
-        ).pack(side="left", padx=(8, 0))
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 6))
 
-        ex_row = tk.Frame(s3, bg="#252538")
-        ex_row.pack(anchor="w", padx=15, pady=(4, 4))
-        tk.Label(ex_row, text="エクスポート:", **_lbl_b).pack(side="left")
+        tk.Label(csv_grid, text="エクスポート:", **_lbl_b).grid(row=1, column=0, sticky="w")
         tk.Button(
-            ex_row,
+            csv_grid,
             text="CSVに書き出す",
             command=self.export_csv,
             bg="#89b4fa",
@@ -1101,7 +1100,7 @@ class SleepTrackerApp:
             padx=10,
             pady=4,
             cursor="hand2",
-        ).pack(side="left", padx=(8, 0))
+        ).grid(row=1, column=1, sticky="w", padx=(12, 0))
 
         tk.Label(
             s3,
