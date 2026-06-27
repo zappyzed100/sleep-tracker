@@ -165,13 +165,22 @@ class SleepTrackerApp:
         except Exception:
             pass
 
-        # データベースの初期化 (同期) とログの同期 (非同期: Gist HTTP リクエストでブロックしないため)
+        # データベースの初期化
         database.init_db()
-        try:
-            threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
-        except Exception:
-            pass
-        
+
+        # DB が空なら events.txt から同期実行で再構築 (新PC移植時など)
+        # データがあれば非同期で更新 (Gist HTTP をブロックしないため)
+        if not database.get_all_sessions():
+            try:
+                database.sync_logs_to_db()
+            except Exception:
+                pass
+        else:
+            try:
+                threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
+            except Exception:
+                pass
+
         self.sessions = database.get_all_sessions()
         
         # 表示中の週の月曜日を保持 (初期値は現在日付の週の月曜日)
@@ -521,7 +530,43 @@ def ensure_monitor_running():
     except Exception:
         pass
 
+def ensure_startup_registered():
+    """Windows スタートアップにモニターが登録されていなければ自動登録する"""
+    startup_dir = os.path.expandvars(r'%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup')
+    shortcut_path = os.path.join(startup_dir, "SleepTrackerMonitor.lnk")
+    if os.path.exists(shortcut_path):
+        return
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(script_dir)
+    monitor_path = os.path.join(script_dir, "monitor.py")
+    venv_pythonw = os.path.join(base_dir, ".venv", "Scripts", "pythonw.exe")
+    if not os.path.exists(venv_pythonw):
+        return
+
+    ico_path = os.path.join(script_dir, "sleep_tracker.ico")
+    ico_arg = f"\nif ('{ico_path}' -ne '') {{ $Shortcut.IconLocation = '{ico_path}' }}" if os.path.exists(ico_path) else ""
+
+    ps = f"""
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut('{shortcut_path}')
+$Shortcut.TargetPath = '{venv_pythonw}'
+$Shortcut.Arguments = '"{monitor_path}"'
+$Shortcut.WorkingDirectory = '{base_dir}'{ico_arg}
+$Shortcut.Save()
+"""
+    try:
+        subprocess.run(
+            ["powershell", "-Command", ps],
+            capture_output=True, check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass
+
+
 def main():
+    ensure_startup_registered()
     ensure_monitor_running()
     root = tk.Tk()
     app = SleepTrackerApp(root)
