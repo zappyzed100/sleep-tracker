@@ -341,8 +341,9 @@ class SleepTrackerApp:
         if not os.path.exists(database.CONFIG_PATH):
             self.switch_tab("settings")
 
-        # 2. モニター終了を定期監視する (トレイ切断時にUIも閉じる)
-        self.root.after(5000, self.monitor_lifecycle_check)
+        # 2. モニター終了を即時検知 (WaitForSingleObject) + 30s フォールバック
+        self._watch_monitor_exit()
+        self.root.after(30000, self.monitor_lifecycle_check)
 
     def get_week_start_monday(self, dt: datetime) -> datetime:
         return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -517,6 +518,32 @@ class SleepTrackerApp:
                     text=f"✗ {reason}", fg="#f38ba8"))
         threading.Thread(target=run, daemon=True).start()
 
+    def _watch_monitor_exit(self):
+        """モニタープロセスの終了を WaitForSingleObject で即時検知し、UI を閉じる"""
+        def watch():
+            import time
+            for _ in range(20):
+                if os.path.exists(lifecycle.PID_FILE):
+                    break
+                time.sleep(0.3)
+            try:
+                with open(lifecycle.PID_FILE, "r") as f:
+                    pid = int(f.read().strip())
+            except Exception:
+                return
+            k32 = ctypes.windll.kernel32
+            k32.OpenProcess.restype = ctypes.c_void_p
+            handle = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+            if not handle:
+                return
+            k32.WaitForSingleObject(handle, 0xFFFFFFFF)  # INFINITE 待機
+            k32.CloseHandle(handle)
+            try:
+                self.root.after(0, self.root.destroy)
+            except Exception:
+                pass
+        threading.Thread(target=watch, daemon=True).start()
+
     def monitor_lifecycle_check(self):
         """モニターの生存を確認し、切れている（トレイから終了された）場合はUIも切る"""
         pid_file = lifecycle.PID_FILE
@@ -546,8 +573,7 @@ class SleepTrackerApp:
                     self.root.destroy()
                     return
                     
-        # 5秒後に再監視
-        self.root.after(5000, self.monitor_lifecycle_check)
+        self.root.after(30000, self.monitor_lifecycle_check)
 
     def create_widgets(self):
         # ── タイトル行 ───────────────────────────────────────────
