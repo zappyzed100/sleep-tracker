@@ -16,6 +16,9 @@ PID_FILE = os.path.join(LOG_DIR, "monitor.pid")
 HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
 EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
 MONITOR_PATH = os.path.join(BASE_DIR, "src_python", "monitor.py")
+STARTUP_SHORTCUT_PATH = os.path.expandvars(
+    r'%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\SleepTrackerMonitor.lnk'
+)
 
 def read_last_heartbeat() -> tuple[datetime, int] | None:
     """最後の生存ハートビートを読み込む (時刻, アイドル時間[ms])"""
@@ -91,13 +94,19 @@ def ensure_monitor_running():
     except Exception as e:
         print(f"Failed to auto-start monitor.py: {e}")
 
+def remove_startup_registration():
+    """Windows スタートアップフォルダのショートカットを削除し、PC 起動時の自動実行を解除する"""
+    try:
+        if os.path.exists(STARTUP_SHORTCUT_PATH):
+            os.remove(STARTUP_SHORTCUT_PATH)
+            print(f"Startup shortcut removed: {STARTUP_SHORTCUT_PATH}")
+    except Exception as e:
+        print(f"Failed to remove startup shortcut: {e}")
+
 def ensure_startup_registered():
     """Windows スタートアップフォルダへのショートカットを作成し、PC 起動時に monitor が自動実行されるよう登録する"""
-    startup_dir = os.path.expandvars(r'%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup')
-    shortcut_path = os.path.join(startup_dir, "SleepTrackerMonitor.lnk")
-
     # すでに正しいショートカットが存在する場合はスキップ
-    if os.path.exists(shortcut_path):
+    if os.path.exists(STARTUP_SHORTCUT_PATH):
         return
 
     pythonw_exe = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
@@ -109,7 +118,7 @@ def ensure_startup_registered():
 
     monitor_path_esc = MONITOR_PATH.replace("'", "''")
     pythonw_exe_esc = pythonw_exe.replace("'", "''")
-    shortcut_path_esc = shortcut_path.replace("'", "''")
+    shortcut_path_esc = STARTUP_SHORTCUT_PATH.replace("'", "''")
     base_dir_esc = BASE_DIR.replace("'", "''")
 
     ps_script = f"""
@@ -127,6 +136,6 @@ $Shortcut.Save()
             capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
-        print(f"Startup shortcut registered: {shortcut_path}")
+        print(f"Startup shortcut registered: {STARTUP_SHORTCUT_PATH}")
     except Exception as e:
         print(f"Failed to register startup shortcut: {e}")

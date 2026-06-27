@@ -3,12 +3,13 @@
 # Date: 2026-06-27
 # Author: Antigravity
 # Main Functions: SleepTrackerApp, SleepSessionDetailDialog, main
-# Dependencies: tkinter, messagebox, matplotlib, pandas, datetime, calendar, database, analyzer, urllib.request, threading, lifecycle
+# Dependencies: tkinter, messagebox, matplotlib, pandas, datetime, calendar, database, analyzer, urllib.request, threading, ctypes, lifecycle
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
 import os
+import ctypes
 import matplotlib
 matplotlib.use("TkAgg")
 matplotlib.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-serif']
@@ -23,6 +24,17 @@ import database
 import analyzer
 from calendar_ui import CustomCalendar
 import lifecycle
+
+def _apply_dark_titlebar(widget):
+    """Windows のタイトルバーをダークモードにする (Windows 10 19041+)"""
+    try:
+        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
+        if not hwnd:
+            hwnd = widget.winfo_id()
+        value = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+    except Exception:
+        pass
 
 class SleepSessionDetailDialog(tk.Toplevel):
     """選択された日の睡眠記録を表示・削除・手動追加するプレミアムダイアログ"""
@@ -42,16 +54,17 @@ class SleepSessionDetailDialog(tk.Toplevel):
         y = parent.winfo_y() + 80
         self.geometry(f"+{x}+{y}")
         self.resizable(False, False)
-        
+
         try:
             ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sleep_tracker.ico")
             if os.path.exists(ico_path):
                 self.iconbitmap(ico_path)
         except Exception:
             pass
-            
+
         self.create_widgets()
         self.refresh_session_list()
+        self.after(50, lambda: _apply_dark_titlebar(self))
         
     def create_widgets(self):
         # 1. タイトルヘッダー
@@ -77,7 +90,8 @@ class SleepSessionDetailDialog(tk.Toplevel):
         # --- 入眠時間 ---
         tk.Label(grid, text="入眠 (寝たとき):", bg="#1e1e2e", fg="#cdd6f4").grid(row=0, column=0, sticky="w", pady=5)
         self.start_date_var = tk.StringVar(value=self.target_date.strftime("%Y-%m-%d"))
-        start_date_entry = tk.Entry(grid, textvariable=self.start_date_var, width=12, state="readonly", font=("Yu Gothic UI", 9, "bold"))
+        start_date_entry = tk.Entry(grid, textvariable=self.start_date_var, width=12, state="readonly",
+            font=("Yu Gothic UI", 9, "bold"), bg="white", fg="black", readonlybackground="white")
         start_date_entry.grid(row=0, column=1, padx=5)
         
         start_cal_btn = ttk.Button(grid, text="📅", width=3, command=lambda: self.open_calendar_for(self.start_date_var))
@@ -96,7 +110,8 @@ class SleepSessionDetailDialog(tk.Toplevel):
         # --- 起床時間 ---
         tk.Label(grid, text="起床 (起きたとき):", bg="#1e1e2e", fg="#cdd6f4").grid(row=1, column=0, sticky="w", pady=5)
         self.end_date_var = tk.StringVar(value=(self.target_date + timedelta(days=1)).strftime("%Y-%m-%d"))
-        end_date_entry = tk.Entry(grid, textvariable=self.end_date_var, width=12, state="readonly", font=("Yu Gothic UI", 9, "bold"))
+        end_date_entry = tk.Entry(grid, textvariable=self.end_date_var, width=12, state="readonly",
+            font=("Yu Gothic UI", 9, "bold"), bg="white", fg="black", readonlybackground="white")
         end_date_entry.grid(row=1, column=1, padx=5)
         
         end_cal_btn = ttk.Button(grid, text="📅", width=3, command=lambda: self.open_calendar_for(self.end_date_var))
@@ -224,8 +239,17 @@ class SleepTrackerApp:
             background=[('active', '#45475a'), ('pressed', '#585b70')],
             foreground=[('active', '#cdd6f4')]
         )
-        
+        # 手動追加ダイアログ内コンボボックスの文字を黒にする
+        self.style.configure("TCombobox", foreground="black", fieldbackground="white", selectforeground="black", selectbackground="#c5e8ff")
+        self.style.map("TCombobox",
+            fieldbackground=[("readonly", "white")],
+            foreground=[("readonly", "black")],
+            selectforeground=[("readonly", "black")],
+            selectbackground=[("readonly", "#c5e8ff")]
+        )
+
         self.create_widgets()
+        self.root.after(50, lambda: _apply_dark_titlebar(self.root))
         self.periodic_connection_check()
 
         # 2. モニター終了を定期監視する (トレイ切断時にUIも閉じる)
@@ -233,6 +257,33 @@ class SleepTrackerApp:
 
     def get_week_start_monday(self, dt: datetime) -> datetime:
         return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def toggle_startup(self):
+        if self.startup_var.get():
+            lifecycle.ensure_startup_registered()
+        else:
+            lifecycle.remove_startup_registration()
+
+    def _load_threshold(self) -> int:
+        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return int(json.load(f).get("idle_threshold_minutes", 20))
+        except Exception:
+            return 20
+
+    def save_threshold(self):
+        try:
+            minutes = max(1, int(self.threshold_var.get()))
+            self.threshold_var.set(str(minutes))
+            config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            config["idle_threshold_minutes"] = minutes
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
 
     def monitor_lifecycle_check(self):
         """モニターの生存を確認し、切れている（トレイから終了された）場合はUIも切る"""
@@ -277,6 +328,32 @@ class SleepTrackerApp:
         status_color = "#a6e3a1" if is_running else "#f38ba8"
         status_label = tk.Label(title_frame, text=f"監視サービス: {status_text}", font=("Yu Gothic UI", 10, "bold"), bg="#1e1e2e", fg=status_color)
         status_label.pack(side="right", pady=8)
+
+        # 設定行
+        settings_frame = tk.Frame(self.root, bg="#1e1e2e")
+        settings_frame.pack(fill="x", padx=25, pady=(0, 4))
+
+        self.startup_var = tk.BooleanVar(value=os.path.exists(lifecycle.STARTUP_SHORTCUT_PATH))
+        tk.Checkbutton(
+            settings_frame, text="PC起動時に自動実行",
+            variable=self.startup_var, command=self.toggle_startup,
+            bg="#1e1e2e", fg="#a6adc8", selectcolor="#313244",
+            activebackground="#1e1e2e", activeforeground="#cdd6f4",
+            font=("Yu Gothic UI", 9)
+        ).pack(side="left", padx=(0, 20))
+
+        tk.Label(settings_frame, text="スリープ判定:", bg="#1e1e2e", fg="#a6adc8", font=("Yu Gothic UI", 9)).pack(side="left")
+        self.threshold_var = tk.StringVar(value=str(self._load_threshold()))
+        threshold_spin = tk.Spinbox(
+            settings_frame, from_=5, to=120, increment=5,
+            textvariable=self.threshold_var, width=4,
+            bg="white", fg="black", font=("Yu Gothic UI", 9),
+            command=self.save_threshold
+        )
+        threshold_spin.pack(side="left", padx=2)
+        threshold_spin.bind("<Return>", lambda e: self.save_threshold())
+        threshold_spin.bind("<FocusOut>", lambda e: self.save_threshold())
+        tk.Label(settings_frame, text="分", bg="#1e1e2e", fg="#a6adc8", font=("Yu Gothic UI", 9)).pack(side="left")
 
         self.warning_frame = tk.Frame(self.root, bg="#f38ba8", bd=1, relief="solid")
         self.warning_label = tk.Label(self.warning_frame, text="", font=("Yu Gothic UI", 10, "bold"), bg="#f38ba8", fg="#11111b")
@@ -394,6 +471,7 @@ class SleepTrackerApp:
         self.update_week_view()
 
     def update_week_view(self):
+        self.sessions = database.get_all_sessions()
         week_end = self.current_week_start + timedelta(days=6)
         label_text = f"{self.current_week_start.strftime('%Y/%m/%d')} (月)  〜  {week_end.strftime('%Y/%m/%d')} (日)"
         self.week_label.config(text=label_text)

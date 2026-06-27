@@ -188,10 +188,21 @@ def build_tray_icon():
         log_event(f"TRAY_ERROR: {str(e)[:80]}")
         return None
 
+def _load_idle_threshold_ms() -> int:
+    """config.json から idle_threshold_minutes を読み込み、ミリ秒に変換して返す"""
+    try:
+        import json
+        config_path = os.path.join(BASE_DIR, "config.json")
+        with open(config_path, "r", encoding="utf-8") as f:
+            minutes = json.load(f).get("idle_threshold_minutes", 20)
+        return max(1, int(minutes)) * 60 * 1000
+    except Exception:
+        return 20 * 60 * 1000
+
 def monitor_loop():
     """バックグラウンドでシステムアイドル時間を監視し続けるメインループ"""
     is_idle = False
-    idle_threshold_ms = 20 * 60 * 1000  # 20分
+    idle_threshold_ms = _load_idle_threshold_ms()
     loop_count = 0
 
     try:
