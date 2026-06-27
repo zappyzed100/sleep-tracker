@@ -55,6 +55,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
 HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
+PID_FILE = os.path.join(LOG_DIR, "monitor.pid")
 
 # タスクトレイアイコン (グローバル参照)
 _tray_icon = None
@@ -111,6 +112,10 @@ def quit_app(icon=None, item=None):
     """タスクトレイアイコンを停止してプロセスを終了する"""
     global _tray_icon
     log_event("SHUTDOWN")
+    try:
+        os.remove(PID_FILE)
+    except Exception:
+        pass
     if _tray_icon:
         _tray_icon.stop()
 
@@ -180,6 +185,13 @@ def monitor_loop():
 
 def main():
     global _tray_icon
+
+    # 自分の PID をファイルに書いて、生存確認できるようにする
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
 
     log_event("STARTUP")
 

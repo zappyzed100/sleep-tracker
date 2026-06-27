@@ -446,16 +446,35 @@ class SleepTrackerApp:
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
+def _is_pid_alive(pid: int) -> bool:
+    """Windows API でプロセスが生存しているか確認する"""
+    import ctypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    exit_code = ctypes.c_ulong()
+    ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return exit_code.value == STILL_ACTIVE
+
 def ensure_monitor_running():
     """monitor.py がバックグラウンドで動いていなければ起動する"""
-    hb_info = database.read_last_heartbeat()
-    if hb_info:
-        hb_time, _ = hb_info
-        if datetime.now() - hb_time < timedelta(minutes=3):
-            return  # 既に稼働中
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.dirname(script_dir)
+    pid_file = os.path.join(base_dir, "src_cpp", "monitor.pid")
+
+    # PID ファイルでプロセスの生存を確認 (ハートビートより即時かつ正確)
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as f:
+                pid = int(f.read().strip())
+            if _is_pid_alive(pid):
+                return  # モニターは稼働中
+        except Exception:
+            pass
+
     monitor_path = os.path.join(script_dir, "monitor.py")
 
     # sys.executable が uv や別環境の Python の場合でも常に .venv を使う
@@ -464,7 +483,6 @@ def ensure_monitor_running():
     if os.path.exists(venv_pythonw):
         python_exe = venv_pythonw
     else:
-        # .venv がない場合は sys.executable と同階層の pythonw.exe にフォールバック
         python_exe = sys.executable
         if not python_exe.lower().endswith("pythonw.exe"):
             candidate = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
