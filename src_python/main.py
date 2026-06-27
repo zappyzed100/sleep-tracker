@@ -492,6 +492,9 @@ class SleepTrackerApp:
         # 3. sleep_events.txt の変更を監視して IDLE_RESUME 時に自動再描画
         self._start_events_file_watcher()
 
+        # 4. 起きてからの経過時間を1分ごとに更新
+        self._tick_awake_time()
+
     def get_week_start_monday(self, dt: datetime) -> datetime:
         return (dt - timedelta(days=dt.weekday())).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -821,6 +824,10 @@ class SleepTrackerApp:
                 self.root.after(0, self.update_week_view)
         threading.Thread(target=run, daemon=True).start()
         self.root.after(30000, self._check_events_file)
+
+    def _tick_awake_time(self):
+        self.update_prediction_and_stats()
+        self.root.after(60000, self._tick_awake_time)
 
     def create_widgets(self):
         # ── タイトル行 ───────────────────────────────────────────
@@ -1422,6 +1429,32 @@ class SleepTrackerApp:
             font=("Yu Gothic", 10),
             bg="#252538",
             fg="#cdd6f4",
+        ).pack(anchor="w", padx=15, pady=(0, 4))
+
+        # 起きてからの経過時間
+        awake_since = None
+        for _, end, _, _ in reversed(self.sessions):
+            if end:
+                try:
+                    awake_since = datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
+                    break
+                except Exception:
+                    continue
+        if awake_since and awake_since <= now:
+            awake_secs = (now - awake_since).total_seconds()
+            awake_h = int(awake_secs // 3600)
+            awake_m = int((awake_secs % 3600) // 60)
+            awake_str = f"起きてから: {awake_h}時間 {awake_m}分"
+            awake_color = "#f38ba8" if awake_h >= 16 else "#f9e2af" if awake_h >= 12 else "#a6e3a1"
+        else:
+            awake_str = "起きてから: 記録なし"
+            awake_color = "#a6adc8"
+        tk.Label(
+            self.stats_card,
+            text=awake_str,
+            font=("Yu Gothic UI", 13, "bold"),
+            bg="#252538",
+            fg=awake_color,
         ).pack(anchor="w", padx=15, pady=(0, 8))
 
     def go_to_prev_week(self):
