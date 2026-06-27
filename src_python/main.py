@@ -41,6 +41,14 @@ class CustomCalendar(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
         self.resizable(False, False)
         
+        # ウィンドウアイコンの設定 (月アイコンがあれば適用)
+        try:
+            ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sleep_tracker.ico")
+            if os.path.exists(ico_path):
+                self.iconbitmap(ico_path)
+        except Exception:
+            pass
+        
         # ヘッダーコントロール
         header_frame = tk.Frame(self, bg="#1e1e2e")
         header_frame.pack(fill="x", padx=15, pady=12)
@@ -92,7 +100,6 @@ class CustomCalendar(tk.Toplevel):
         for r_idx, week in enumerate(month_days):
             for c_idx, day in enumerate(week):
                 if day == 0:
-                    # 当月以外の日付スロットは空欄にする
                     lbl = tk.Label(self.grid_frame, text="", bg="#1e1e2e", width=4, height=2)
                     lbl.grid(row=r_idx, column=c_idx, padx=3, pady=3)
                 else:
@@ -146,6 +153,14 @@ class SleepTrackerApp:
         self.root.title("睡眠トラッカー ＆ 予測ツール")
         self.root.geometry("950x780")
         self.root.configure(bg="#1e1e2e") # ダークモード背景
+
+        # ウィンドウのアイコンを設定
+        try:
+            ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sleep_tracker.ico")
+            if os.path.exists(ico_path):
+                self.root.iconbitmap(ico_path)
+        except Exception:
+            pass
 
         # データベースの初期化とログの同期
         database.init_db()
@@ -250,7 +265,7 @@ class SleepTrackerApp:
             font=("Yu Gothic UI", 10, "bold"), 
             bd=1, 
             relief="solid",
-            state="readonly" # カレンダーボタンからの入力を強制
+            state="readonly"
         )
         self.date_entry.pack(side="right", padx=2)
         

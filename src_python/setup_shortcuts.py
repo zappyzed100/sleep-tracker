@@ -1,18 +1,18 @@
 # File: src_python/setup_shortcuts.py
-# Description: Script to set up Windows startup task and desktop shortcut.
+# Description: Script to set up Windows startup task and desktop shortcut with custom crescent moon icon.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: create_shortcut, get_pythonw_path, setup_all
-# Dependencies: os, sys, subprocess
+# Main Functions: create_shortcut, get_pythonw_path, get_desktop_dir, create_crescent_ico, main
+# Dependencies: os, sys, subprocess, winreg, PIL
 
 import os
 import sys
 import subprocess
 import winreg
+from PIL import Image, ImageDraw
 
 def create_shortcut(target: str, shortcut_path: str, arguments: str = "", working_dir: str = "", icon_path: str = ""):
     """PowerShell を使用して Windows のショートカット (.lnk) ファイルを作成する"""
-    # シングルクォーテーションのエスケープ処理
     target_esc = target.replace("'", "''")
     shortcut_path_esc = shortcut_path.replace("'", "''")
     arguments_esc = arguments.replace("'", "''")
@@ -46,8 +46,6 @@ def get_pythonw_path() -> str:
     pythonw_path = os.path.join(python_dir, "pythonw.exe")
     if os.path.exists(pythonw_path):
         return pythonw_path
-    
-    # 仮想環境が有効な場合で pythonw が隣にない場合はシステムのフォールバック
     return "pythonw.exe"
 
 def get_desktop_dir() -> str:
@@ -59,19 +57,40 @@ def get_desktop_dir() -> str:
         )
         path, _ = winreg.QueryValueEx(key, "Desktop")
         winreg.CloseKey(key)
-        # 環境変数 (%USERPROFILE% など) を展開して返す
         expanded_path = os.path.expandvars(path)
         if os.path.exists(expanded_path):
             return expanded_path
     except Exception:
         pass
-    # フォールバック
     return os.path.expandvars(r'%USERPROFILE%\Desktop')
+
+def create_crescent_ico(ico_path: str):
+    """完全に透過された黄色の三日月アイコンファイル (.ico) を生成する"""
+    try:
+        # 32x32 のマスク画像を生成 (0: 透明, 255: 不透明)
+        mask1 = Image.new("L", (32, 32), 0)
+        draw1 = ImageDraw.Draw(mask1)
+        draw1.ellipse((4, 4, 28, 28), fill=255) # 月の本体
+        
+        # 重ねる円で三日月の形状に削る
+        draw_mask = ImageDraw.Draw(mask1)
+        draw_mask.ellipse((12, 4, 36, 28), fill=0) # 削り
+        
+        # 黄色一色の画像を作成し、マスクを適用して透過三日月画像を作成
+        yellow_img = Image.new("RGBA", (32, 32), (249, 226, 175, 255))
+        crescent_img = Image.composite(yellow_img, Image.new("RGBA", (32, 32), (0,0,0,0)), mask1)
+        
+        # ICOフォーマットで保存
+        crescent_img.save(ico_path, format="ICO", sizes=[(32, 32)])
+        print(f"Created custom crescent icon: {os.path.basename(ico_path)}")
+        return True
+    except Exception as e:
+        print(f"Failed to create icon file: {e}")
+        return False
 
 def main():
     print("Setting up Sleep Tracker shortcuts...")
 
-    # パス情報の解決
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     startup_dir = os.path.expandvars(r'%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup')
     desktop_dir = get_desktop_dir()
@@ -79,31 +98,34 @@ def main():
     cpp_monitor_exe = os.path.join(base_dir, "src_cpp", "sleep_monitor.exe")
     python_monitor_py = os.path.join(base_dir, "src_python", "monitor.py")
     python_main_py = os.path.join(base_dir, "src_python", "main.py")
+    
+    # アイコンファイルのパス決定
+    ico_path = os.path.join(base_dir, "src_python", "sleep_tracker.ico")
+    create_crescent_ico(ico_path)
 
     # 1. 監視サービスの自動起動設定 (スタートアップフォルダへ)
     startup_shortcut_path = os.path.join(startup_dir, "SleepTrackerMonitor.lnk")
     
     if os.path.exists(cpp_monitor_exe):
-        # C++バイナリが存在する場合はそれを使用
         print("Using C++ monitor for background service...")
         create_shortcut(
             target=cpp_monitor_exe,
             shortcut_path=startup_shortcut_path,
-            working_dir=os.path.dirname(cpp_monitor_exe)
+            working_dir=os.path.dirname(cpp_monitor_exe),
+            icon_path=ico_path
         )
     else:
-        # 存在しない場合は Python フォールバックを使用
         print("C++ binary not found. Setting up Python fallback monitor...")
         pythonw_exe = get_pythonw_path()
         create_shortcut(
             target=pythonw_exe,
             shortcut_path=startup_shortcut_path,
             arguments=f'"{python_monitor_py}"',
-            working_dir=base_dir
+            working_dir=base_dir,
+            icon_path=ico_path
         )
 
     # 2. 睡眠ログ表示UIのショートカット作成 (デスクトップへ)
-    # これをユーザーがタスクバーにピン留めすることで、タスクバーからの即時起動が可能になります
     desktop_shortcut_path = os.path.join(desktop_dir, "Sleep Tracker Log.lnk")
     pythonw_exe = get_pythonw_path()
 
@@ -112,7 +134,8 @@ def main():
         target=pythonw_exe,
         shortcut_path=desktop_shortcut_path,
         arguments=f'"{python_main_py}"',
-        working_dir=base_dir
+        working_dir=base_dir,
+        icon_path=ico_path
     )
 
     # 3. 監視サービスの即時起動 (二重起動防止チェック付き)
@@ -126,7 +149,6 @@ def main():
         
     if not is_running:
         print("Starting background monitor service now...")
-        # 0x08000000 is CREATE_NO_WINDOW flag for subprocess on Windows
         try:
             if os.path.exists(cpp_monitor_exe):
                 subprocess.Popen([cpp_monitor_exe], creationflags=0x08000000, cwd=os.path.dirname(cpp_monitor_exe))
