@@ -1,143 +1,29 @@
 # File: src_python/main.py
-# Description: GUI application for viewing sleep history (with premium custom calendar popup, weekly navigation, and detail dialog) and predictions, with automatic GitHub connection warnings.
+# Description: GUI application for viewing sleep history (with premium custom calendar popup, weekly navigation, and detail dialog) and predictions, with automatic GitHub connection warnings and lifecycle synchronization with the background monitor process.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: SleepTrackerApp, CustomCalendar, SleepSessionDetailDialog, main
-# Dependencies: tkinter, messagebox, matplotlib, pandas, datetime, calendar, database, analyzer, urllib.request, threading
+# Main Functions: SleepTrackerApp, SleepSessionDetailDialog, main
+# Dependencies: tkinter, messagebox, matplotlib, pandas, datetime, calendar, database, analyzer, urllib.request, threading, subprocess, sys
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime, timedelta
 import os
+import sys
+import subprocess
 import matplotlib
 matplotlib.use("TkAgg")
 matplotlib.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-serif']
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
-import calendar
 import urllib.request
 import json
 import threading
 
 import database
 import analyzer
-
-class CustomCalendar(tk.Toplevel):
-    """プレミアムな外観を持つフラットデザインのカスタムカレンダーポップアップ"""
-    def __init__(self, parent, current_date, callback):
-        super().__init__(parent)
-        self.title("日付の選択")
-        self.configure(bg="#1e1e2e")
-        self.transient(parent)
-        self.grab_set()
-        
-        self.callback = callback
-        self.year = current_date.year
-        self.month = current_date.month
-        self.selected_day = current_date.day
-        
-        x = parent.winfo_x() + 450
-        y = parent.winfo_y() + 180
-        self.geometry(f"+{x}+{y}")
-        self.resizable(False, False)
-        
-        try:
-            ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sleep_tracker.ico")
-            if os.path.exists(ico_path):
-                self.iconbitmap(ico_path)
-        except Exception:
-            pass
-        
-        header_frame = tk.Frame(self, bg="#1e1e2e")
-        header_frame.pack(fill="x", padx=15, pady=12)
-        
-        prev_btn = tk.Button(
-            header_frame, text="◀", font=("Yu Gothic UI", 10, "bold"), 
-            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
-            bd=0, relief="flat", width=3, cursor="hand2"
-        )
-        prev_btn.pack(side="left", command=self.prev_month)
-        
-        self.title_label = tk.Label(header_frame, text="", font=("Yu Gothic UI", 12, "bold"), bg="#1e1e2e", fg="#89b4fa")
-        self.title_label.pack(side="left", expand=True)
-        
-        next_btn = tk.Button(
-            header_frame, text="▶", font=("Yu Gothic UI", 10, "bold"), 
-            bg="#313244", fg="#cdd6f4", activebackground="#45475a", activeforeground="#cdd6f4",
-            bd=0, relief="flat", width=3, cursor="hand2"
-        )
-        next_btn.pack(side="right", command=self.next_month)
-        
-        week_frame = tk.Frame(self, bg="#1e1e2e")
-        week_frame.pack(fill="x", padx=15, pady=(5, 2))
-        weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-        for w in weekdays:
-            lbl = tk.Label(week_frame, text=w, font=("Yu Gothic UI", 9, "bold"), bg="#1e1e2e", fg="#a6adc8", width=4, height=1)
-            lbl.pack(side="left", padx=3)
-            
-        self.grid_frame = tk.Frame(self, bg="#1e1e2e")
-        self.grid_frame.pack(padx=15, pady=(2, 15))
-        
-        self.draw_calendar()
-        
-    def draw_calendar(self):
-        for widget in self.grid_frame.winfo_children():
-            widget.destroy()
-            
-        self.title_label.config(text=f"{self.year}年 {self.month}月")
-        cal = calendar.Calendar(firstweekday=0)
-        month_days = cal.monthdayscalendar(self.year, self.month)
-        
-        for r_idx, week in enumerate(month_days):
-            for c_idx, day in enumerate(week):
-                if day == 0:
-                    lbl = tk.Label(self.grid_frame, text="", bg="#1e1e2e", width=4, height=2)
-                    lbl.grid(row=r_idx, column=c_idx, padx=3, pady=3)
-                else:
-                    is_selected = (day == self.selected_day)
-                    bg_color = "#89b4fa" if is_selected else "#252538"
-                    fg_color = "#1e1e2e" if is_selected else "#cdd6f4"
-                    
-                    btn = tk.Button(
-                        self.grid_frame, 
-                        text=str(day), 
-                        font=("Yu Gothic UI", 9, "bold"),
-                        bg=bg_color, 
-                        fg=fg_color, 
-                        bd=0, 
-                        activebackground="#45475a", 
-                        activeforeground="#cdd6f4",
-                        width=4, 
-                        height=2,
-                        cursor="hand2",
-                        command=lambda d=day: self.select_day(d)
-                    )
-                    btn.grid(row=r_idx, column=c_idx, padx=3, pady=3)
-                    
-    def prev_month(self):
-        if self.month == 1:
-            self.month = 12
-            self.year -= 1
-        else:
-            self.month -= 1
-        self.selected_day = 1
-        self.draw_calendar()
-        
-    def next_month(self):
-        if self.month == 12:
-            self.month = 1
-            self.year += 1
-        else:
-            self.month += 1
-        self.selected_day = 1
-        self.draw_calendar()
-        
-    def select_day(self, day):
-        selected_date = f"{self.year}-{self.month:02d}-{day:02d}"
-        self.callback(selected_date)
-        self.destroy()
-
+from calendar_ui import CustomCalendar
 
 class SleepSessionDetailDialog(tk.Toplevel):
     """選択された日の睡眠記録を表示・削除・手動追加するプレミアムダイアログ"""
@@ -175,7 +61,7 @@ class SleepSessionDetailDialog(tk.Toplevel):
         header = tk.Label(self, text=f"🌙 {date_str} ({weekday_str}) の睡眠詳細", font=("Yu Gothic UI", 14, "bold"), bg="#1e1e2e", fg="#f9e2af")
         header.pack(fill="x", padx=20, pady=15)
         
-        # 2. セッション一覧エリア (スクロール付き)
+        # 2. セッション一覧エリア
         list_label = tk.Label(self, text="睡眠セッション一覧 (開始時間基準):", font=("Yu Gothic UI", 10, "bold"), bg="#1e1e2e", fg="#bac2de")
         list_label.pack(anchor="w", padx=20, pady=(5, 2))
         
@@ -186,7 +72,6 @@ class SleepSessionDetailDialog(tk.Toplevel):
         add_frame = tk.LabelFrame(self, text="睡眠記録を手動で追加", font=("Yu Gothic UI", 10, "bold"), bg="#1e1e2e", fg="#a6e3a1", bd=1, labelanchor="n")
         add_frame.pack(fill="x", padx=20, pady=(15, 20))
         
-        # 時刻入力部分のグリッド
         grid = tk.Frame(add_frame, bg="#1e1e2e")
         grid.pack(padx=15, pady=10)
         
@@ -228,7 +113,6 @@ class SleepSessionDetailDialog(tk.Toplevel):
         self.end_min.grid(row=1, column=5, padx=2)
         tk.Label(grid, text="分", bg="#1e1e2e", fg="#cdd6f4").grid(row=1, column=6)
         
-        # 追加実行ボタン
         add_btn = ttk.Button(add_frame, text="この睡眠データを手動追加する", command=self.add_session)
         add_btn.pack(pady=(0, 10))
         
@@ -244,8 +128,6 @@ class SleepSessionDetailDialog(tk.Toplevel):
             widget.destroy()
             
         sessions = database.get_sessions_with_ids()
-        
-        # 選択された日付に開始した、またはその日に属するセッションを抽出
         target_str = self.target_date.strftime("%Y-%m-%d")
         day_sessions = []
         for s_id, s_time, e_time, dur, s_type in sessions:
@@ -257,12 +139,10 @@ class SleepSessionDetailDialog(tk.Toplevel):
             lbl.pack(expand=True, fill="both", pady=30)
             return
             
-        # リストアイテムを構築
         for s_id, s_time, e_time, dur, s_type in day_sessions:
             item_frame = tk.Frame(self.list_frame, bg="#252538")
             item_frame.pack(fill="x", padx=10, pady=5)
             
-            # 時間部分のパースと整形表示
             st_time = s_time.split(" ")[1][:5]
             ed_time = e_time.split(" ")[1][:5] if e_time else "--:--"
             h = int(dur)
@@ -321,6 +201,9 @@ class SleepTrackerApp:
         except Exception:
             pass
 
+        # 1. UI起動時にモニターが動いていなければ自動起動する (ライフサイクル同期)
+        self.ensure_monitor_running()
+
         database.init_db()
         try:
             database.sync_logs_to_db()
@@ -346,6 +229,9 @@ class SleepTrackerApp:
         self.create_widgets()
         self.periodic_connection_check()
 
+        # 2. モニター終了を定期監視する (トレイ切断時にUIも閉じる)
+        self.root.after(5000, self.monitor_lifecycle_check)
+
     def get_week_start_monday(self, dt: datetime) -> datetime:
         return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -359,6 +245,63 @@ class SleepTrackerApp:
             return True, f"稼働中 (最終更新: {hb_time.strftime('%H:%M:%S')})"
         else:
             return False, f"停止中 (最終更新: {hb_time.strftime('%m-%d %H:%M')})"
+
+    def ensure_monitor_running(self):
+        """バックグラウンド監視モニターが稼働していない場合、自動起動する"""
+        is_running, _ = self.check_monitor_status()
+        if not is_running:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            monitor_path = os.path.join(base_dir, "src_python", "monitor.py")
+            pythonw_exe = os.path.join(base_dir, ".venv", "Scripts", "pythonw.exe")
+            if not os.path.exists(pythonw_exe):
+                pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+            
+            try:
+                # 親の死による巻き添え終了を防ぐため PowerShell の Start-Process 経由で独立起動
+                ps_cmd = f"Start-Process -WindowStyle Hidden -FilePath '{pythonw_exe}' -ArgumentList '\"{monitor_path}\"'"
+                subprocess.Popen(["powershell", "-Command", ps_cmd], creationflags=subprocess.CREATE_NO_WINDOW)
+                print("Auto-started background monitor.py successfully.")
+            except Exception as e:
+                print(f"Failed to auto-start monitor.py: {e}")
+
+    def monitor_lifecycle_check(self):
+        """モニターの生存を確認し、切れている（トレイから終了された）場合はUIも切る"""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        pid_file = os.path.join(base_dir, "src_cpp", "monitor.pid")
+        
+        # 1. PIDファイルが削除されている場合
+        if not os.path.exists(pid_file):
+            print("Monitor PID file removed. Shutting down UI.")
+            self.root.destroy()
+            return
+            
+        # 2. プロセスリストを確認して PID の存在確認
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+            
+            # WMI/tasklist で該当 PID プロセスの生存判定
+            res = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            if "No tasks are running" in res.stdout or str(pid) not in res.stdout:
+                print("Monitor process was killed. Shutting down UI.")
+                self.root.destroy()
+                return
+        except Exception:
+            # 取得失敗時はハートビート時間でフォールバック確認
+            hb_info = database.read_last_heartbeat()
+            if hb_info:
+                hb_time, _ = hb_info
+                if datetime.now() - hb_time > timedelta(minutes=3):
+                    print("Stale heartbeat detected. Shutting down UI.")
+                    self.root.destroy()
+                    return
+                    
+        # 5秒後に再監視
+        self.root.after(5000, self.monitor_lifecycle_check)
 
     def create_widgets(self):
         title_frame = tk.Frame(self.root, bg="#1e1e2e")
@@ -440,7 +383,7 @@ class SleepTrackerApp:
         self.update_week_view()
 
     def update_prediction_and_stats(self):
-        self.sessions = database.get_all_sessions() # 最新セッションを再取得
+        self.sessions = database.get_all_sessions()
         now = datetime.now()
         pred_duration, pred_method = analyzer.predict_sleep_duration(self.sessions, now)
         pred_wake_time = now + timedelta(hours=pred_duration)
@@ -496,7 +439,7 @@ class SleepTrackerApp:
             self.canvas.get_tk_widget().destroy()
             
         self.plot_weekly_graph()
-        self.update_prediction_and_stats() # 同期後の数値・統計も再計算
+        self.update_prediction_and_stats()
 
     def plot_weekly_graph(self):
         fig = Figure(figsize=(7, 4), dpi=100, facecolor="#252538")
@@ -532,7 +475,7 @@ class SleepTrackerApp:
 
         has_data = any(d > 0 for d in durations)
         if has_data:
-            bars = ax.bar(weekdays_ja, durations, color="#89b4fa", width=0.55, edgecolor="#b4befe", linewidth=0.8, cursor="hand2")
+            bars = ax.bar(weekdays_ja, durations, color="#89b4fa", width=0.55, edgecolor="#b4befe", linewidth=0.8)
             for bar in bars:
                 height = bar.get_height()
                 if height > 0:
@@ -542,8 +485,6 @@ class SleepTrackerApp:
                                 textcoords="offset points",
                                 ha='center', va='bottom', fontsize=8, color="#cdd6f4")
         else:
-            ax.text(0.5, 0.5, "この週の睡眠ログデータはありません。\n(グラフ部分をクリックして睡眠データを手動登録できます)", 
-                    ha="center", va="center", color="#a6adc8", fontsize=10, transform=ax.text(0,0,"").get_transform(), fontproperties='Yu Gothic')
             # プレースホルダーのダミーテキスト配置
             ax.text(0.5, 0.5, "この週の睡眠ログデータはありません。\n(グラフをクリックして手動で追加できます)", 
                     ha="center", va="center", color="#a6adc8", fontsize=10, transform=ax.transAxes, fontproperties='Yu Gothic')
@@ -554,15 +495,12 @@ class SleepTrackerApp:
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
-        # グラフ上クリックイベントをバインド
         self.canvas.mpl_connect("button_press_event", self.on_graph_click)
 
     def on_graph_click(self, event):
-        """グラフをクリックした際に詳細ポップアップを開く"""
         if event.inaxes is None or event.xdata is None:
             return
         
-        # xdata は X 軸の座標値 (曜日インデックス 0〜6)
         day_idx = int(round(event.xdata))
         if 0 <= day_idx < 7:
             target_date = self.current_week_start + timedelta(days=day_idx)
