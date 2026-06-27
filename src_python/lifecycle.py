@@ -51,7 +51,7 @@ def check_process_exists(pid: int) -> bool:
         return False
 
 def is_monitor_running() -> tuple[bool, str]:
-    """監視サービスが稼働しているかを PID ファイルで確認し、フォールバックでハートビートを使う"""
+    """バックグラウンドサービスが稼働しているかを PID ファイルで確認し、フォールバックでハートビートを使う"""
     if os.path.exists(PID_FILE):
         try:
             with open(PID_FILE, "r") as f:

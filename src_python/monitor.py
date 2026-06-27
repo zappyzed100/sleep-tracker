@@ -183,7 +183,7 @@ def build_tray_icon():
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("終了", quit_app),
         )
-        icon = pystray.Icon("sleep_tracker", image, "睡眠トラッカー 監視中", menu)
+        icon = pystray.Icon("sleep_tracker", image, "睡眠トラッカー 検知中", menu)
         return icon
     except Exception as e:
         log_event(f"TRAY_ERROR: {str(e)[:80]}")

@@ -418,7 +418,7 @@ def _download_events_from_gist():
         print(f"Failed to download events from Gist: {e}")
 
 def get_current_out_state() -> bool:
-    """sleep_events.txt の最後の OUT_START/OUT_END から現在の監視中断状態を返す"""
+    """sleep_events.txt の最後の OUT_START/OUT_END から現在の検知中断状態を返す"""
     if not os.path.exists(EVENTS_FILE):
         return False
     last_out = None

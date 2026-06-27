@@ -167,7 +167,7 @@ def main():
     ico_path = os.path.join(base_dir, "src_python", "sleep_tracker.ico")
     create_crescent_ico(ico_path)
 
-    # 1. 監視サービスの自動起動設定 (スタートアップフォルダへ)
+    # 1. バックグラウンドサービスの自動起動設定 (スタートアップフォルダへ)
     startup_shortcut_path = os.path.join(startup_dir, "SleepTrackerMonitor.lnk")
     
     pythonw_exe = get_pythonw_path()
@@ -201,7 +201,7 @@ def main():
         icon_path=ico_path
     )
 
-    # 3. 監視サービスの即時起動 (二重起動防止チェック付き)
+    # 3. バックグラウンドサービスの即時起動 (二重起動防止チェック付き)
     is_running = False
     try:
         res = subprocess.run(["tasklist"], capture_output=True, text=True, check=True)
