@@ -1,0 +1,19 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Local Database
+sleep_tracker.db
+
+# Dynamic runtime files (only raw events are tracked)
+src_cpp/sleep_heartbeat.txt
+
+# C++ Build outputs & intermediate files
+src_cpp/sleep_monitor.exe
+src_cpp/*.obj
+src_cpp/*.ilk
+src_cpp/*.pdb
+
+# VS Code config (if any)
+.vscode/
