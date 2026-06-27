@@ -250,8 +250,13 @@ def sync_logs_to_db():
     session_type = None
     is_out = False  # 外出中フラグ
 
-    # 最小の睡眠判定時間 (例: 30分)
-    MIN_SLEEP_DURATION = timedelta(minutes=30)
+    # 最小睡眠セッション時間 = idle閾値と同じ（設定変更を即反映）
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as _f:
+            _threshold_minutes = max(1, int(json.load(_f).get("idle_threshold_minutes", 30)))
+    except Exception:
+        _threshold_minutes = 30
+    MIN_SLEEP_DURATION = timedelta(minutes=_threshold_minutes)
 
     for i, (ts, event) in enumerate(events):
         # 外出状態の更新
