@@ -95,6 +95,101 @@ def ensure_monitor_running():
         print(f"Failed to auto-start monitor.py: {e}")
 
 MAIN_PATH = os.path.join(BASE_DIR, "src_python", "main.py")
+START_MENU_SHORTCUT_PATH = os.path.expandvars(
+    r'%APPDATA%\Microsoft\Windows\Start Menu\Programs\睡眠トラッカー.lnk'
+)
+
+# C# コード: PowerShell の Add-Type でコンパイルし、.lnk に AUMID を書き込む
+_CS_AUMID = (
+    'using System;\n'
+    'using System.Runtime.InteropServices;\n'
+    '[ComImport,Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"),InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]\n'
+    'public interface IPropertyStore {\n'
+    '    [PreserveSig] int GetCount([Out] out uint c);\n'
+    '    [PreserveSig] int GetAt(uint i, out PropertyKey k);\n'
+    '    [PreserveSig] int GetValue(ref PropertyKey k, ref PropVariant v);\n'
+    '    [PreserveSig] int SetValue(ref PropertyKey k, ref PropVariant v);\n'
+    '    [PreserveSig] int Commit();\n'
+    '}\n'
+    '[StructLayout(LayoutKind.Sequential,Pack=4)]\n'
+    'public struct PropertyKey { public Guid fmtid; public uint pid; }\n'
+    '[StructLayout(LayoutKind.Explicit,Size=16)]\n'
+    'public struct PropVariant { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }\n'
+    'public class LnkAumid {\n'
+    '    [DllImport("shell32.dll",CharSet=CharSet.Unicode)]\n'
+    '    public static extern int SHGetPropertyStoreFromParsingName(string path,IntPtr pbc,uint mode,[In] ref Guid iid,[MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);\n'
+    '    public static void Set(string lnk,string id) {\n'
+    '        var iid=new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");\n'
+    '        IPropertyStore s;\n'
+    '        if(SHGetPropertyStoreFromParsingName(lnk,IntPtr.Zero,2,ref iid,out s)<0||s==null)return;\n'
+    '        var k=new PropertyKey{fmtid=new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),pid=5};\n'
+    '        IntPtr p=Marshal.StringToCoTaskMemUni(id);\n'
+    '        var v=new PropVariant{vt=31,p=p};\n'
+    '        s.SetValue(ref k,ref v);s.Commit();\n'
+    '        Marshal.FreeCoTaskMem(p);Marshal.ReleaseComObject(s);\n'
+    '    }\n'
+    '}'
+)
+
+def _set_aumid_on_lnk(lnk_path: str, aumid: str) -> bool:
+    """PowerShell + C# でショートカット (.lnk) に System.AppUserModel.ID を書き込む"""
+    lnk_esc  = lnk_path.replace("'", "''")
+    aumid_esc = aumid.replace("'", "''")
+    # PowerShell double-quoted here-string (@"..."@) で C# をコンパイル
+    ps_script = (
+        'Add-Type -TypeDefinition @"\n'
+        + _CS_AUMID + '\n'
+        + '"@ -Language CSharp\n'
+        + f"[LnkAumid]::Set('{lnk_esc}', '{aumid_esc}')\n"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command", ps_script],
+            capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=20,
+        )
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Failed to set AUMID on shortcut: {e}")
+        return False
+
+def register_start_menu_shortcut():
+    """スタートメニューに AUMID 付きショートカットを作成し、タスクバーピン留めのアイコン・再起動を正常化する"""
+    if os.path.exists(START_MENU_SHORTCUT_PATH):
+        return
+
+    pythonw_exe = os.path.join(BASE_DIR, ".venv", "Scripts", "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = sys.executable.replace("python.exe", "pythonw.exe")
+
+    ico_path = os.path.join(BASE_DIR, "src_python", "sleep_tracker.ico")
+    icon_arg = f"$s.IconLocation = '{ico_path.replace(chr(39), chr(39)*2)}'" if os.path.exists(ico_path) else ""
+
+    main_path_esc     = MAIN_PATH.replace("'", "''")
+    pythonw_exe_esc   = pythonw_exe.replace("'", "''")
+    shortcut_path_esc = START_MENU_SHORTCUT_PATH.replace("'", "''")
+    base_dir_esc      = BASE_DIR.replace("'", "''")
+
+    ps_create = f"""
+$w = New-Object -ComObject WScript.Shell
+$s = $w.CreateShortcut('{shortcut_path_esc}')
+$s.TargetPath = '{pythonw_exe_esc}'
+$s.Arguments = '"{main_path_esc}"'
+$s.WorkingDirectory = '{base_dir_esc}'
+{icon_arg}
+$s.Save()
+"""
+    try:
+        subprocess.run(
+            ["powershell", "-Command", ps_create],
+            capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        return
+
+    if os.path.exists(START_MENU_SHORTCUT_PATH):
+        _set_aumid_on_lnk(START_MENU_SHORTCUT_PATH, "SleepTracker.UI.1")
 
 def create_desktop_shortcut() -> bool:
     """デスクトップに睡眠トラッカー UI のショートカットを作成する"""
@@ -125,6 +220,11 @@ $Shortcut.Save()
             capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW
         )
+        if result.returncode == 0:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            lnk_path = os.path.join(desktop, "睡眠トラッカー.lnk")
+            if os.path.exists(lnk_path):
+                _set_aumid_on_lnk(lnk_path, "SleepTracker.UI.1")
         return result.returncode == 0
     except Exception as e:
         print(f"Failed to create desktop shortcut: {e}")

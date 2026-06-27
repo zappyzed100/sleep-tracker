@@ -87,9 +87,9 @@ def _apply_taskbar_relaunch(hwnd: int):
             pythonw = sys.executable.replace("python.exe", "pythonw.exe")
         main_py = os.path.join(_BASE_DIR, "src_python", "main.py")
 
-        # アイコンは WM_SETICON 済み、表示名はウィンドウタイトルを自動使用 — 両方設定不要
         set_str_prop(5, "SleepTracker.UI.1")          # AppUserModel.ID
-        set_str_prop(2, f'"{pythonw}" "{main_py}"')   # RelaunchCommand
+        set_str_prop(2, f'"{pythonw}" "{main_py}"')   # RelaunchCommand (pid=3 がないと無視される)
+        set_str_prop(3, "睡眠トラッカー")              # RelaunchDisplayNameResource (必須)
 
         Commit(ps)
         Release(ps)
@@ -1069,6 +1069,7 @@ def main():
     except Exception:
         pass
     lifecycle.ensure_startup_registered()
+    threading.Thread(target=lifecycle.register_start_menu_shortcut, daemon=True).start()
     root = tk.Tk()
     app = SleepTrackerApp(root)
     root.mainloop()
