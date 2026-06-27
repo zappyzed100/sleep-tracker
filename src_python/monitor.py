@@ -159,16 +159,20 @@ def _load_idle_threshold_ms() -> int:
     except Exception:
         return 20 * 60 * 1000
 
+POLL_INTERVAL = 30  # seconds
+
 def monitor_loop():
     """バックグラウンドでシステムアイドル時間を監視し続けるメインループ"""
     is_idle = False
-    idle_threshold_ms = _load_idle_threshold_ms()
-    loop_count = 0
+    last_gist_sync = time.time()
 
     try:
         while True:
             idle_ms = get_idle_duration_ms()
             update_heartbeat(idle_ms)
+
+            # 毎ループ再読み込みすることでUI設定変更を即反映
+            idle_threshold_ms = _load_idle_threshold_ms()
 
             if idle_ms >= idle_threshold_ms:
                 if not is_idle:
@@ -181,12 +185,11 @@ def monitor_loop():
                     is_idle = False
                     log_event("IDLE_RESUME")
 
-            time.sleep(60)  # 1分待機
-            loop_count += 1
+            time.sleep(POLL_INTERVAL)
 
-            # 1時間（60ループ）ごとに自動でGist同期（非同期）を実行
-            if loop_count >= 60:
-                loop_count = 0
+            # 1時間ごとに自動でGist同期（非同期）
+            if time.time() - last_gist_sync >= 3600:
+                last_gist_sync = time.time()
                 try:
                     threading.Thread(target=database.sync_logs_to_db, daemon=True).start()
                 except Exception:
