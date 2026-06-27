@@ -191,10 +191,33 @@ class SleepTrackerApp:
         )
         
         self.create_widgets()
+        self._start_monitor_watchdog()
 
     def get_week_start_monday(self, dt: datetime) -> datetime:
         """指定された日時の週の月曜日 (00:00:00) を取得する"""
         return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _start_monitor_watchdog(self):
+        """モニターが落ちたら UI も自動で閉じる監視スレッドを起動する"""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        pid_file = os.path.join(base_dir, "src_cpp", "monitor.pid")
+
+        def _watch():
+            while True:
+                threading.Event().wait(5)  # 5秒ごとにチェック
+                if not os.path.exists(pid_file):
+                    self.root.after(0, self.root.destroy)
+                    return
+                try:
+                    with open(pid_file) as f:
+                        pid = int(f.read().strip())
+                    if not _is_pid_alive(pid):
+                        self.root.after(0, self.root.destroy)
+                        return
+                except Exception:
+                    pass
+
+        threading.Thread(target=_watch, daemon=True).start()
 
     def check_monitor_status(self) -> tuple[bool, str]:
         """監視サービスが稼働しているかをハートビートファイルから確認する"""
