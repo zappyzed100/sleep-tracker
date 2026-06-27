@@ -1,12 +1,14 @@
 # File: src_python/database.py
-# Description: Processes raw logs, extracts sleep sessions, and manages SQLite database.
+# Description: Processes raw logs, extracts sleep sessions, and manages SQLite database with auto-git push.
 # Date: 2026-06-27
 # Author: Antigravity
-# Main Functions: init_db, get_db_connection, sync_logs_to_db, get_all_sessions
-# Dependencies: sqlite3, os, datetime
+# Main Functions: init_db, get_db_connection, sync_logs_to_db, get_all_sessions, git_push_logs
+# Dependencies: sqlite3, os, datetime, subprocess, threading
 
 import sqlite3
 import os
+import subprocess
+import threading
 from datetime import datetime, timedelta
 
 # プロジェクトルートディレクトリの設定
@@ -172,6 +174,40 @@ def sync_logs_to_db():
 
     conn.commit()
     conn.close()
+
+    # ログ変更の自動 Git Push を非同期で実行
+    git_push_logs()
+
+def git_push_logs():
+    """非同期でログファイルを Git リポジトリに push する"""
+    def _push():
+        try:
+            # 変更があるか確認 (--porcelain)
+            res = subprocess.run(
+                ["git", "status", "--porcelain", EVENTS_FILE],
+                capture_output=True, text=True, cwd=BASE_DIR
+            )
+            if not res.stdout.strip():
+                return
+            
+            # コミット対象に追加
+            subprocess.run(["git", "add", EVENTS_FILE], cwd=BASE_DIR, check=True)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            subprocess.run(
+                ["git", "commit", "-m", f"Auto-update sleep logs: {timestamp}"],
+                cwd=BASE_DIR, check=True
+            )
+            
+            # リモート競合対策でリベースプルを行い、その後にプッシュ
+            subprocess.run(["git", "pull", "--rebase", "origin", "master"], cwd=BASE_DIR, check=True)
+            subprocess.run(["git", "push", "origin", "master"], cwd=BASE_DIR, check=True)
+            print(f"[{timestamp}] Sleep logs successfully pushed to GitHub.")
+        except Exception as e:
+            # 常駐プロセスなのでエラーで落ちないようにキャッチするだけにする
+            print(f"Failed to auto-push logs to Git: {e}")
+
+    thread = threading.Thread(target=_push, daemon=True)
+    thread.start()
 
 def get_all_sessions():
     """保存されているすべての睡眠セッションを取得する"""

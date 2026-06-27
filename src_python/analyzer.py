@@ -13,7 +13,7 @@ from sklearn.linear_model import Ridge
 import os
 
 # 最小限必要なデータポイント数
-ML_MODEL_MIN_SAMPLES = 20
+ML_MODEL_MIN_SAMPLES = 10
 
 def get_time_features(dt: datetime) -> tuple[float, float, int]:
     """日時オブジェクトから、時刻の周期特徴量 (sin, cos) と曜日を取得する"""
@@ -74,7 +74,33 @@ def predict_with_heuristics(df: pd.DataFrame, current_dt: datetime) -> tuple[flo
         return pred_duration, "Heuristic (Global average, trimmed)"
 
 def predict_with_ml(df: pd.DataFrame, current_dt: datetime) -> tuple[float, str]:
-    """Random Forest Regressor を使用した睡眠時間の回帰予測"""
+    """Random Forest Regressor を使用した睡眠時間の回帰予測 (連続覚醒時間を特徴量に追加)"""
+    df = df.copy()
+    df['end_dt'] = pd.to_datetime(df['end_time'])
+    
+    # 過去セッションの連続覚醒時間を計算
+    # i 番目のセッションの覚醒時間 = start_dt[i] - end_dt[i-1]
+    awake_durations = []
+    for i in range(len(df)):
+        if i == 0:
+            awake_durations.append(None)
+        else:
+            prev_end = df['end_dt'].iloc[i-1]
+            curr_start = df['start_dt'].iloc[i]
+            dur = (curr_start - prev_end).total_seconds() / 3600.0
+            # 異常値 (旅行やPCの長期不使用などによる長期ギャップ) のクリップ
+            if dur < 0.0 or dur > 48.0:
+                awake_durations.append(None)
+            else:
+                awake_durations.append(dur)
+                
+    # 欠損値を平均値（またはデフォルト16時間）で補完
+    valid_durs = [d for d in awake_durations if d is not None]
+    mean_dur = np.mean(valid_durs) if valid_durs else 16.0
+    mean_dur = max(4.0, min(24.0, mean_dur)) # 常識的な範囲にクリップ
+    awake_durations = [d if d is not None else mean_dur for d in awake_durations]
+    df['awake_duration'] = awake_durations
+
     X = []
     y = []
     
@@ -85,8 +111,8 @@ def predict_with_ml(df: pd.DataFrame, current_dt: datetime) -> tuple[float, str]
         dow_onehot = [0] * 7
         dow_onehot[dow] = 1
         
-        # 特徴量ベクトル: [sin_time, cos_time] + One-Hot 曜日
-        features = [sin_t, cos_t] + dow_onehot
+        # 特徴量ベクトル: [sin_time, cos_time, awake_duration] + One-Hot 曜日
+        features = [sin_t, cos_t, row['awake_duration']] + dow_onehot
         X.append(features)
         y.append(row['duration_hours'])
         
@@ -97,15 +123,22 @@ def predict_with_ml(df: pd.DataFrame, current_dt: datetime) -> tuple[float, str]
     model = RandomForestRegressor(n_estimators=50, random_state=42)
     model.fit(X, y)
     
-    # 予測対象の特徴量作成
+    # 予測対象の特徴量作成 (入眠仮定時刻 - 最後の起床時刻)
+    last_end = df['end_dt'].iloc[-1]
+    c_awake_dur = (current_dt - last_end).total_seconds() / 3600.0
+    c_awake_dur = max(0.0, min(48.0, c_awake_dur)) # 0〜48時間にクリップ
+    
     c_sin_t, c_cos_t, c_dow = get_time_features(current_dt)
     c_dow_onehot = [0] * 7
     c_dow_onehot[c_dow] = 1
-    c_features = np.array([[c_sin_t, c_cos_t] + c_dow_onehot])
+    
+    # 特徴量ベクトル: [sin_time, cos_time, awake_duration] + One-Hot 曜日
+    c_features = np.array([[c_sin_t, c_cos_t, c_awake_dur] + c_dow_onehot])
     
     pred_duration = float(model.predict(c_features)[0])
     
     # 結果のバリデーション (現実的な範囲 1〜18時間にクリップ)
     pred_duration = max(1.0, min(18.0, pred_duration))
     
-    return pred_duration, f"Machine Learning (Random Forest trained on {len(df)} sessions)"
+    return pred_duration, f"Machine Learning (Random Forest with Awake Duration: {c_awake_dur:.1f}h)"
+
