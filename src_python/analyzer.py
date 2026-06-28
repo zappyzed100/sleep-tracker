@@ -64,13 +64,19 @@ def predict_with_heuristics(df: pd.DataFrame, current_dt: datetime) -> tuple[flo
     
     if len(close_sessions) >= 3:
         pred_duration = float(close_sessions['duration_hours'].mean())
+        if not (pred_duration == pred_duration):  # NaN check
+            pred_duration = 7.5
         return pred_duration, f"Heuristic (Average of {len(close_sessions)} similar time-of-day sessions)"
     else:
         # 近い時間帯のデータが少なすぎる場合は、全体の平均値（外れ値を除外）を返す
         q_low = df['duration_hours'].quantile(0.1)
         q_high = df['duration_hours'].quantile(0.9)
         filtered_df = df[(df['duration_hours'] >= q_low) & (df['duration_hours'] <= q_high)]
+        if filtered_df.empty:
+            filtered_df = df
         pred_duration = float(filtered_df['duration_hours'].mean())
+        if not (pred_duration == pred_duration):  # NaN check
+            pred_duration = 7.5
         return pred_duration, "Heuristic (Global average, trimmed)"
 
 def predict_with_ml(df: pd.DataFrame, current_dt: datetime) -> tuple[float, str]:

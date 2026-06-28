@@ -980,6 +980,7 @@ class SleepTrackerApp:
 
         self.canvas = None
         self.update_week_view()
+        self.root.bind_all("<MouseWheel>", self._on_home_scroll)
 
         # ── 設定タブ本体（初期非表示、スクロール対応）────────────────────────────
         self.settings_wrapper = tk.Frame(self.root, bg="#1e1e2e")
@@ -1274,9 +1275,11 @@ class SleepTrackerApp:
         if tab_name == "home":
             self.settings_wrapper.pack_forget()
             self.home_content.pack(fill="both", expand=True)
+            self.root.bind_all("<MouseWheel>", self._on_home_scroll)
         else:
             self.home_content.pack_forget()
             self.settings_wrapper.pack(fill="both", expand=True)
+            self.root.unbind_all("<MouseWheel>")
 
     def open_calendar_popup(self):
         try:
@@ -1295,6 +1298,8 @@ class SleepTrackerApp:
         self.sessions = database.get_all_sessions()
         now = datetime.now()
         pred_duration, pred_method = analyzer.predict_sleep_duration(self.sessions, now)
+        if not isinstance(pred_duration, (int, float)) or pred_duration != pred_duration:
+            pred_duration = 7.5
         pred_wake_time = now + timedelta(hours=pred_duration)
 
         for widget in self.pred_card.winfo_children():
@@ -1472,6 +1477,18 @@ class SleepTrackerApp:
         self.date_var.set(self.current_week_start.strftime("%Y-%m-%d"))
         self.update_week_view()
 
+    def _on_home_scroll(self, event):
+        if event.delta > 0:
+            self.go_to_prev_week()
+        else:
+            self.go_to_next_week()
+
+    def _on_graph_scroll(self, event):
+        if event.step > 0:
+            self.go_to_prev_week()
+        else:
+            self.go_to_next_week()
+
     def update_week_view(self):
         self.sessions = database.get_all_sessions()
         week_end = self.current_week_start + timedelta(days=6)
@@ -1648,6 +1665,7 @@ class SleepTrackerApp:
             fill="both", expand=True, padx=10, pady=(0, 10)
         )
         self.canvas.mpl_connect("button_press_event", self.on_graph_click)
+        self.canvas.mpl_connect("scroll_event", self._on_graph_scroll)
 
     def on_graph_click(self, event):
         # event.inaxes ではなくディスプレイ座標→データ座標変換を使う
