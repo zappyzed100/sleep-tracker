@@ -12,7 +12,7 @@ import "./App.css";
 
 const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
 
-const USE_DUMMY = true;
+const USE_DUMMY = false;
 
 function makeDummy(): Session[] {
   const result: Session[] = [];
@@ -41,6 +41,7 @@ function fmtDateRange(base: Date): string {
 }
 
 type Tab = "home" | "settings";
+type MonitorStatus = "active" | "paused" | "inactive";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("home");
@@ -50,6 +51,7 @@ export default function App() {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showCal, setShowCal] = useState(false);
   const calBtnRef = useRef<HTMLButtonElement>(null);
+  const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
 
   const loadSessions = useCallback(async () => {
     if (USE_DUMMY) { setSessions(makeDummy()); return; }
@@ -63,6 +65,30 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
+
+  const pollMonitor = useCallback(async () => {
+    if (USE_DUMMY) return;
+    try {
+      const s = await invoke<string>("get_monitor_status");
+      setMonitorStatus(s as MonitorStatus);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    pollMonitor();
+    const id = setInterval(pollMonitor, 30_000);
+    return () => clearInterval(id);
+  }, [pollMonitor]);
+
+  async function toggleMonitorPause() {
+    const shouldPause = monitorStatus === "active";
+    try {
+      await invoke("set_monitor_paused", { paused: shouldPause });
+      setMonitorStatus(shouldPause ? "paused" : "active");
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   useEffect(() => {
     const handler = (e: WheelEvent) => {
@@ -89,6 +115,20 @@ export default function App() {
 
       {tab === "home" && (
         <>
+          <div className="monitor-bar">
+            <span className={`monitor-dot monitor-dot-${monitorStatus}`} />
+            <span className="monitor-label">
+              {monitorStatus === "active" && "検知中"}
+              {monitorStatus === "paused" && "検知中断中"}
+              {monitorStatus === "inactive" && "停止中"}
+            </span>
+            {(monitorStatus === "active" || monitorStatus === "paused") && (
+              <button className="monitor-toggle-btn" onClick={toggleMonitorPause}>
+                {monitorStatus === "active" ? "中断する" : "再開する"}
+              </button>
+            )}
+          </div>
+
           <PredictionCard sessions={sessions} />
           <StatsCard sessions={sessions} />
 

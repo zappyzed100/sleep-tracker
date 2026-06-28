@@ -101,6 +101,106 @@ fn set_startup(enable: bool) -> Result<(), String> {
     }
 }
 
+// ── Monitor status ────────────────────────────────────────────────────────────
+
+fn pause_flag_path() -> PathBuf {
+    data_dir().join("monitor_paused")
+}
+
+#[tauri::command]
+fn get_monitor_status() -> String {
+    if pause_flag_path().exists() {
+        return "paused".to_string();
+    }
+    let heartbeat = data_dir().join("sleep_heartbeat.txt");
+    if !heartbeat.exists() {
+        return "inactive".to_string();
+    }
+    match heartbeat.metadata().and_then(|m| m.modified()) {
+        Ok(t) => {
+            let elapsed = t.elapsed().unwrap_or(std::time::Duration::from_secs(9999));
+            if elapsed.as_secs() < 90 { "active".to_string() } else { "inactive".to_string() }
+        }
+        Err(_) => "inactive".to_string(),
+    }
+}
+
+#[tauri::command]
+fn set_monitor_paused(paused: bool) -> Result<(), String> {
+    let flag = pause_flag_path();
+    if paused {
+        std::fs::write(&flag, "").map_err(|e| e.to_string())
+    } else {
+        if flag.exists() { std::fs::remove_file(&flag).map_err(|e| e.to_string()) } else { Ok(()) }
+    }
+}
+
+// ── File utils ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+// ── Gist sync ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn sync_gist() -> Result<String, String> {
+    let cfg = load_config_inner();
+    let gist_id = cfg.gist_id.ok_or_else(|| "Gist ID が設定されていません".to_string())?;
+    let token = cfg.github_token.ok_or_else(|| "GitHub Token が設定されていません".to_string())?;
+
+    let events_path = data_dir().join("sleep_events.txt");
+    let content = if events_path.exists() {
+        std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let line_count = content.lines().count();
+
+    let url = format!("https://api.github.com/gists/{}", gist_id);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({
+        "files": {
+            "sleep_events.txt": { "content": content }
+        }
+    });
+
+    let resp = client
+        .patch(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "Sleep-Tracker-Tauri/1.0")
+        .json(&body)
+        .send()
+        .map_err(|e| format!("ネットワークエラー: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} — アップロード失敗", status.as_u16()));
+    }
+
+    Ok(format!("同期完了 — {} 行をアップロードしました", line_count))
+}
+
+// ── Data management ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn clear_all_data() -> Result<(), String> {
+    let path = data_dir().join("sleep_events.txt");
+    std::fs::write(&path, "").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_desktop_shortcut() -> Result<(), String> {
+    // TODO: Phase 5 — create .lnk via Windows Shell API
+    Err("デスクトップショートカット作成は未実装です".to_string())
+}
+
 // ── CSV export ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -113,8 +213,13 @@ fn export_csv(sessions: Vec<Session>) -> String {
 }
 
 #[tauri::command]
+fn write_csv_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn import_csv(csv: String) -> Result<usize, String> {
-    let path = repo_root().join("src_cpp/sleep_events.txt");
+    let path = data_dir().join("sleep_events.txt");
     let existing = if path.exists() {
         std::fs::read_to_string(&path).map_err(|e| e.to_string())?
     } else {
@@ -168,12 +273,18 @@ fn repo_root() -> PathBuf {
     std::env::current_dir().unwrap_or_default()
 }
 
+fn data_dir() -> PathBuf {
+    let dir = repo_root().join("src_tauri").join("data");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 #[tauri::command]
 fn get_sessions() -> Result<Vec<Session>, String> {
     let root = repo_root();
     let exe = root.join("src_cpp/parse_sessions.exe");
-    let events = root.join("src_cpp/sleep_events.txt");
-    let heartbeat = root.join("src_cpp/sleep_heartbeat.txt");
+    let events = data_dir().join("sleep_events.txt");
+    let heartbeat = data_dir().join("sleep_heartbeat.txt");
     let config = root.join("config.json");
 
     if !exe.exists() {
@@ -207,7 +318,7 @@ fn find_optimal_bedtime(sessions: Vec<Session>, now_iso: String) -> Option<predi
 
 #[tauri::command]
 fn add_session(start: String, end: String) -> Result<(), String> {
-    let path = repo_root().join("src_cpp/sleep_events.txt");
+    let path = data_dir().join("sleep_events.txt");
     let existing = if path.exists() {
         std::fs::read_to_string(&path).map_err(|e| e.to_string())?
     } else {
@@ -226,7 +337,7 @@ fn add_session(start: String, end: String) -> Result<(), String> {
 
 #[tauri::command]
 fn delete_session(start: String, end: String) -> Result<(), String> {
-    let path = repo_root().join("src_cpp/sleep_events.txt");
+    let path = data_dir().join("sleep_events.txt");
     if !path.exists() {
         return Err("sleep_events.txt not found".to_string());
     }
@@ -244,12 +355,15 @@ fn delete_session(start: String, end: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
             add_session, delete_session,
             get_config, save_config, test_github_connection,
             get_startup_enabled, set_startup,
-            export_csv, import_csv,
+            export_csv, write_csv_file, import_csv,
+            read_text_file, sync_gist, clear_all_data, create_desktop_shortcut,
+            get_monitor_status, set_monitor_paused,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

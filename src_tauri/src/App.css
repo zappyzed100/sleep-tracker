@@ -860,9 +860,9 @@ body {
 }
 
 .settings-section-title {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
-  color: var(--subtext);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 2px;
@@ -872,7 +872,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 16px;
+  font-size: 17px;
   cursor: pointer;
 }
 
@@ -887,7 +887,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 15px;
+  font-size: 16px;
   flex-wrap: wrap;
 }
 
@@ -911,7 +911,7 @@ body {
 }
 
 .settings-label {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--subtext);
   font-weight: 600;
 }
@@ -928,8 +928,8 @@ body {
   border: 1px solid var(--surface1);
   border-radius: 6px;
   color: var(--text);
-  font-size: 14px;
-  padding: 7px 10px;
+  font-size: 15px;
+  padding: 8px 12px;
   font-family: inherit;
 }
 
@@ -967,9 +967,9 @@ body {
   border: 1px solid var(--surface1);
   border-radius: 7px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
-  padding: 8px 20px;
+  padding: 9px 22px;
   cursor: pointer;
   font-family: inherit;
   transition: background 0.1s;
@@ -997,12 +997,65 @@ body {
 .settings-status.err { background: rgba(243,139,168,0.15); color: var(--red); }
 
 .settings-note {
-  font-size: 12px;
-  color: var(--surface2);
+  font-size: 13px;
+  color: var(--subtext);
+}
+
+.settings-btn-danger {
+  background: rgba(243, 139, 168, 0.15);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.settings-btn-danger:hover:not(:disabled) {
+  background: var(--red);
+  color: var(--crust);
 }
 
 .settings-csv-msg {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--subtext);
   padding: 4px 0;
 }
+
+/* ── Monitor bar ── */
+.monitor-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 20px;
+  background: var(--crust);
+  border-bottom: 1px solid var(--surface0);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.monitor-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.monitor-dot-active { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.monitor-dot-paused { background: var(--yellow); }
+.monitor-dot-inactive { background: var(--surface2); }
+
+.monitor-label {
+  color: var(--subtext);
+  font-size: 13px;
+}
+
+.monitor-toggle-btn {
+  background: none;
+  border: 1px solid var(--surface1);
+  border-radius: 5px;
+  color: var(--subtext);
+  font-size: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  margin-left: 4px;
+}
+
+.monitor-toggle-btn:hover { background: var(--surface0); color: var(--text); }

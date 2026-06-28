@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
 import { Session } from "./types";
 
 interface AppConfig {
@@ -41,8 +42,12 @@ export default function Settings({ sessions }: Props) {
   const [testStatus, setTestStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
 
-  // CSV
+  // CSV / data
   const [csvMsg, setCsvMsg] = useState<string | null>(null);
+
+  // Gist sync
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<AppConfig>("get_config").then((cfg) => {
@@ -94,18 +99,52 @@ export default function Settings({ sessions }: Props) {
     }
   }
 
+  async function handleSyncGist() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const msg = await invoke<string>("sync_gist");
+      setSyncMsg(msg);
+    } catch (e) {
+      setSyncMsg(`エラー: ${e}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleClearAll() {
+    const ok = window.confirm(
+      "全ての睡眠データを削除します。この操作は元に戻せません。\n本当に削除しますか？"
+    );
+    if (!ok) return;
+    try {
+      await invoke("clear_all_data");
+      setCsvMsg("全データを削除しました。アプリを再起動すると反映されます。");
+    } catch (e) {
+      setCsvMsg(`エラー: ${e}`);
+    }
+  }
+
+  async function handleCreateShortcut() {
+    try {
+      await invoke("create_desktop_shortcut");
+    } catch (e) {
+      setCsvMsg(`ショートカット: ${e}`);
+    }
+  }
+
   async function handleExportCsv() {
     setCsvMsg(null);
     try {
       const csv = await invoke<string>("export_csv", { sessions });
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `sleep_data_${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setCsvMsg(`${sessions.length} 件をエクスポートしました`);
+      const defaultName = `sleep_data_${new Date().toISOString().slice(0, 10)}.csv`;
+      const path = await save({
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+        defaultPath: defaultName,
+      });
+      if (!path) return;
+      await invoke("write_csv_file", { path, content: csv });
+      setCsvMsg(`${sessions.length} 件をエクスポートしました → ${path}`);
     } catch (e) {
       setCsvMsg(`エラー: ${e}`);
     }
@@ -113,21 +152,18 @@ export default function Settings({ sessions }: Props) {
 
   async function handleImportCsv() {
     setCsvMsg(null);
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".csv";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const text = await file.text();
-      try {
-        const count = await invoke<number>("import_csv", { csv: text });
-        setCsvMsg(`${count} 件をインポートしました（アプリを再起動すると反映されます）`);
-      } catch (e) {
-        setCsvMsg(`エラー: ${e}`);
-      }
-    };
-    input.click();
+    try {
+      const path = await open({
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+        multiple: false,
+      });
+      if (!path) return;
+      const text = await invoke<string>("read_text_file", { path });
+      const count = await invoke<number>("import_csv", { csv: text });
+      setCsvMsg(`${count} 件をインポートしました（アプリを再起動すると反映されます）`);
+    } catch (e) {
+      setCsvMsg(`エラー: ${e}`);
+    }
   }
 
   return (
@@ -144,7 +180,9 @@ export default function Settings({ sessions }: Props) {
           />
           <span>PC 起動時に自動起動する</span>
         </label>
-        <div className="settings-note">レジストリ HKCU\...\Run に登録します</div>
+        <button className="settings-btn" onClick={handleCreateShortcut} style={{ alignSelf: "flex-start" }}>
+          デスクトップにショートカットを作成
+        </button>
       </Section>
 
       {/* 睡眠判定時間 */}
@@ -161,7 +199,7 @@ export default function Settings({ sessions }: Props) {
           />
           <span>分以上続いたら睡眠と判定</span>
         </div>
-        <div className="settings-note">※ モニターを再起動すると反映されます</div>
+        <div className="settings-note">変更後はタスクトレイのアイコンを右クリック →「終了」して再起動すると反映されます</div>
       </Section>
 
       {/* GitHub 連携 */}
@@ -207,6 +245,13 @@ export default function Settings({ sessions }: Props) {
           >
             {testing ? "テスト中..." : "接続テスト"}
           </button>
+          <button
+            className="settings-btn"
+            onClick={handleSyncGist}
+            disabled={syncing}
+          >
+            {syncing ? "同期中..." : "今すぐ同期"}
+          </button>
         </div>
 
         {testStatus && (
@@ -214,8 +259,13 @@ export default function Settings({ sessions }: Props) {
             {testStatus.ok ? "✓" : "✗"} {testStatus.msg}
           </div>
         )}
+        {syncMsg && (
+          <div className={`settings-status ${syncMsg.startsWith("エラー") ? "err" : "ok"}`}>
+            {syncMsg}
+          </div>
+        )}
 
-        <div className="settings-note">config.json にローカル保存されます</div>
+        <div className="settings-note">設定は config.json にローカル保存されます</div>
       </Section>
 
       {/* データ管理 */}
@@ -228,10 +278,12 @@ export default function Settings({ sessions }: Props) {
             CSV インポート
           </button>
         </div>
-        {csvMsg && <div className="settings-csv-msg">{csvMsg}</div>}
-        <div className="settings-note">
-          列順: 就寝時刻, 起床時刻, 睡眠時間(時間), 種別
+        <div className="settings-btn-row">
+          <button className="settings-btn settings-btn-danger" onClick={handleClearAll}>
+            全データを削除
+          </button>
         </div>
+        {csvMsg && <div className="settings-csv-msg">{csvMsg}</div>}
       </Section>
 
     </div>
