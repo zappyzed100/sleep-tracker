@@ -120,9 +120,14 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        onClick(_, elements) {
-          if (elements.length > 0) {
-            onDayClick(week[elements[0].index].date);
+        onClick(event: any, _elements: any, chart: any) {
+          const x = event?.x;
+          if (x == null) return;
+          const raw = chart.scales["x"].getValueForPixel(x);
+          if (raw == null) return;
+          const idx = Math.round(raw);
+          if (idx >= 0 && idx < week.length) {
+            onDayClick(week[idx].date);
           }
         },
         plugins: {
@@ -180,5 +185,5 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
     return () => chartRef.current?.destroy();
   }, [week]);
 
-  return <canvas ref={ref} style={{ width: "100%", height: "100%" }} />;
+  return <canvas ref={ref} style={{ width: "100%", height: "100%", cursor: "pointer" }} />;
 }
