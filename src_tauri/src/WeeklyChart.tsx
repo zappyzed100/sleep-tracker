@@ -1,0 +1,177 @@
+import { useEffect, useRef } from "react";
+import {
+  Chart,
+  BarElement,
+  LineElement,
+  PointElement,
+  BarController,
+  LineController,
+  CategoryScale,
+  LinearScale,
+  Tooltip,
+  Legend,
+} from "chart.js";
+import { DaySummary } from "./types";
+import { formatDuration } from "./utils";
+
+Chart.register(
+  BarElement, LineElement, PointElement,
+  BarController, LineController,
+  CategoryScale, LinearScale,
+  Tooltip, Legend,
+);
+
+const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
+const CAT = { CRUST: "#313244", GREEN: "#a6e3a1", YELLOW: "#f9e2af", TEXT: "#cdd6f4", SUBTEXT: "#a6adc8" };
+
+interface Props {
+  week: DaySummary[];
+  onDayClick: (date: string) => void;
+}
+
+export default function WeeklyChart({ week, onDayClick }: Props) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const chartRef = useRef<Chart | null>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+
+    const labels = week.map((d, i) => {
+      const [, m, day] = d.date.split("-");
+      return `${DAYS_JA[i]}\n${parseInt(m)}/${parseInt(day)}`;
+    });
+
+    const durations = week.map((d) => d.totalHours || null);
+    const bedtimes = week.map((d) => d.bedtimeH);
+    const waketimes = week.map((d) => d.waketimeH);
+
+    const durationPlugin = {
+      id: "durationLabels",
+      afterDatasetDraw(chart: Chart) {
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+        meta.data.forEach((bar: any, i) => {
+          const val = durations[i];
+          if (!val) return;
+          const barHeight = bar.base - bar.y;
+          ctx.save();
+          ctx.font = "bold 14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          if (barHeight > 22) {
+            ctx.fillStyle = CAT.CRUST;
+            ctx.fillText(formatDuration(val), bar.x, bar.y + barHeight / 2);
+          } else {
+            ctx.fillStyle = CAT.TEXT;
+            ctx.fillText(formatDuration(val), bar.x, bar.y - 10);
+          }
+          ctx.restore();
+        });
+      },
+    };
+
+    chartRef.current = new Chart(ref.current, {
+      type: "bar",
+      plugins: [durationPlugin],
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "睡眠時間",
+            data: durations,
+            backgroundColor: "rgba(137,180,250,0.7)",
+            borderColor: "#89b4fa",
+            borderWidth: 1,
+            yAxisID: "y",
+            order: 2,
+          },
+          {
+            label: "入眠",
+            data: bedtimes,
+            type: "line",
+            borderColor: CAT.YELLOW,
+            backgroundColor: CAT.YELLOW,
+            pointStyle: "circle",
+            pointRadius: 5,
+            tension: 0.3,
+            yAxisID: "y2",
+            order: 1,
+          },
+          {
+            label: "起床",
+            data: waketimes,
+            type: "line",
+            borderColor: CAT.GREEN,
+            backgroundColor: CAT.GREEN,
+            pointStyle: "rect",
+            pointRadius: 5,
+            tension: 0.3,
+            yAxisID: "y2",
+            order: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        onClick(_, elements) {
+          if (elements.length > 0) {
+            onDayClick(week[elements[0].index].date);
+          }
+        },
+        plugins: {
+          legend: {
+            labels: { color: CAT.TEXT, font: { size: 14 } },
+          },
+          tooltip: {
+            callbacks: {
+              label(ctx) {
+                if (ctx.datasetIndex === 0) return ` ${formatDuration(ctx.parsed.y)}`;
+                const h = Math.floor(ctx.parsed.y % 24);
+                const m = Math.round((ctx.parsed.y % 1) * 60);
+                return ` ${h}:${String(m).padStart(2, "0")}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: { color: CAT.TEXT, font: { size: 14 } },
+            grid: { color: "rgba(255,255,255,0.05)" },
+          },
+          y: {
+            position: "left",
+            min: 0,
+            max: Math.ceil(Math.max(...durations.map((d) => d ?? 0), 6) + 1),
+            ticks: {
+              color: CAT.TEXT,
+              font: { size: 13 },
+              callback: (v) => `${v}h`,
+            },
+            grid: { color: "rgba(255,255,255,0.08)" },
+          },
+          y2: {
+            position: "right",
+            min: 20,
+            max: 32,
+            ticks: {
+              color: CAT.SUBTEXT,
+              font: { size: 13 },
+              callback: (v) => {
+                const h = (v as number) % 24;
+                return `${h}:00`;
+              },
+              stepSize: 2,
+            },
+            grid: { drawOnChartArea: false },
+          },
+        },
+      },
+    });
+
+    return () => chartRef.current?.destroy();
+  }, [week]);
+
+  return <canvas ref={ref} style={{ width: "100%", height: "100%" }} />;
+}
