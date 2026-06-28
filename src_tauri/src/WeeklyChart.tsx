@@ -132,9 +132,11 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
           tooltip: {
             callbacks: {
               label(ctx) {
-                if (ctx.datasetIndex === 0) return ` ${formatDuration(ctx.parsed.y)}`;
-                const h = Math.floor(ctx.parsed.y % 24);
-                const m = Math.round((ctx.parsed.y % 1) * 60);
+                const y = ctx.parsed.y;
+                if (y == null) return "";
+                if (ctx.datasetIndex === 0) return ` ${formatDuration(y)}`;
+                const h = Math.floor(y % 24);
+                const m = Math.round((y % 1) * 60);
                 return ` ${h}:${String(m).padStart(2, "0")}`;
               },
             },

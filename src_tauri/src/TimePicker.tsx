@@ -49,7 +49,7 @@ function ColDropdown({ values, selected, onSelect, onClose, triggerRef }: ColDro
       const next = (selectedIdxRef.current + (e.deltaY > 0 ? 1 : -1) + values.length) % values.length;
       onSelectRef.current(values[next]);
       setTimeout(() => {
-        el.querySelectorAll<HTMLElement>(".tp-item")[next]?.scrollIntoView({ block: "center", behavior: "smooth" });
+        dropRef.current?.querySelectorAll<HTMLElement>(".tp-item")[next]?.scrollIntoView({ block: "center", behavior: "smooth" });
       }, 0);
     }
     el.addEventListener("wheel", onWheel, { passive: false });

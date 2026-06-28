@@ -10,6 +10,10 @@ interface PredictionResult {
   awake_hours: number;
 }
 
+interface OptimalResult {
+  best_bed_time: string;
+  min_duration_hours: number;
+}
 
 function currentHHMM(): string {
   const d = new Date();

@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import WeeklyChart from "./WeeklyChart";
 import StatsCard from "./StatsCard";
 import PredictionCard from "./PredictionCard";
+import CalendarPicker from "./CalendarPicker";
 import Settings from "./Settings";
 import { Session } from "./types";
 import { buildWeek, weekStart, addDays } from "./utils";
@@ -46,6 +47,8 @@ export default function App() {
   const [weekBase, setWeekBase] = useState(new Date());
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [showCal, setShowCal] = useState(false);
+  const calBtnRef = useRef<HTMLButtonElement>(null);
 
   const loadSessions = useCallback(async () => {
     if (USE_DUMMY) { setSessions(makeDummy()); return; }
@@ -93,6 +96,24 @@ export default function App() {
             <span className="week-label">{fmtDateRange(weekBase)}</span>
             <button onClick={() => setWeekBase(new Date())}>今週</button>
             <button onClick={() => setWeekBase((p) => addDays(p, 7))}>次の週 ▶</button>
+            <div className="nav-cal-wrap">
+              <button
+                ref={calBtnRef}
+                className="nav-cal-btn"
+                onClick={() => setShowCal((v) => !v)}
+                title="カレンダーで移動"
+              >
+                📅
+              </button>
+              {showCal && (
+                <CalendarPicker
+                  current={weekBase}
+                  onSelect={(d) => setWeekBase(d)}
+                  onClose={() => setShowCal(false)}
+                  anchorRef={calBtnRef}
+                />
+              )}
+            </div>
           </div>
 
           <div className="chart-area">
