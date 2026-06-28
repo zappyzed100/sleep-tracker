@@ -162,8 +162,7 @@ int main(int argc, char* argv[]) {
     time_t sleep_start_epoch = 0;
     std::string sleep_start_str;
     std::string session_type;
-    bool is_out       = false;
-    bool is_mobile_on = false;
+    bool is_out = false;
 
     auto end_sleep = [&](const std::string& end_str, time_t end_epoch) {
         double dur = difftime(end_epoch, sleep_start_epoch);
@@ -178,12 +177,11 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < events.size(); ++i) {
         const Event& ev = events[i];
 
+        // DEVICE_ON: スリープ中なら起床として扱う（モニター側がIDLE_START抑制を担当）
         if (ev.type == "DEVICE_ON") {
-            is_mobile_on = true;
             if (state == "SLEEPING") end_sleep(ev.ts_str, ev.epoch);
             continue;
         }
-        if (ev.type == "DEVICE_OFF") { is_mobile_on = false; continue; }
 
         if (ev.type == "OUT_START") {
             is_out = true;
@@ -193,7 +191,7 @@ int main(int argc, char* argv[]) {
         if (ev.type == "OUT_END") { is_out = false; continue; }
 
         if (state == "ACTIVE") {
-            if (!is_out && !is_mobile_on && (ev.type == "IDLE_START" || ev.type == "SUSPEND" || ev.type == "SHUTDOWN")) {
+            if (!is_out && (ev.type == "IDLE_START" || ev.type == "SUSPEND" || ev.type == "SHUTDOWN")) {
                 state = "SLEEPING";
                 sleep_start_epoch = ev.epoch;
                 sleep_start_str   = ev.ts_str;

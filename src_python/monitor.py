@@ -120,6 +120,18 @@ import lifecycle
 EVENTS_FILE = lifecycle.EVENTS_FILE
 HEARTBEAT_FILE = lifecycle.HEARTBEAT_FILE
 PID_FILE = lifecycle.PID_FILE
+DEVICE_HEARTBEAT_FILE = os.path.join(os.path.dirname(lifecycle.EVENTS_FILE), "device_heartbeat.txt")
+
+DEVICE_TIMEOUT_SECS = 10 * 60  # 最後のハートビートから10分で非アクティブと判断
+
+def _get_device_last_active() -> float:
+    """device_heartbeat.txt から最終アクティブ時刻を epoch 秒で返す"""
+    try:
+        with open(DEVICE_HEARTBEAT_FILE, "r", encoding="utf-8") as f:
+            ts_str = f.readline().strip()
+        return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").timestamp()
+    except Exception:
+        return 0.0
 
 # タスクトレイアイコン (グローバル参照)
 _tray_icon = None
@@ -243,7 +255,9 @@ def monitor_loop():
             # 毎ループ再読み込みすることでUI設定変更を即反映
             idle_threshold_ms = _load_idle_threshold_ms()
 
-            if idle_ms >= idle_threshold_ms:
+            is_device_on = (time.time() - _get_device_last_active()) < DEVICE_TIMEOUT_SECS
+
+            if idle_ms >= idle_threshold_ms and not is_device_on:
                 if not is_idle:
                     is_idle = True
                     start_time = datetime.fromtimestamp(time.time() - (idle_ms / 1000.0))

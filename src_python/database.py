@@ -17,6 +17,7 @@ LOG_DIR = os.path.join(BASE_DIR, "src_cpp")
 
 EVENTS_FILE = os.path.join(LOG_DIR, "sleep_events.txt")
 HEARTBEAT_FILE = os.path.join(LOG_DIR, "sleep_heartbeat.txt")
+DEVICE_HEARTBEAT_FILE = os.path.join(LOG_DIR, "device_heartbeat.txt")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 def parse_datetime(dt_str: str) -> datetime:
@@ -106,7 +107,6 @@ def _parse_events_to_sessions_py() -> list:
     sleep_start = None
     session_type = None
     is_out = False
-    is_mobile_on = False
 
     def end_sleep(ts):
         nonlocal state, sleep_start, session_type
@@ -123,12 +123,8 @@ def _parse_events_to_sessions_py() -> list:
 
     for i, (ts, event) in enumerate(events):
         if event == "DEVICE_ON":
-            is_mobile_on = True
             if state == "SLEEPING":
                 end_sleep(ts)
-            continue
-        elif event == "DEVICE_OFF":
-            is_mobile_on = False
             continue
         elif event == "OUT_START":
             is_out = True
@@ -140,7 +136,7 @@ def _parse_events_to_sessions_py() -> list:
             continue
 
         if state == "ACTIVE":
-            if not is_out and not is_mobile_on and event in ("IDLE_START", "SUSPEND", "SHUTDOWN"):
+            if not is_out and event in ("IDLE_START", "SUSPEND", "SHUTDOWN"):
                 state = "SLEEPING"
                 sleep_start = ts
                 session_type = "IDLE" if event == "IDLE_START" else "POWER"
@@ -406,8 +402,6 @@ def sync_mobile_events_from_gist():
                     event_type = "OUT_END"
                 elif tag == "SCREEN_ON":
                     event_type = "DEVICE_ON"
-                elif tag == "SCREEN_OFF":
-                    event_type = "DEVICE_OFF"
                 else:
                     return
                 event_time_str = parts[1].strip()
@@ -426,6 +420,9 @@ def sync_mobile_events_from_gist():
                     with open(EVENTS_FILE, "a", encoding="utf-8") as ef:
                         ef.write(new_line + "\n")
                     print(f"Synced mobile event from Gist: {event_type} at {event_time_str}")
+                if event_type == "DEVICE_ON":
+                    with open(DEVICE_HEARTBEAT_FILE, "w", encoding="utf-8") as df:
+                        df.write(event_time_str + "\n")
     except Exception as e:
         print(f"Failed to fetch mobile events from Gist: {e}")
 
