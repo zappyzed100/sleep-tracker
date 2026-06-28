@@ -94,8 +94,6 @@ export default function App() {
           <div className="nav-bar">
             <button onClick={() => setWeekBase((p) => addDays(p, -7))}>◀ 前の週</button>
             <span className="week-label">{fmtDateRange(weekBase)}</span>
-            <button onClick={() => setWeekBase(new Date())}>今週</button>
-            <button onClick={() => setWeekBase((p) => addDays(p, 7))}>次の週 ▶</button>
             <div className="nav-cal-wrap">
               <button
                 ref={calBtnRef}
@@ -114,6 +112,8 @@ export default function App() {
                 />
               )}
             </div>
+            <button onClick={() => setWeekBase(new Date())}>今週</button>
+            <button onClick={() => setWeekBase((p) => addDays(p, 7))}>次の週 ▶</button>
           </div>
 
           <div className="chart-area">

@@ -231,7 +231,6 @@ body {
 /* ── Calendar ── */
 .nav-cal-wrap {
   position: relative;
-  margin-left: auto;
 }
 
 .nav-cal-btn {
