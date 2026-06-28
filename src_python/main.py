@@ -1483,12 +1483,6 @@ class SleepTrackerApp:
         else:
             self.go_to_next_week()
 
-    def _on_graph_scroll(self, event):
-        if event.step > 0:
-            self.go_to_prev_week()
-        else:
-            self.go_to_next_week()
-
     def update_week_view(self):
         self.sessions = database.get_all_sessions()
         week_end = self.current_week_start + timedelta(days=6)
@@ -1665,7 +1659,6 @@ class SleepTrackerApp:
             fill="both", expand=True, padx=10, pady=(0, 10)
         )
         self.canvas.mpl_connect("button_press_event", self.on_graph_click)
-        self.canvas.mpl_connect("scroll_event", self._on_graph_scroll)
 
     def on_graph_click(self, event):
         # event.inaxes ではなくディスプレイ座標→データ座標変換を使う
