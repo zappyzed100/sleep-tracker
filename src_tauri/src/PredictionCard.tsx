@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Session } from "./types";
 import { formatDuration } from "./utils";
+import TimePicker from "./TimePicker";
 
 interface PredictionResult {
   duration_hours: number;
@@ -9,10 +10,6 @@ interface PredictionResult {
   awake_hours: number;
 }
 
-interface OptimalResult {
-  best_bed_time: string;
-  min_duration_hours: number;
-}
 
 function currentHHMM(): string {
   const d = new Date();
@@ -51,7 +48,6 @@ interface Props {
 export default function PredictionCard({ sessions }: Props) {
   const [bedTime, setBedTime] = useState(currentHHMM);
   const [result, setResult] = useState<PredictionResult | null>(null);
-  const [optimal, setOptimal] = useState<OptimalResult | null>(null);
   const [loadingOptimal, setLoadingOptimal] = useState(false);
 
   useEffect(() => {
@@ -66,7 +62,6 @@ export default function PredictionCard({ sessions }: Props) {
 
   function setToNow() {
     setBedTime(currentHHMM());
-    setOptimal(null);
   }
 
   async function calcOptimal() {
@@ -77,10 +72,7 @@ export default function PredictionCard({ sessions }: Props) {
         sessions,
         nowIso: currentNowIso(),
       });
-      if (r) {
-        setOptimal(r);
-        setBedTime(r.best_bed_time);
-      }
+      if (r) setBedTime(r.best_bed_time);
     } catch (e) {
       console.error(e);
     } finally {
@@ -95,12 +87,7 @@ export default function PredictionCard({ sessions }: Props) {
       <div className="pred-home-ctrl">
         <span className="strip-label">睡眠<br />予測</span>
 
-        <input
-          type="time"
-          className="pred-home-time"
-          value={bedTime}
-          onChange={(e) => { setBedTime(e.target.value); setOptimal(null); }}
-        />
+        <TimePicker value={bedTime} onChange={setBedTime} />
         <button className="pred-home-btn" onClick={setToNow}>今すぐ</button>
         <button
           className="pred-home-btn pred-home-opt"
@@ -145,17 +132,6 @@ export default function PredictionCard({ sessions }: Props) {
         )}
       </div>
 
-      {optimal && (
-        <div className="pred-optimal-bar">
-          <span>
-            ★ <strong>{optimal.best_bed_time}</strong> に入眠すると最短睡眠{" "}
-            <strong>{formatDuration(optimal.min_duration_hours)}</strong> で起きられます
-          </span>
-          <button onClick={() => setBedTime(optimal.best_bed_time)}>
-            {optimal.best_bed_time} に設定
-          </button>
-        </div>
-      )}
     </div>
   );
 }

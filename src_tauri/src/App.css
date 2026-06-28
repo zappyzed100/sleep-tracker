@@ -283,25 +283,75 @@ body {
   align-items: center;
   gap: 14px;
   padding: 12px 20px;
-  overflow: hidden;
 }
 
-.pred-home-time {
-  font-size: 24px;
-  font-weight: 700;
+/* ── Time Picker ── */
+.tp-root {
+  display: inline-flex;
+  align-items: center;
   background: var(--surface0);
   border: 2px solid var(--surface1);
   border-radius: 6px;
-  color: var(--text);
   padding: 4px 10px;
-  cursor: pointer;
-  font-family: inherit;
+  flex-shrink: 0;
+  gap: 2px;
 }
 
-.pred-home-time:focus {
-  outline: none;
-  border-color: var(--blue);
+.tp-col-wrap {
+  position: relative;
+  display: inline-block;
 }
+
+.tp-col-trigger {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 3px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.tp-col-trigger:hover { background: var(--surface1); }
+.tp-col-trigger.active { color: var(--blue); background: var(--surface1); }
+
+.tp-colon {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  user-select: none;
+}
+
+.tp-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--mantle);
+  border: 2px solid var(--blue);
+  border-radius: 8px;
+  z-index: 200;
+}
+
+.tp-dropdown::-webkit-scrollbar { width: 4px; }
+.tp-dropdown::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 3px; }
+.tp-dropdown::-webkit-scrollbar-track { background: transparent; }
+
+.tp-item {
+  padding: 7px 0;
+  font-size: 18px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  color: var(--subtext);
+}
+
+.tp-item:hover { background: var(--surface0); color: var(--text); }
+.tp-item.selected { background: var(--blue); color: var(--crust); }
 
 .pred-home-btn {
   background: var(--surface0);

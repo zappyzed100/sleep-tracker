@@ -46,6 +46,11 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
     const bedtimes = week.map((d) => d.bedtimeH);
     const waketimes = week.map((d) => d.waketimeH);
 
+    const allY2 = [...bedtimes, ...waketimes].filter((v) => v !== null) as number[];
+    const y2Min = allY2.length > 0 ? Math.floor(Math.min(...allY2)) - 1 : 20;
+    const y2Max = allY2.length > 0 ? Math.ceil(Math.max(...allY2)) + 1 : 32;
+    const y2Step = Math.max(1, Math.round((y2Max - y2Min) / 6));
+
     const durationPlugin = {
       id: "durationLabels",
       afterDatasetDraw(chart: Chart) {
@@ -153,16 +158,16 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
           },
           y2: {
             position: "right",
-            min: 20,
-            max: 32,
+            min: y2Min,
+            max: y2Max,
             ticks: {
               color: CAT.SUBTEXT,
               font: { size: 13 },
               callback: (v) => {
-                const h = (v as number) % 24;
+                const h = Math.floor((v as number) % 24);
                 return `${h}:00`;
               },
-              stepSize: 2,
+              stepSize: y2Step,
             },
             grid: { drawOnChartArea: false },
           },
