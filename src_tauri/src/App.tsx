@@ -4,6 +4,7 @@ import WeeklyChart from "./WeeklyChart";
 import StatsCard from "./StatsCard";
 import PredictionCard from "./PredictionCard";
 import CalendarPicker from "./CalendarPicker";
+import DayDetail from "./DayDetail";
 import Settings from "./Settings";
 import { Session } from "./types";
 import { buildWeek, weekStart, addDays } from "./utils";
@@ -121,19 +122,12 @@ export default function App() {
           </div>
 
           {selectedDay && (
-            <div className="detail-panel">
-              <div className="detail-header">
-                <span>{selectedDay} の睡眠</span>
-                <button onClick={() => setSelectedDay(null)}>✕</button>
-              </div>
-              {(week.find((d) => d.date === selectedDay)?.sessions ?? []).length > 0
-                ? week.find((d) => d.date === selectedDay)!.sessions.map((s, i) => (
-                    <div key={i} className="session-row">
-                      {s.start.slice(11, 16)} 〜 {s.end.slice(11, 16)}（{s.duration.toFixed(1)}h）
-                    </div>
-                  ))
-                : <div className="no-data">記録なし</div>}
-            </div>
+            <DayDetail
+              date={selectedDay}
+              sessions={sessions}
+              onClose={() => setSelectedDay(null)}
+              onRefresh={loadSessions}
+            />
           )}
         </>
       )}
