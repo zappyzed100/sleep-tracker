@@ -162,28 +162,38 @@ int main(int argc, char* argv[]) {
     time_t sleep_start_epoch = 0;
     std::string sleep_start_str;
     std::string session_type;
-    bool is_out = false;
+    bool is_out       = false;
+    bool is_mobile_on = false;
+
+    auto end_sleep = [&](const std::string& end_str, time_t end_epoch) {
+        double dur = difftime(end_epoch, sleep_start_epoch);
+        if (dur >= min_sleep_secs)
+            sessions.push_back({sleep_start_str, end_str, dur / 3600.0, session_type});
+        state = "ACTIVE";
+        sleep_start_epoch = 0;
+        sleep_start_str.clear();
+        session_type.clear();
+    };
 
     for (size_t i = 0; i < events.size(); ++i) {
         const Event& ev = events[i];
 
+        if (ev.type == "DEVICE_ON") {
+            is_mobile_on = true;
+            if (state == "SLEEPING") end_sleep(ev.ts_str, ev.epoch);
+            continue;
+        }
+        if (ev.type == "DEVICE_OFF") { is_mobile_on = false; continue; }
+
         if (ev.type == "OUT_START") {
             is_out = true;
-            if (state == "SLEEPING") {
-                double dur = difftime(ev.epoch, sleep_start_epoch);
-                if (dur >= min_sleep_secs)
-                    sessions.push_back({sleep_start_str, ev.ts_str, dur / 3600.0, session_type});
-                state = "ACTIVE";
-                sleep_start_epoch = 0;
-                sleep_start_str.clear();
-                session_type.clear();
-            }
+            if (state == "SLEEPING") end_sleep(ev.ts_str, ev.epoch);
             continue;
         }
         if (ev.type == "OUT_END") { is_out = false; continue; }
 
         if (state == "ACTIVE") {
-            if (!is_out && (ev.type == "IDLE_START" || ev.type == "SUSPEND" || ev.type == "SHUTDOWN")) {
+            if (!is_out && !is_mobile_on && (ev.type == "IDLE_START" || ev.type == "SUSPEND" || ev.type == "SHUTDOWN")) {
                 state = "SLEEPING";
                 sleep_start_epoch = ev.epoch;
                 sleep_start_str   = ev.ts_str;
@@ -212,14 +222,7 @@ int main(int argc, char* argv[]) {
 
         } else if (state == "SLEEPING") {
             if (ev.type == "IDLE_RESUME" || ev.type == "RESUME" || ev.type == "STARTUP") {
-                double dur = difftime(ev.epoch, sleep_start_epoch);
-                if (dur >= min_sleep_secs)
-                    sessions.push_back({sleep_start_str, ev.ts_str, dur / 3600.0, session_type});
-                state = "ACTIVE";
-                sleep_start_epoch = 0;
-                sleep_start_str.clear();
-                session_type.clear();
-
+                end_sleep(ev.ts_str, ev.epoch);
             } else if (ev.type == "SUSPEND" || ev.type == "SHUTDOWN") {
                 session_type = "POWER";
             }

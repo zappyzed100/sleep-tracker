@@ -256,8 +256,8 @@ def monitor_loop():
 
             time.sleep(POLL_INTERVAL)
 
-            # 1時間ごとに自動でGist同期（非同期）
-            if time.time() - last_gist_sync >= 3600:
+            # 5分ごとに自動でGist同期（非同期）
+            if time.time() - last_gist_sync >= 300:
                 last_gist_sync = time.time()
                 try:
                     threading.Thread(target=database.sync_mobile_events_from_gist, daemon=True).start()

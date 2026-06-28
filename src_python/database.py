@@ -106,28 +106,41 @@ def _parse_events_to_sessions_py() -> list:
     sleep_start = None
     session_type = None
     is_out = False
+    is_mobile_on = False
+
+    def end_sleep(ts):
+        nonlocal state, sleep_start, session_type
+        dur = ts - sleep_start
+        if dur >= MIN_SLEEP:
+            sessions.append((
+                sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
+                ts.strftime("%Y-%m-%d %H:%M:%S"),
+                dur.total_seconds() / 3600.0,
+                session_type,
+            ))
+        state = "ACTIVE"
+        sleep_start = session_type = None
 
     for i, (ts, event) in enumerate(events):
-        if event == "OUT_START":
+        if event == "DEVICE_ON":
+            is_mobile_on = True
+            if state == "SLEEPING":
+                end_sleep(ts)
+            continue
+        elif event == "DEVICE_OFF":
+            is_mobile_on = False
+            continue
+        elif event == "OUT_START":
             is_out = True
             if state == "SLEEPING":
-                dur = ts - sleep_start
-                if dur >= MIN_SLEEP:
-                    sessions.append((
-                        sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
-                        ts.strftime("%Y-%m-%d %H:%M:%S"),
-                        dur.total_seconds() / 3600.0,
-                        session_type,
-                    ))
-                state = "ACTIVE"
-                sleep_start = session_type = None
+                end_sleep(ts)
             continue
         elif event == "OUT_END":
             is_out = False
             continue
 
         if state == "ACTIVE":
-            if not is_out and event in ("IDLE_START", "SUSPEND", "SHUTDOWN"):
+            if not is_out and not is_mobile_on and event in ("IDLE_START", "SUSPEND", "SHUTDOWN"):
                 state = "SLEEPING"
                 sleep_start = ts
                 session_type = "IDLE" if event == "IDLE_START" else "POWER"
@@ -150,16 +163,7 @@ def _parse_events_to_sessions_py() -> list:
                             ))
         elif state == "SLEEPING":
             if event in ("IDLE_RESUME", "RESUME", "STARTUP"):
-                dur = ts - sleep_start
-                if dur >= MIN_SLEEP:
-                    sessions.append((
-                        sleep_start.strftime("%Y-%m-%d %H:%M:%S"),
-                        ts.strftime("%Y-%m-%d %H:%M:%S"),
-                        dur.total_seconds() / 3600.0,
-                        session_type,
-                    ))
-                state = "ACTIVE"
-                sleep_start = session_type = None
+                end_sleep(ts)
             elif event in ("SUSPEND", "SHUTDOWN"):
                 session_type = "POWER"
 
@@ -393,10 +397,26 @@ def sync_mobile_events_from_gist():
             content = mobile_file.get("content", "").strip()
             if not content or content.startswith("INIT"):
                 return
-            parts = content.split(",")
+            parts = content.split(",", 1)
             if len(parts) == 2:
-                event_type = "OUT_START" if parts[0] == "LEAVE" else "OUT_END"
-                event_time_str = parts[1]
+                tag = parts[0]
+                if tag == "LEAVE":
+                    event_type = "OUT_START"
+                elif tag == "ARRIVE":
+                    event_type = "OUT_END"
+                elif tag == "SCREEN_ON":
+                    event_type = "DEVICE_ON"
+                elif tag == "SCREEN_OFF":
+                    event_type = "DEVICE_OFF"
+                else:
+                    return
+                event_time_str = parts[1].strip()
+                # ミリ秒タイムスタンプ（MacroDroid等）を日時文字列に変換
+                try:
+                    ts_num = int(event_time_str)
+                    event_time_str = datetime.fromtimestamp(ts_num / 1000.0).strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    pass  # すでに "YYYY-MM-DD HH:MM:SS" 形式の場合はそのまま
                 new_line = f"{event_time_str},{event_type}"
                 already_exists = False
                 if os.path.exists(EVENTS_FILE):

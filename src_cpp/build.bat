@@ -32,7 +32,7 @@ if %ERRORLEVEL% equ 0 (
     if %ERRORLEVEL% neq 0 ( echo MinGW: sleep_monitor build failed. & set FAILED=1 )
 
     echo Building parse_sessions.exe...
-    g++ -O2 -std=c++17 -static parse_sessions.cpp -o parse_sessions.exe
+    g++ -O2 -std=c++17 -static-libgcc -static-libstdc++ -static parse_sessions.cpp -o parse_sessions.exe
     if %ERRORLEVEL% neq 0 ( echo MinGW: parse_sessions build failed. & set FAILED=1 )
 
     if %FAILED% equ 0 ( echo All builds successful. )
