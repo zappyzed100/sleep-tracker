@@ -3,6 +3,146 @@ mod prediction;
 use std::path::PathBuf;
 use std::process::Command;
 
+// ── Config ────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+pub struct AppConfig {
+    pub gist_id: Option<String>,
+    pub github_token: Option<String>,
+    pub idle_threshold_minutes: Option<u32>,
+}
+
+fn config_path() -> PathBuf {
+    repo_root().join("config.json")
+}
+
+fn load_config_inner() -> AppConfig {
+    let path = config_path();
+    if !path.exists() { return AppConfig::default(); }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_config() -> AppConfig {
+    load_config_inner()
+}
+
+#[tauri::command]
+fn save_config(gist_id: String, github_token: String, idle_threshold_minutes: u32) -> Result<(), String> {
+    let cfg = AppConfig {
+        gist_id: if gist_id.is_empty() { None } else { Some(gist_id) },
+        github_token: if github_token.is_empty() { None } else { Some(github_token) },
+        idle_threshold_minutes: Some(idle_threshold_minutes),
+    };
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(config_path(), json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn test_github_connection(gist_id: String, github_token: String) -> Result<String, String> {
+    if gist_id.is_empty() || github_token.is_empty() {
+        return Err("Gist ID とトークンを入力してください".to_string());
+    }
+    let url = format!("https://api.github.com/gists/{}", gist_id);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", github_token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "Sleep-Tracker-Tauri/1.0")
+        .send()
+        .map_err(|e| format!("ネットワークエラー: {}", e))?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(format!("接続成功 (HTTP {})", status.as_u16()))
+    } else {
+        Err(format!("HTTP {} — {}", status.as_u16(),
+            match status.as_u16() {
+                401 => "認証失敗（トークンを確認）",
+                404 => "Gist が見つかりません（IDを確認）",
+                _ => status.canonical_reason().unwrap_or("エラー"),
+            }
+        ))
+    }
+}
+
+// ── Startup / shortcuts ───────────────────────────────────────────────────────
+
+const STARTUP_REG_VALUE: &str = "SleepTracker";
+
+#[tauri::command]
+fn get_startup_enabled() -> bool {
+    use winreg::{RegKey, enums::*};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
+        .and_then(|key| key.get_value::<String, _>(STARTUP_REG_VALUE))
+        .is_ok()
+}
+
+#[tauri::command]
+fn set_startup(enable: bool) -> Result<(), String> {
+    use winreg::{RegKey, enums::*};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run = hkcu
+        .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_WRITE)
+        .map_err(|e| e.to_string())?;
+    if enable {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        run.set_value(STARTUP_REG_VALUE, &exe.to_string_lossy().as_ref())
+            .map_err(|e| e.to_string())
+    } else {
+        run.delete_value(STARTUP_REG_VALUE).or(Ok(()))
+    }
+}
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn export_csv(sessions: Vec<Session>) -> String {
+    let mut out = String::from("就寝時刻,起床時刻,睡眠時間(時間),種別\n");
+    for s in &sessions {
+        out.push_str(&format!("{},{},{:.4},{}\n", s.start, s.end, s.duration_hours, s.session_type));
+    }
+    out
+}
+
+#[tauri::command]
+fn import_csv(csv: String) -> Result<usize, String> {
+    let path = repo_root().join("src_cpp/sleep_events.txt");
+    let existing = if path.exists() {
+        std::fs::read_to_string(&path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(String::from)
+        .collect();
+
+    let mut added = 0usize;
+    for line in csv.lines().skip(1) {  // skip header
+        let cols: Vec<&str> = line.splitn(4, ',').collect();
+        if cols.len() < 2 { continue; }
+        let start = cols[0].trim();
+        let end = cols[1].trim();
+        if start.len() < 19 || end.len() < 19 { continue; }
+        lines.push(format!("{} IDLE_START", start));
+        lines.push(format!("{} IDLE_RESUME", end));
+        added += 1;
+    }
+    lines.sort_by(|a, b| a[..a.len().min(19)].cmp(&b[..b.len().min(19)]));
+    lines.dedup();
+    std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    Ok(added)
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Session {
     pub start: String,
@@ -106,7 +246,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
-            add_session, delete_session
+            add_session, delete_session,
+            get_config, save_config, test_github_connection,
+            get_startup_enabled, set_startup,
+            export_csv, import_csv,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

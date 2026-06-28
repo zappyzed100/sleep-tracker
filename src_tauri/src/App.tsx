@@ -132,7 +132,7 @@ export default function App() {
         </>
       )}
 
-      {tab === "settings" && <Settings />}
+      {tab === "settings" && <Settings sessions={sessions} />}
     </div>
   );
 }
