@@ -82,6 +82,7 @@ export default function Settings({ sessions, onRefresh }: Props) {
       });
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
+      onRefresh?.();
     } catch (e) {
       console.error(e);
     }
@@ -243,6 +244,9 @@ export default function Settings({ sessions, onRefresh }: Props) {
           />
           <span>分以上続いたら睡眠と判定</span>
         </div>
+        <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
+          {configSaved ? "✓ 保存しました" : "保存"}
+        </button>
         <div className="settings-note">変更後はタスクトレイのアイコンを右クリック →「終了」して再起動すると反映されます</div>
       </Section>
 
