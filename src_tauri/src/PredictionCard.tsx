@@ -12,7 +12,8 @@ interface PredictionResult {
 
 interface OptimalResult {
   best_bed_time: string;
-  min_duration_hours: number;
+  expected_wake_time: string;
+  duration_hours: number;
 }
 
 function currentHHMM(): string {
