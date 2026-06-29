@@ -73,8 +73,9 @@ fn save_config(
     std::fs::write(config_path(), json).map_err(|e| e.to_string())?;
     THRESHOLD_SECS.store(idle_threshold_minutes as u64 * 60, Ordering::Relaxed);
     *SESSION_CACHE.lock().unwrap() = None;
-    // Push shared settings to Drive (best-effort, errors are silent)
-    push_settings_to_drive_inner(&cfg);
+    // Push shared settings to Drive in background so save_config returns immediately
+    let cfg_clone = cfg.clone();
+    std::thread::spawn(move || push_settings_to_drive_inner(&cfg_clone));
     Ok(())
 }
 

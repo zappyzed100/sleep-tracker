@@ -78,13 +78,8 @@ export default function App() {
       } catch {
         loadSessions();
       }
-      // Also sync settings (idle threshold, target wake time) from Drive.
-      // Re-run session parse so the new threshold is applied immediately.
-      try {
-        await invoke("fetch_settings_from_cloud");
-        const refreshed = await invoke<Session[]>("get_sessions");
-        setSessions(refreshed);
-      } catch { /* ignore */ }
+      // Sync settings in background — don't block the UI
+      invoke("fetch_settings_from_cloud").catch(() => {});
     };
     doFetch();
     const id = setInterval(doFetch, 30 * 60 * 1000);
