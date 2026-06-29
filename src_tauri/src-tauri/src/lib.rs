@@ -785,6 +785,8 @@ fn send_screen_on() -> Result<String, String> {
     let client = gist_client()?;
     let resp = client
         .post(&url)
+        .header("Content-Length", "0")
+        .body("")
         .send()
         .map_err(|e| format!("送信失敗: {}", e))?;
     if resp.status().is_success() {

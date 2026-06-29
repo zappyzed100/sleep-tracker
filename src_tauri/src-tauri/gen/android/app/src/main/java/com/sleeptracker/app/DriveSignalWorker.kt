@@ -24,9 +24,12 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret&tag=SCREEN_ON&ts=$ts")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod  = "POST"
+                doOutput       = true
+                setFixedLengthStreamingMode(0)  // Content-Length: 0 (required by GAS)
                 connectTimeout = 15_000
                 readTimeout    = 15_000
             }
+            conn.connect()
             conn.responseCode   // trigger request
             conn.disconnect()
             Result.success()
