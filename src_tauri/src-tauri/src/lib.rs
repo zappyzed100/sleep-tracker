@@ -153,8 +153,117 @@ fn read_text_file(path: String) -> Result<String, String> {
 
 // ── Gist sync ─────────────────────────────────────────────────────────────────
 
+fn gist_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn gist_headers(token: &str) -> reqwest::header::HeaderMap {
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert("Authorization", format!("Bearer {}", token).parse().unwrap());
+    h.insert("Accept", "application/vnd.github+json".parse().unwrap());
+    h.insert("User-Agent", "Sleep-Tracker-Tauri/1.0".parse().unwrap());
+    h
+}
+
+// Pull mobile_event.txt from Gist and merge into sleep_events.txt.
+// Returns a short status message (not an error).
+fn pull_mobile_events_inner() -> String {
+    let cfg = load_config_inner();
+    let (gist_id, token) = match (cfg.gist_id, cfg.github_token) {
+        (Some(g), Some(t)) if !g.is_empty() && !t.is_empty() => (g, t),
+        _ => return "スキップ (設定なし)".into(),
+    };
+
+    let client = match gist_client() {
+        Ok(c) => c,
+        Err(e) => return format!("クライアントエラー: {}", e),
+    };
+
+    let url = format!("https://api.github.com/gists/{}", gist_id);
+    let resp = match client.get(&url).headers(gist_headers(&token)).send() {
+        Ok(r) => r,
+        Err(e) => return format!("取得失敗: {}", e),
+    };
+    if !resp.status().is_success() {
+        return format!("HTTP {}", resp.status().as_u16());
+    }
+
+    let json: serde_json::Value = match resp.json() {
+        Ok(j) => j,
+        Err(e) => return format!("JSON パース失敗: {}", e),
+    };
+
+    let content = json["files"]["mobile_event.txt"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if content.is_empty() || content.starts_with("INIT") {
+        return "モバイルイベントなし".into();
+    }
+
+    // Format: "TAG,TIMESTAMP"  (TIMESTAMP is ms epoch or "YYYY-MM-DD HH:MM:SS")
+    let mut parts = content.splitn(2, ',');
+    let tag = match parts.next() { Some(t) => t.trim(), None => return "不正なフォーマット".into() };
+    let time_raw = match parts.next() { Some(t) => t.trim(), None => return "不正なフォーマット".into() };
+
+    let event_type = match tag {
+        "LEAVE"     => "OUT_START",
+        "ARRIVE"    => "OUT_END",
+        "SCREEN_ON" => "DEVICE_ON",
+        other       => return format!("不明なタグ: {}", other),
+    };
+
+    // Convert ms epoch → "YYYY-MM-DD HH:MM:SS" (local time)
+    let ts = if let Ok(ms) = time_raw.parse::<i64>() {
+        use chrono::{Local, TimeZone};
+        Local.timestamp_millis_opt(ms)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| time_raw.to_string())
+    } else {
+        time_raw.to_string()
+    };
+
+    let new_line = format!("{},{}", ts, event_type);
+
+    // Duplicate check
+    let events_path = data_dir().join("sleep_events.txt");
+    if events_path.exists() {
+        let existing = std::fs::read_to_string(&events_path).unwrap_or_default();
+        if existing.lines().any(|l| l.trim() == new_line.as_str()) {
+            return format!("重複スキップ: {}", new_line);
+        }
+    }
+
+    // Append event
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&events_path) {
+        let _ = writeln!(f, "{}", new_line);
+    } else {
+        return "書き込み失敗".into();
+    }
+
+    // DEVICE_ON → update device_heartbeat.txt
+    if event_type == "DEVICE_ON" {
+        let _ = std::fs::write(data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));
+    }
+
+    // Invalidate session cache so next get_sessions re-parses
+    *SESSION_CACHE.lock().unwrap() = None;
+
+    format!("追加: {}", new_line)
+}
+
 #[tauri::command]
 fn sync_gist() -> Result<String, String> {
+    // 1. Pull mobile events from Gist
+    let pull_msg = pull_mobile_events_inner();
+
+    // 2. Push sleep_events.txt to Gist
     let cfg = load_config_inner();
     let gist_id = cfg.gist_id.ok_or_else(|| "Gist ID が設定されていません".to_string())?;
     let token = cfg.github_token.ok_or_else(|| "GitHub Token が設定されていません".to_string())?;
@@ -167,33 +276,22 @@ fn sync_gist() -> Result<String, String> {
     };
     let line_count = content.lines().count();
 
-    let url = format!("https://api.github.com/gists/{}", gist_id);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())?;
-
     let body = serde_json::json!({
-        "files": {
-            "sleep_events.txt": { "content": content }
-        }
+        "files": { "sleep_events.txt": { "content": content } }
     });
 
-    let resp = client
-        .patch(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Sleep-Tracker-Tauri/1.0")
+    let resp = gist_client()?
+        .patch(format!("https://api.github.com/gists/{}", gist_id))
+        .headers(gist_headers(&token))
         .json(&body)
         .send()
         .map_err(|e| format!("ネットワークエラー: {}", e))?;
 
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {} — アップロード失敗", status.as_u16()));
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} — アップロード失敗", resp.status().as_u16()));
     }
 
-    Ok(format!("同期完了 — {} 行をアップロードしました", line_count))
+    Ok(format!("同期完了 — {} 行アップロード / モバイル: {}", line_count, pull_msg))
 }
 
 // ── Data management ───────────────────────────────────────────────────────────
@@ -503,6 +601,15 @@ pub fn run() {
                 let mtime = events.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
                 *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
             }); });
+
+            // Pull mobile events on startup, then every 5 minutes
+            std::thread::spawn(|| {
+                pull_mobile_events_inner();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(300));
+                    pull_mobile_events_inner();
+                }
+            });
 
             // Start background monitor
             monitor::start(data_dir(), config_path());
