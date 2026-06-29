@@ -34,11 +34,11 @@ interface Props {
 }
 
 export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
-  const ref = useRef<HTMLCanvasElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const touchStartXRef = useRef<number | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Build bar colors based on activeIndex
   function barColors(len: number, active: number | undefined) {
     return Array.from({ length: len }, (_, i) =>
       i === active ? BAR_ACTIVE : BAR_NORMAL
@@ -46,7 +46,7 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
   }
 
   useEffect(() => {
-    if (!ref.current) return;
+    if (!canvasRef.current) return;
     if (chartRef.current) chartRef.current.destroy();
 
     const labels = week.map((d, i) => {
@@ -88,7 +88,7 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
       },
     };
 
-    chartRef.current = new Chart(ref.current, {
+    chartRef.current = new Chart(canvasRef.current, {
       type: "bar",
       plugins: [durationPlugin],
       data: {
@@ -208,24 +208,59 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
     return idx >= 0 && idx < week.length ? idx : null;
   }
 
+  function cancelLongPress() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
+  // Transparent overlay intercepts all touch/click so Chart.js canvas never sees them.
+  // Both tap and long press open the editing screen for the tapped column.
   return (
-    <canvas
-      ref={ref}
-      style={{ width: "100%", height: "100%", cursor: "pointer" }}
-      onClick={(e) => {
-        const idx = hitColumn(e.clientX, e.currentTarget.getBoundingClientRect());
-        if (idx != null) onDayClick(week[idx].date);
-      }}
-      onTouchStart={(e) => { touchStartXRef.current = e.touches[0].clientX; }}
-      onTouchEnd={(e) => {
-        const startX = touchStartXRef.current;
-        touchStartXRef.current = null;
-        if (startX == null) return;
-        const endX = e.changedTouches[0].clientX;
-        if (Math.abs(endX - startX) >= 60) return; // swipe → parent handles
-        const idx = hitColumn(endX, e.currentTarget.getBoundingClientRect());
-        if (idx != null) onDayClick(week[idx].date);
-      }}
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+      <div
+        style={{ position: "absolute", inset: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}
+        onClick={(e) => {
+          // Desktop click
+          const idx = hitColumn(e.clientX, e.currentTarget.getBoundingClientRect());
+          if (idx != null) onDayClick(week[idx].date);
+        }}
+        onTouchStart={(e) => {
+          const touch = e.touches[0];
+          touchStartXRef.current = touch.clientX;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const touchX = touch.clientX;
+          // Long press: fire after 450ms without significant movement
+          longPressTimer.current = setTimeout(() => {
+            longPressTimer.current = null;
+            touchStartXRef.current = null;
+            const idx = hitColumn(touchX, rect);
+            if (idx != null) onDayClick(week[idx].date);
+          }, 450);
+        }}
+        onTouchMove={(e) => {
+          if (touchStartXRef.current == null) return;
+          const dx = Math.abs(e.touches[0].clientX - touchStartXRef.current);
+          if (dx > 10) cancelLongPress(); // moved too far → swipe, not press
+        }}
+        onTouchEnd={(e) => {
+          if (!longPressTimer.current) {
+            // Long press already fired or was cancelled by movement
+            touchStartXRef.current = null;
+            return;
+          }
+          cancelLongPress();
+          const startX = touchStartXRef.current;
+          touchStartXRef.current = null;
+          if (startX == null) return;
+          const endX = e.changedTouches[0].clientX;
+          if (Math.abs(endX - startX) >= 60) return; // swipe → parent handles week nav
+          const idx = hitColumn(endX, e.currentTarget.getBoundingClientRect());
+          if (idx != null) onDayClick(week[idx].date);
+        }}
+      />
+    </div>
   );
 }
