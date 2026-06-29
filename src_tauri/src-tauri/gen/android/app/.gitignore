@@ -3,4 +3,4 @@
 /src/main/assets/
 /tauri.build.gradle.kts
 /proguard-tauri.pro
-/tauri.properties
+# tauri.properties is tracked manually to control versionName/versionCode
