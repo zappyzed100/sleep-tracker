@@ -168,8 +168,54 @@ fn gist_headers(token: &str) -> reqwest::header::HeaderMap {
     h
 }
 
-// Pull mobile_event.txt from Gist and merge into sleep_events.txt.
-// Returns a short status message (not an error).
+// Parse and apply one "TAG,TIMESTAMP" line from mobile_event.txt.
+fn apply_mobile_event_line(line: &str) -> Result<String, String> {
+    let mut parts = line.splitn(2, ',');
+    let tag      = parts.next().ok_or("フォーマット不正")?.trim();
+    let time_raw = parts.next().ok_or("フォーマット不正")?.trim();
+
+    let event_type = match tag {
+        "LEAVE"     => "OUT_START",
+        "ARRIVE"    => "OUT_END",
+        "SCREEN_ON" => "DEVICE_ON",
+        other       => return Err(format!("不明タグ: {}", other)),
+    };
+
+    let ts = if let Ok(ms) = time_raw.parse::<i64>() {
+        use chrono::{Local, TimeZone};
+        Local.timestamp_millis_opt(ms)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| time_raw.to_string())
+    } else {
+        time_raw.to_string()
+    };
+
+    let new_line    = format!("{},{}", ts, event_type);
+    let events_path = data_dir().join("sleep_events.txt");
+
+    if events_path.exists() {
+        let existing = std::fs::read_to_string(&events_path).unwrap_or_default();
+        if existing.lines().any(|l| l.trim() == new_line.as_str()) {
+            return Ok(format!("重複スキップ: {}", new_line));
+        }
+    }
+
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&events_path) {
+        let _ = writeln!(f, "{}", new_line);
+    } else {
+        return Err("書き込み失敗".into());
+    }
+
+    if event_type == "DEVICE_ON" {
+        let _ = std::fs::write(data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));
+    }
+
+    Ok(format!("追加: {}", new_line))
+}
+
+// Pull all lines from mobile_event.txt, merge into sleep_events.txt,
+// then reset mobile_event.txt to "INIT".
 fn pull_mobile_events_inner() -> String {
     let cfg = load_config_inner();
     let (gist_id, token) = match (cfg.gist_id, cfg.github_token) {
@@ -190,72 +236,48 @@ fn pull_mobile_events_inner() -> String {
     if !resp.status().is_success() {
         return format!("HTTP {}", resp.status().as_u16());
     }
-
     let json: serde_json::Value = match resp.json() {
         Ok(j) => j,
         Err(e) => return format!("JSON パース失敗: {}", e),
     };
 
     let content = json["files"]["mobile_event.txt"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+        .as_str().unwrap_or("").trim().to_string();
 
-    if content.is_empty() || content.starts_with("INIT") {
+    if content.is_empty() || content == "INIT" {
         return "モバイルイベントなし".into();
     }
 
-    // Format: "TAG,TIMESTAMP"  (TIMESTAMP is ms epoch or "YYYY-MM-DD HH:MM:SS")
-    let mut parts = content.splitn(2, ',');
-    let tag = match parts.next() { Some(t) => t.trim(), None => return "不正なフォーマット".into() };
-    let time_raw = match parts.next() { Some(t) => t.trim(), None => return "不正なフォーマット".into() };
-
-    let event_type = match tag {
-        "LEAVE"     => "OUT_START",
-        "ARRIVE"    => "OUT_END",
-        "SCREEN_ON" => "DEVICE_ON",
-        other       => return format!("不明なタグ: {}", other),
-    };
-
-    // Convert ms epoch → "YYYY-MM-DD HH:MM:SS" (local time)
-    let ts = if let Ok(ms) = time_raw.parse::<i64>() {
-        use chrono::{Local, TimeZone};
-        Local.timestamp_millis_opt(ms)
-            .single()
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| time_raw.to_string())
-    } else {
-        time_raw.to_string()
-    };
-
-    let new_line = format!("{},{}", ts, event_type);
-
-    // Duplicate check
-    let events_path = data_dir().join("sleep_events.txt");
-    if events_path.exists() {
-        let existing = std::fs::read_to_string(&events_path).unwrap_or_default();
-        if existing.lines().any(|l| l.trim() == new_line.as_str()) {
-            return format!("重複スキップ: {}", new_line);
+    // Process every non-empty, non-INIT line
+    let mut msgs     = Vec::new();
+    let mut new_events = 0usize;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line == "INIT" { continue; }
+        match apply_mobile_event_line(line) {
+            Ok(msg) => {
+                if msg.starts_with("追加") { new_events += 1; }
+                msgs.push(msg);
+            }
+            Err(e) => msgs.push(format!("エラー: {}", e)),
         }
     }
 
-    // Append event
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&events_path) {
-        let _ = writeln!(f, "{}", new_line);
-    } else {
-        return "書き込み失敗".into();
+    if msgs.is_empty() {
+        return "モバイルイベントなし".into();
     }
 
-    // DEVICE_ON → update device_heartbeat.txt
-    if event_type == "DEVICE_ON" {
-        let _ = std::fs::write(data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));
+    // Reset mobile_event.txt to "INIT" so processed events are not re-read
+    let reset = serde_json::json!({
+        "files": { "mobile_event.txt": { "content": "INIT" } }
+    });
+    let _ = client.patch(&url).headers(gist_headers(&token)).json(&reset).send();
+
+    if new_events > 0 {
+        *SESSION_CACHE.lock().unwrap() = None;
     }
 
-    // Invalidate session cache so next get_sessions re-parses
-    *SESSION_CACHE.lock().unwrap() = None;
-
-    format!("追加: {}", new_line)
+    format!("{} 件処理: {}", msgs.len(), msgs.join(" / "))
 }
 
 #[tauri::command]
