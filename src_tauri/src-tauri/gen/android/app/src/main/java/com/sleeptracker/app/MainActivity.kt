@@ -78,19 +78,23 @@ class MainActivity : TauriActivity() {
       }
     })
 
-    // Background Drive signal every 15 minutes (Android WorkManager minimum interval)
-    val workRequest = PeriodicWorkRequestBuilder<DriveSignalWorker>(15, TimeUnit.MINUTES)
-      .setConstraints(
-        Constraints.Builder()
-          .setRequiredNetworkType(NetworkType.CONNECTED)
-          .build()
+    // Initialize WorkManager on a background thread — first call creates Room DB (disk I/O)
+    // and blocks the main thread for several seconds if called here directly.
+    val appCtx = applicationContext
+    Thread {
+      val workRequest = PeriodicWorkRequestBuilder<DriveSignalWorker>(15, TimeUnit.MINUTES)
+        .setConstraints(
+          Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        )
+        .build()
+      WorkManager.getInstance(appCtx).enqueueUniquePeriodicWork(
+        "drive_signal",
+        ExistingPeriodicWorkPolicy.KEEP,
+        workRequest
       )
-      .build()
-    WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-      "drive_signal",
-      ExistingPeriodicWorkPolicy.KEEP,
-      workRequest
-    )
+    }.start()
   }
 
   override fun onPause() {
