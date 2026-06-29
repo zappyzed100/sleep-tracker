@@ -222,7 +222,7 @@ fn create_desktop_shortcut() -> Result<(), String> {
     let work_dir = exe.parent().unwrap_or(exe.as_path());
 
     // Resolve Desktop folder — handles OneDrive redirection and locale variations
-    let desktop = desktop_path().ok_or("デスクトップフォルダが見つかりません")?;
+    let desktop = desktop_path()?;
     let lnk = desktop.join("睡眠トラッカー.lnk");
 
     let mut sl = mslnk::ShellLink::new(&exe).map_err(|e| e.to_string())?;
@@ -231,22 +231,26 @@ fn create_desktop_shortcut() -> Result<(), String> {
     sl.create_lnk(&lnk).map_err(|e| e.to_string())
 }
 
-fn desktop_path() -> Option<PathBuf> {
-    // Prefer OneDrive Desktop when folder redirection is active
-    for var in &["OneDriveConsumer", "OneDrive", "OneDriveCommercial"] {
-        if let Ok(p) = std::env::var(var) {
-            let d = PathBuf::from(p).join("Desktop");
-            if d.exists() { return Some(d); }
+fn desktop_path() -> Result<PathBuf, String> {
+    use winreg::{RegKey, enums::*};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    // "Shell Folders" contains already-expanded paths (most reliable)
+    if let Ok(key) = hkcu.open_subkey(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
+    ) {
+        if let Ok(path) = key.get_value::<String, _>("Desktop") {
+            let p = PathBuf::from(&path);
+            if p.exists() { return Ok(p); }
         }
     }
+    // Fallback: derive from USERPROFILE
     if let Ok(profile) = std::env::var("USERPROFILE") {
-        let d = PathBuf::from(&profile).join("Desktop");
-        if d.exists() { return Some(d); }
-        // Japanese Windows
-        let d = PathBuf::from(&profile).join("デスクトップ");
-        if d.exists() { return Some(d); }
+        for name in &["Desktop", "デスクトップ"] {
+            let p = PathBuf::from(&profile).join(name);
+            if p.exists() { return Ok(p); }
+        }
     }
-    None
+    Err("デスクトップフォルダが見つかりません".into())
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────
