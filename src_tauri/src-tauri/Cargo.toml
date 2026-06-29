@@ -27,4 +27,5 @@ smartcore = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 winreg = "0.52"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+mslnk = "0.1"
 

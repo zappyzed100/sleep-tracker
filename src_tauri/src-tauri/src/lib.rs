@@ -219,43 +219,34 @@ fn clear_all_data() -> Result<(), String> {
 #[tauri::command]
 fn create_desktop_shortcut() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_str  = exe.to_string_lossy().replace('\'', "''");
-    let work_dir = exe.parent()
-        .unwrap_or(exe.as_path())
-        .to_string_lossy()
-        .replace('\'', "''");
+    let work_dir = exe.parent().unwrap_or(exe.as_path());
 
-    let script = format!(
-        "$ws  = New-Object -ComObject WScript.Shell\n\
-         $lnk = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\\睡眠トラッカー.lnk')\n\
-         $lnk.TargetPath       = '{}'\n\
-         $lnk.WorkingDirectory = '{}'\n\
-         $lnk.Description      = '睡眠トラッカー'\n\
-         $lnk.Save()\n",
-        exe_str, work_dir
-    );
+    // Resolve Desktop folder — handles OneDrive redirection and locale variations
+    let desktop = desktop_path().ok_or("デスクトップフォルダが見つかりません")?;
+    let lnk = desktop.join("睡眠トラッカー.lnk");
 
-    // Write UTF-16LE with BOM (PowerShell on Windows 5.1 reads this reliably)
-    let tmp = std::env::temp_dir().join("st_shortcut.ps1");
-    let utf16: Vec<u8> = std::iter::once(0xFFFEu16)
-        .chain(script.encode_utf16())
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
-    std::fs::write(&tmp, &utf16).map_err(|e| e.to_string())?;
+    let mut sl = mslnk::ShellLink::new(&exe).map_err(|e| e.to_string())?;
+    sl.set_working_dir(Some(work_dir.to_string_lossy().into_owned()));
+    sl.set_name(Some("睡眠トラッカー".into()));
+    sl.create_lnk(&lnk).map_err(|e| e.to_string())
+}
 
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-               "-File", tmp.to_str().unwrap_or("")])
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    let _ = std::fs::remove_file(&tmp);
-
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!("失敗: {}", String::from_utf8_lossy(&out.stderr).trim()))
+fn desktop_path() -> Option<PathBuf> {
+    // Prefer OneDrive Desktop when folder redirection is active
+    for var in &["OneDriveConsumer", "OneDrive", "OneDriveCommercial"] {
+        if let Ok(p) = std::env::var(var) {
+            let d = PathBuf::from(p).join("Desktop");
+            if d.exists() { return Some(d); }
+        }
     }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        let d = PathBuf::from(&profile).join("Desktop");
+        if d.exists() { return Some(d); }
+        // Japanese Windows
+        let d = PathBuf::from(&profile).join("デスクトップ");
+        if d.exists() { return Some(d); }
+    }
+    None
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────
