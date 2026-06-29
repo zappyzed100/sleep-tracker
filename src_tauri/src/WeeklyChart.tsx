@@ -246,8 +246,10 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
           if (dx > 10) cancelLongPress(); // moved too far → swipe, not press
         }}
         onTouchEnd={(e) => {
+          // Prevent the browser's synthetic click event that fires after touchend.
+          // Without this, the click lands on DayDetail's backdrop and closes it immediately.
+          e.preventDefault();
           if (!longPressTimer.current) {
-            // Long press already fired or was cancelled by movement
             touchStartXRef.current = null;
             return;
           }
@@ -256,7 +258,7 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
           touchStartXRef.current = null;
           if (startX == null) return;
           const endX = e.changedTouches[0].clientX;
-          if (Math.abs(endX - startX) >= 60) return; // swipe → parent handles week nav
+          if (Math.abs(endX - startX) >= 60) return;
           const idx = hitColumn(endX, e.currentTarget.getBoundingClientRect());
           if (idx != null) onDayClick(week[idx].date);
         }}

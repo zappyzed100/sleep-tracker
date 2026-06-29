@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import WeeklyChart from "./WeeklyChart";
@@ -58,8 +58,7 @@ export default function App() {
   const loadSessions = useCallback(async () => {
     try {
       const data = await invoke<Session[]>("get_sessions");
-      setSessions(data);
-      setError(null);
+      startTransition(() => { setSessions(data); setError(null); });
     } catch (e) {
       setError(String(e));
     }
@@ -76,10 +75,10 @@ export default function App() {
       // Throttle: skip if fetched within the last 5 minutes (unless forced)
       if (!force && now - lastFetch < 5 * 60 * 1000) return;
       lastFetch = now;
-      // Show local data immediately, update from cloud in background
+      // Show local data immediately, update from cloud as low-priority background task
       loadSessions();
       invoke<Session[]>("fetch_from_cloud")
-        .then(data => { setSessions(data); setError(null); })
+        .then(data => startTransition(() => { setSessions(data); setError(null); }))
         .catch(() => {});
       invoke("fetch_settings_from_cloud").catch(() => {});
     };
