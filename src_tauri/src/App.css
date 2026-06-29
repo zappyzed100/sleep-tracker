@@ -1018,16 +1018,12 @@ body {
   padding: 4px 0;
 }
 
-/* ── Monitor bar ── */
-.monitor-bar {
+/* ── Monitor (inline in topbar) ── */
+.monitor-inline {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 20px;
-  background: var(--crust);
-  border-bottom: 1px solid var(--surface0);
-  flex-shrink: 0;
-  font-size: 13px;
+  gap: 8px;
+  margin-left: 20px;
 }
 
 .monitor-dot {
@@ -1059,3 +1055,44 @@ body {
 }
 
 .monitor-toggle-btn:hover { background: var(--surface0); color: var(--text); }
+
+/* ── Confirm delete modal ── */
+.confirm-modal {
+  width: 380px;
+  padding: 32px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+}
+
+.confirm-modal-icon {
+  font-size: 42px;
+  line-height: 1;
+}
+
+.confirm-modal-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.confirm-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+  color: var(--subtext);
+}
+
+.confirm-modal-warn {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.confirm-modal-btns {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}

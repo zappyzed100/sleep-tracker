@@ -12,25 +12,6 @@ import "./App.css";
 
 const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
 
-const USE_DUMMY = false;
-
-function makeDummy(): Session[] {
-  const result: Session[] = [];
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-  for (let i = 30; i >= 1; i--) {
-    const bedH = 22 + Math.random() * 2;
-    const durH = 6.5 + Math.random() * 2;
-    const bed = new Date(now);
-    bed.setDate(bed.getDate() - i);
-    bed.setHours(Math.floor(bedH), Math.round((bedH % 1) * 60), 0, 0);
-    const wake = new Date(bed.getTime() + durH * 3600_000);
-    result.push({ start: fmt(bed), end: fmt(wake), duration: durH, type: "IDLE" });
-  }
-  return result;
-}
 
 function fmtDateRange(base: Date): string {
   const s = weekStart(base);
@@ -54,7 +35,6 @@ export default function App() {
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
 
   const loadSessions = useCallback(async () => {
-    if (USE_DUMMY) { setSessions(makeDummy()); return; }
     try {
       const data = await invoke<Session[]>("get_sessions");
       setSessions(data);
@@ -67,7 +47,6 @@ export default function App() {
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
   const pollMonitor = useCallback(async () => {
-    if (USE_DUMMY) return;
     try {
       const s = await invoke<string>("get_monitor_status");
       setMonitorStatus(s as MonitorStatus);
@@ -84,7 +63,11 @@ export default function App() {
     const shouldPause = monitorStatus === "active";
     try {
       await invoke("set_monitor_paused", { paused: shouldPause });
-      setMonitorStatus(shouldPause ? "paused" : "active");
+      if (shouldPause) {
+        setMonitorStatus("paused");
+      } else {
+        await pollMonitor();
+      }
     } catch (e) {
       console.error(e);
     }
@@ -109,26 +92,23 @@ export default function App() {
           <button className={tab === "home" ? "tab active" : "tab"} onClick={() => setTab("home")}>ホーム</button>
           <button className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>設定</button>
         </div>
+        <div className="monitor-inline">
+          <span className={`monitor-dot monitor-dot-${monitorStatus}`} />
+          <span className="monitor-label">
+            {monitorStatus === "active" && "検知中"}
+            {monitorStatus === "paused" && "検知中断中"}
+            {monitorStatus === "inactive" && "停止中"}
+          </span>
+          <button className="monitor-toggle-btn" onClick={toggleMonitorPause}>
+            {monitorStatus === "active" ? "中断する" : "再開する"}
+          </button>
+        </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
       {tab === "home" && (
         <>
-          <div className="monitor-bar">
-            <span className={`monitor-dot monitor-dot-${monitorStatus}`} />
-            <span className="monitor-label">
-              {monitorStatus === "active" && "検知中"}
-              {monitorStatus === "paused" && "検知中断中"}
-              {monitorStatus === "inactive" && "停止中"}
-            </span>
-            {(monitorStatus === "active" || monitorStatus === "paused") && (
-              <button className="monitor-toggle-btn" onClick={toggleMonitorPause}>
-                {monitorStatus === "active" ? "中断する" : "再開する"}
-              </button>
-            )}
-          </div>
-
           <PredictionCard sessions={sessions} />
           <StatsCard sessions={sessions} />
 
@@ -172,7 +152,7 @@ export default function App() {
         </>
       )}
 
-      {tab === "settings" && <Settings sessions={sessions} />}
+      {tab === "settings" && <Settings sessions={sessions} onRefresh={loadSessions} />}
     </div>
   );
 }

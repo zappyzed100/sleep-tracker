@@ -3,6 +3,25 @@ import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { Session } from "./types";
 
+function ConfirmDeleteModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal-card confirm-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="confirm-modal-icon">⚠️</div>
+        <div className="confirm-modal-title">全データを削除しますか？</div>
+        <div className="confirm-modal-body">
+          <p>記録されている全ての睡眠データが削除されます。</p>
+          <p className="confirm-modal-warn">この操作は元に戻せません。</p>
+        </div>
+        <div className="confirm-modal-btns">
+          <button className="settings-btn" onClick={onCancel}>キャンセル</button>
+          <button className="settings-btn settings-btn-danger" onClick={onConfirm}>削除する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface AppConfig {
   gist_id: string | null;
   github_token: string | null;
@@ -25,9 +44,10 @@ function Section({ title, children }: SectionProps) {
 
 interface Props {
   sessions: Session[];
+  onRefresh?: () => void;
 }
 
-export default function Settings({ sessions }: Props) {
+export default function Settings({ sessions, onRefresh }: Props) {
   // Config state
   const [gistId, setGistId] = useState("");
   const [token, setToken] = useState("");
@@ -44,6 +64,7 @@ export default function Settings({ sessions }: Props) {
 
   // CSV / data
   const [csvMsg, setCsvMsg] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Gist sync
   const [syncing, setSyncing] = useState(false);
@@ -112,14 +133,12 @@ export default function Settings({ sessions }: Props) {
     }
   }
 
-  async function handleClearAll() {
-    const ok = window.confirm(
-      "全ての睡眠データを削除します。この操作は元に戻せません。\n本当に削除しますか？"
-    );
-    if (!ok) return;
+  async function execClearAll() {
+    setShowDeleteConfirm(false);
     try {
       await invoke("clear_all_data");
-      setCsvMsg("全データを削除しました。アプリを再起動すると反映されます。");
+      setCsvMsg("全データを削除しました。");
+      onRefresh?.();
     } catch (e) {
       setCsvMsg(`エラー: ${e}`);
     }
@@ -150,17 +169,37 @@ export default function Settings({ sessions }: Props) {
     }
   }
 
-  async function handleImportCsv() {
+  async function handleBackup() {
     setCsvMsg(null);
     try {
+      const content = await invoke<string>("get_events_content");
+      const defaultName = `sleep_backup_${new Date().toISOString().slice(0, 10)}.txt`;
+      const path = await save({
+        filters: [{ name: "テキスト", extensions: ["txt"] }],
+        defaultPath: defaultName,
+      });
+      if (!path) return;
+      await invoke("write_csv_file", { path, content });
+      setCsvMsg(`バックアップを保存しました → ${path}`);
+    } catch (e) {
+      setCsvMsg(`エラー: ${e}`);
+    }
+  }
+
+  async function handleRestore() {
+    setCsvMsg(null);
+    const ok = window.confirm("現在のデータをバックアップファイルで上書きします。\n本当に復元しますか？");
+    if (!ok) return;
+    try {
       const path = await open({
-        filters: [{ name: "CSV", extensions: ["csv"] }],
+        filters: [{ name: "テキスト", extensions: ["txt"] }],
         multiple: false,
       });
       if (!path) return;
-      const text = await invoke<string>("read_text_file", { path });
-      const count = await invoke<number>("import_csv", { csv: text });
-      setCsvMsg(`${count} 件をインポートしました（アプリを再起動すると反映されます）`);
+      const content = await invoke<string>("read_text_file", { path });
+      await invoke("restore_events", { content });
+      setCsvMsg("バックアップから復元しました。");
+      onRefresh?.();
     } catch (e) {
       setCsvMsg(`エラー: ${e}`);
     }
@@ -274,18 +313,31 @@ export default function Settings({ sessions }: Props) {
           <button className="settings-btn" onClick={handleExportCsv}>
             CSV エクスポート
           </button>
-          <button className="settings-btn" onClick={handleImportCsv}>
-            CSV インポート
+        </div>
+        <div className="settings-note">Excel等で分析用。就寝・起床・睡眠時間・種別の4列。</div>
+        <div className="settings-btn-row" style={{ marginTop: 8 }}>
+          <button className="settings-btn" onClick={handleBackup}>
+            バックアップ
+          </button>
+          <button className="settings-btn" onClick={handleRestore}>
+            バックアップから復元
           </button>
         </div>
-        <div className="settings-btn-row">
-          <button className="settings-btn settings-btn-danger" onClick={handleClearAll}>
+        <div className="settings-note">生データをそのまま保存・復元。別PCへの移行や完全バックアップに。</div>
+        <div className="settings-btn-row" style={{ marginTop: 8 }}>
+          <button className="settings-btn settings-btn-danger" onClick={() => setShowDeleteConfirm(true)}>
             全データを削除
           </button>
         </div>
         {csvMsg && <div className="settings-csv-msg">{csvMsg}</div>}
       </Section>
 
+      {showDeleteConfirm && (
+        <ConfirmDeleteModal
+          onConfirm={execClearAll}
+          onCancel={() => setShowDeleteConfirm(false)}
+        />
+      )}
     </div>
   );
 }

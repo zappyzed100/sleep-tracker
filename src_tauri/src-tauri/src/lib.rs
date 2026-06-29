@@ -190,6 +190,18 @@ fn sync_gist() -> Result<String, String> {
 // ── Data management ───────────────────────────────────────────────────────────
 
 #[tauri::command]
+fn get_events_content() -> Result<String, String> {
+    let path = data_dir().join("sleep_events.txt");
+    if !path.exists() { return Ok(String::new()); }
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restore_events(content: String) -> Result<(), String> {
+    std::fs::write(data_dir().join("sleep_events.txt"), content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn clear_all_data() -> Result<(), String> {
     let path = data_dir().join("sleep_events.txt");
     std::fs::write(&path, "").map_err(|e| e.to_string())
@@ -362,6 +374,7 @@ pub fn run() {
             get_config, save_config, test_github_connection,
             get_startup_enabled, set_startup,
             export_csv, write_csv_file, import_csv,
+            get_events_content, restore_events,
             read_text_file, sync_gist, clear_all_data, create_desktop_shortcut,
             get_monitor_status, set_monitor_paused,
         ])
