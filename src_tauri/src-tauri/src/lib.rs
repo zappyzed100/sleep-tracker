@@ -1,4 +1,5 @@
 mod prediction;
+mod monitor;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -368,6 +369,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|_app| {
+            monitor::start(data_dir(), config_path());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
             add_session, delete_session,
