@@ -29,6 +29,8 @@ class MainActivity : TauriActivity() {
   private val uiHandler = Handler(Looper.getMainLooper())
   private var hideRunnable: Runnable? = null
   private var pauseTime: Long = Long.MAX_VALUE
+  private var overlayShownAt: Long = 0L
+  private val FIRST_LAUNCH_MIN_MS = 5000L
 
   private fun dp(value: Int): Int =
     TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
@@ -37,13 +39,18 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun setTab(tab: String) { currentTab = tab }
 
-    // Called from JS when React has finished mounting — dismisses the startup overlay.
+    // Called from JS when React has finished mounting.
+    // First launch: waits until FIRST_LAUNCH_MIN_MS has elapsed before dismissing.
+    // Deep sleep resume: dismisses immediately (postVisualStateCallback is primary signal).
     @JavascriptInterface
     fun notifyReady() {
-      uiHandler.post {
+      val elapsed = SystemClock.elapsedRealtime() - overlayShownAt
+      val isFirst = pauseTime == Long.MAX_VALUE
+      val delay = if (isFirst) maxOf(0L, FIRST_LAUNCH_MIN_MS - elapsed) else 0L
+      uiHandler.postDelayed({
         hideRunnable?.let { uiHandler.removeCallbacks(it) }
         overlay?.visibility = View.GONE
-      }
+      }, delay)
     }
   }
 
@@ -120,6 +127,7 @@ class MainActivity : TauriActivity() {
   private fun showResumeOverlay(isFirstLaunch: Boolean = false) {
     val ov = overlay ?: return
     ov.visibility = View.VISIBLE
+    overlayShownAt = SystemClock.elapsedRealtime()
     hideRunnable?.let { uiHandler.removeCallbacks(it) }
     if (!isFirstLaunch) {
       // Deep sleep resume: hide when WebView repaints its first frame
@@ -132,7 +140,7 @@ class MainActivity : TauriActivity() {
         })
       }
     }
-    // First launch: JS calls notifyReady() when React mounts (up to 8s fallback).
+    // First launch: notifyReady() enforces FIRST_LAUNCH_MIN_MS minimum; 8s absolute fallback.
     // Deep sleep resume: postVisualStateCallback fires quickly; 2s is the fallback.
     val timeout = if (isFirstLaunch) 8000L else 2000L
     val runnable = Runnable { ov.visibility = View.GONE }

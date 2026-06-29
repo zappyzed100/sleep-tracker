@@ -239,14 +239,25 @@ fn apply_mobile_event_line(line: &str) -> Result<String, String> {
     let new_line    = format!("{},{}", ts, event_type);
     let events_path = data_dir().join("sleep_events.txt");
 
-    if events_path.exists() {
-        let existing = std::fs::read_to_string(&events_path).unwrap_or_default();
-        if existing.lines().any(|l| l.trim() == new_line.as_str()) {
-            return Ok(format!("重複スキップ: {}", new_line));
+    let existing = if events_path.exists() {
+        std::fs::read_to_string(&events_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    if existing.lines().any(|l| l.trim() == new_line.as_str()) {
+        return Ok(format!("重複スキップ: {}", new_line));
+    }
+
+    // Tablet activity while marked as out → insert IN_HOUSE to cancel the out-state.
+    // is_out_from_content returns false once IN_HOUSE is in the file, so only one is inserted.
+    if event_type == "DEVICE_ON" && is_out_from_content(&existing) {
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&events_path) {
+            let _ = writeln!(f, "{},IN_HOUSE", ts);
         }
     }
 
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&events_path) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&events_path) {
         let _ = writeln!(f, "{}", new_line);
     } else {
         return Err("書き込み失敗".into());
@@ -387,6 +398,21 @@ fn sync_gist() -> Result<String, String> {
 }
 
 // ── Data management ───────────────────────────────────────────────────────────
+
+// Returns true if the last OUT_START in the file has no matching OUT_END / IN_HOUSE.
+fn is_out_from_content(content: &str) -> bool {
+    let mut out = false;
+    for line in content.lines() {
+        if let Some(c) = line.trim().find(',') {
+            match &line.trim()[c + 1..] {
+                "OUT_START" => out = true,
+                "OUT_END" | "IN_HOUSE" => out = false,
+                _ => {}
+            }
+        }
+    }
+    out
+}
 
 fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -661,6 +687,9 @@ fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     for i in 0..n {
         let (ep, ts, ty) = (evs[i].epoch, evs[i].ts.as_str(), evs[i].ty.as_str());
 
+        // IN_HOUSE: tablet/PC activity while marked as out → cancel out-state
+        if ty == "IN_HOUSE" { is_out = false; continue; }
+
         if ty == "DEVICE_ON" {
             if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
             continue;
@@ -671,6 +700,10 @@ fn parse_sessions_rust() -> Result<Vec<Session>, String> {
             continue;
         }
         if ty == "OUT_END" { is_out = false; continue; }
+
+        // IDLE_START means the user had PC input until this timestamp → they are home.
+        // Clears a stale is_out caused by an unmatched OUT_START.
+        if ty == "IDLE_START" && is_out { is_out = false; }
 
         if !sleeping {
             if !is_out && matches!(ty, "IDLE_START" | "SUSPEND" | "SHUTDOWN") {

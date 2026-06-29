@@ -149,6 +149,30 @@ fn write_heartbeat(path: &PathBuf, idle_ms_val: u64) {
 
 
 
+// ── Out-state helpers ─────────────────────────────────────────────────────────
+
+fn is_currently_out(events_path: &PathBuf) -> bool {
+    let Ok(content) = fs::read_to_string(events_path) else { return false };
+    let mut out = false;
+    for line in content.lines() {
+        if let Some(c) = line.trim().find(',') {
+            match &line.trim()[c + 1..] {
+                "OUT_START" => out = true,
+                "OUT_END" | "IN_HOUSE" => out = false,
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+// Write IN_HOUSE at ts if the user is currently marked as out.
+fn maybe_in_house(events_path: &PathBuf, ts: &str) {
+    if is_currently_out(events_path) {
+        append_event(events_path, ts, "IN_HOUSE");
+    }
+}
+
 // ── Monitor loop ──────────────────────────────────────────────────────────────
 
 pub fn start(data_dir: PathBuf) {
@@ -169,6 +193,7 @@ fn run(data_dir: PathBuf) {
     // Must be < any realistic threshold to prevent start/resume oscillation.
     const WAKE_SECS: u64 = 60;
 
+    maybe_in_house(&events_path, &now_str());
     append_event(&events_path, &now_str(), "STARTUP");
 
     let mut sleeping              = false;
@@ -199,6 +224,7 @@ fn run(data_dir: PathBuf) {
         if actual_elapsed > POLL + Duration::from_secs(60) {
             // System resumed from suspend
             if sleeping {
+                maybe_in_house(&events_path, &now_str());
                 append_event(&events_path, &now_str(), "RESUME");
                 sleeping = false;
             } else {
@@ -239,9 +265,12 @@ fn run(data_dir: PathBuf) {
         // ── State machine ─────────────────────────────────────────────────────
         if !sleeping && idle >= threshold {
             let start_ts = ago_str(idle);
+            // start_ts = last input time; user was at PC then → cancels any stale out-state
+            maybe_in_house(&events_path, &start_ts);
             append_event(&events_path, &start_ts, "IDLE_START");
             sleeping = true;
         } else if sleeping && idle < WAKE_SECS {
+            maybe_in_house(&events_path, &now_str());
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             sleeping = false;
         }
