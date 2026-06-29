@@ -200,18 +200,24 @@ export default function DayDetail({ date, sessions, onClose, onRefresh }: Props)
 
             {addOpen && (
               <div className="modal-add-form">
-                <div className="modal-add-row">
-                  <span className="modal-add-label">入眠</span>
-                  <DatePicker value={startDate} onChange={setStartDate} />
-                  <SpinField value={startHH} options={HOUR_OPTS} unit="時" onChange={setStartHH} />
-                  <SpinField value={startMM} options={MIN_OPTS}  unit="分" onChange={setStartMM} />
+                <div className="modal-add-block">
+                  <div className="modal-add-block-label sleep-label">🌙 入眠</div>
+                  <div className="modal-add-block-pickers">
+                    <DatePicker value={startDate} onChange={setStartDate} />
+                    <div className="modal-time-divider" />
+                    <SpinField value={startHH} options={HOUR_OPTS} unit="時" onChange={setStartHH} />
+                    <SpinField value={startMM} options={MIN_OPTS}  unit="分" onChange={setStartMM} />
+                  </div>
                 </div>
 
-                <div className="modal-add-row">
-                  <span className="modal-add-label">起床</span>
-                  <DatePicker value={endDate} onChange={setEndDate} />
-                  <SpinField value={endHH} options={HOUR_OPTS} unit="時" onChange={setEndHH} />
-                  <SpinField value={endMM} options={MIN_OPTS}  unit="分" onChange={setEndMM} />
+                <div className="modal-add-block">
+                  <div className="modal-add-block-label wake-label">☀️ 起床</div>
+                  <div className="modal-add-block-pickers">
+                    <DatePicker value={endDate} onChange={setEndDate} />
+                    <div className="modal-time-divider" />
+                    <SpinField value={endHH} options={HOUR_OPTS} unit="時" onChange={setEndHH} />
+                    <SpinField value={endMM} options={MIN_OPTS}  unit="分" onChange={setEndMM} />
+                  </div>
                 </div>
 
                 <button className="modal-add-btn" onClick={handleAdd}>追加する</button>

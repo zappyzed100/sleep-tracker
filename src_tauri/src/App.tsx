@@ -72,11 +72,12 @@ export default function App() {
   useEffect(() => {
     const handler = (e: WheelEvent) => {
       if (tab !== "home") return;
+      if (selectedDay !== null) return;
       setWeekBase((prev) => addDays(prev, e.deltaY > 0 ? 7 : -7));
     };
     window.addEventListener("wheel", handler, { passive: true });
     return () => window.removeEventListener("wheel", handler);
-  }, [tab]);
+  }, [tab, selectedDay]);
 
   const week = buildWeek(sessions, weekBase);
 

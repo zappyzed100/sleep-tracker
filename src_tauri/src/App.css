@@ -451,29 +451,43 @@ body {
 .modal-add-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   margin-top: 12px;
-  padding: 14px;
-  background: var(--surface0);
-  border-radius: 8px;
 }
 
-.modal-add-row {
+.modal-add-block {
+  background: var(--surface0);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-add-block-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  border-radius: 20px;
+  align-self: flex-start;
+}
+.sleep-label { background: rgba(137,180,250,0.15); color: var(--blue); }
+.wake-label  { background: rgba(249,226,175,0.15); color: var(--yellow); }
+
+.modal-add-block-pickers {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
+  flex-wrap: wrap;
 }
 
-.modal-add-label {
-  font-size: 14px;
-  color: var(--subtext);
-  width: 36px;
+.modal-time-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--surface2);
+  margin: 0 4px;
   flex-shrink: 0;
-}
-
-.modal-add-unit {
-  font-size: 13px;
-  color: var(--subtext);
 }
 
 .date-picker {
@@ -490,20 +504,23 @@ body {
 .spin-value {
   background: var(--surface1);
   border: 1px solid var(--surface2);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--text);
-  font-size: 13px;
-  padding: 4px 7px;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 6px 11px;
   cursor: pointer;
   font-family: inherit;
   white-space: nowrap;
+  transition: background 0.1s, border-color 0.1s;
 }
-.spin-value:hover { background: var(--surface2); }
+.spin-value:hover { background: var(--surface2); border-color: var(--blue); }
 
 .spin-unit {
   color: var(--subtext);
-  font-size: 11px;
-  margin-left: 1px;
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 2px;
 }
 
 .spin-list {
@@ -542,17 +559,18 @@ body {
 }
 
 .modal-add-btn {
-  align-self: flex-end;
   background: var(--green);
   color: var(--crust);
   border: none;
-  border-radius: 6px;
-  padding: 7px 20px;
+  border-radius: 8px;
+  padding: 10px 0;
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   font-family: inherit;
+  width: 100%;
   margin-top: 4px;
+  letter-spacing: 0.03em;
 }
 
 .modal-add-btn:hover { filter: brightness(1.1); }
