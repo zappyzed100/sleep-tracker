@@ -56,7 +56,7 @@ export default function App() {
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
-  // Android: fetch from Drive on mount, then every 30 min
+  // Android: fetch from Drive on mount, every 30 min, and on screen ON / app foreground
   useEffect(() => {
     if (!isMobile) return;
     const doFetch = async () => {
@@ -70,7 +70,12 @@ export default function App() {
     };
     doFetch();
     const id = setInterval(doFetch, 30 * 60 * 1000);
-    return () => clearInterval(id);
+    const onVisible = () => { if (document.visibilityState === "visible") doFetch(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [isMobile, loadSessions]);
 
   // Android: send SCREEN_ON every 5 min (if enabled)
