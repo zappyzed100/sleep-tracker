@@ -1,4 +1,5 @@
 mod prediction;
+#[cfg(not(mobile))]
 mod monitor;
 
 use std::fs::OpenOptions;
@@ -9,11 +10,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // Shared threshold: updated instantly by save_config, read by monitor thread.
 pub static THRESHOLD_SECS: AtomicU64 = AtomicU64::new(3600);
 
+// On Android, set to app_data_dir() during setup().
+static APP_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(not(mobile))]
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
+#[cfg(mobile)]
+use tauri::{Manager, WindowEvent};
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -23,10 +30,6 @@ pub struct AppConfig {
     pub mobile_url: Option<String>,
     pub mobile_secret: Option<String>,
     pub target_wake_time: Option<String>,
-}
-
-fn config_path() -> PathBuf {
-    repo_root().join("config.json")
 }
 
 fn load_config_inner() -> AppConfig {
@@ -64,33 +67,43 @@ fn save_config(
 }
 
 
-// ── Startup / shortcuts ───────────────────────────────────────────────────────
+// ── Startup / shortcuts (Windows-only) ───────────────────────────────────────
 
+#[cfg(windows)]
 const STARTUP_REG_VALUE: &str = "SleepTracker";
 
 #[tauri::command]
 fn get_startup_enabled() -> bool {
-    use winreg::{RegKey, enums::*};
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
-        .and_then(|key| key.get_value::<String, _>(STARTUP_REG_VALUE))
-        .is_ok()
+    #[cfg(windows)] {
+        use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        return hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
+            .and_then(|key| key.get_value::<String, _>(STARTUP_REG_VALUE))
+            .is_ok();
+    }
+    #[allow(unreachable_code)]
+    false
 }
 
 #[tauri::command]
 fn set_startup(enable: bool) -> Result<(), String> {
-    use winreg::{RegKey, enums::*};
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let run = hkcu
-        .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_WRITE)
-        .map_err(|e| e.to_string())?;
-    if enable {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        run.set_value(STARTUP_REG_VALUE, &exe.to_string_lossy().as_ref())
-            .map_err(|e| e.to_string())
-    } else {
-        run.delete_value(STARTUP_REG_VALUE).or(Ok(()))
+    let _ = enable;
+    #[cfg(windows)] {
+        use winreg::{RegKey, enums::{HKEY_CURRENT_USER, KEY_WRITE}};
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let run = hkcu
+            .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_WRITE)
+            .map_err(|e| e.to_string())?;
+        return if enable {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            run.set_value(STARTUP_REG_VALUE, &exe.to_string_lossy().as_ref())
+                .map_err(|e| e.to_string())
+        } else {
+            run.delete_value(STARTUP_REG_VALUE).or(Ok(()))
+        };
     }
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 // ── Monitor status ────────────────────────────────────────────────────────────
@@ -372,23 +385,24 @@ fn clear_all_data() -> Result<(), String> {
 
 #[tauri::command]
 fn create_desktop_shortcut() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let work_dir = exe.parent().unwrap_or(exe.as_path());
-
-    // Resolve Desktop folder — handles OneDrive redirection and locale variations
-    let desktop = desktop_path()?;
-    let lnk = desktop.join("睡眠トラッカー.lnk");
-
-    let mut sl = mslnk::ShellLink::new(&exe).map_err(|e| e.to_string())?;
-    sl.set_working_dir(Some(work_dir.to_string_lossy().into_owned()));
-    sl.set_name(Some("睡眠トラッカー".into()));
-    sl.create_lnk(&lnk).map_err(|e| e.to_string())
+    #[cfg(windows)] {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let work_dir = exe.parent().unwrap_or(exe.as_path());
+        let desktop = desktop_path()?;
+        let lnk = desktop.join("睡眠トラッカー.lnk");
+        let mut sl = mslnk::ShellLink::new(&exe).map_err(|e| e.to_string())?;
+        sl.set_working_dir(Some(work_dir.to_string_lossy().into_owned()));
+        sl.set_name(Some("睡眠トラッカー".into()));
+        return sl.create_lnk(&lnk).map_err(|e| e.to_string());
+    }
+    #[allow(unreachable_code)]
+    Err("デスクトップショートカットは Windows のみサポートしています".into())
 }
 
+#[cfg(windows)]
 fn desktop_path() -> Result<PathBuf, String> {
-    use winreg::{RegKey, enums::*};
+    use winreg::{RegKey, enums::HKEY_CURRENT_USER};
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    // "Shell Folders" contains already-expanded paths (most reliable)
     if let Ok(key) = hkcu.open_subkey(
         "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"
     ) {
@@ -397,7 +411,6 @@ fn desktop_path() -> Result<PathBuf, String> {
             if p.exists() { return Ok(p); }
         }
     }
-    // Fallback: derive from USERPROFILE
     if let Ok(profile) = std::env::var("USERPROFILE") {
         for name in &["Desktop", "デスクトップ"] {
             let p = PathBuf::from(&profile).join(name);
@@ -463,15 +476,16 @@ pub struct Session {
     pub session_type: String,
 }
 
+// On desktop: walk up from exe to find repo root (contains src_cpp/).
+// On Android: not used; data_dir() uses APP_DIR instead.
+#[cfg(not(mobile))]
 fn repo_root() -> &'static PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         let exe = std::env::current_exe().unwrap_or_default();
         let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
         for _ in 0..8 {
-            if dir.join("src_cpp").exists() {
-                return dir;
-            }
+            if dir.join("src_cpp").exists() { return dir; }
             match dir.parent() {
                 Some(p) => dir = p.to_path_buf(),
                 None => break,
@@ -482,12 +496,30 @@ fn repo_root() -> &'static PathBuf {
 }
 
 fn data_dir() -> PathBuf {
-    static DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    DATA.get_or_init(|| {
-        let dir = repo_root().join("src_tauri").join("data");
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    }).clone()
+    // Android: APP_DIR is set during setup() from app.path().app_data_dir()
+    #[cfg(mobile)]
+    { APP_DIR.get().expect("APP_DIR not initialized").clone() }
+
+    // Desktop: repo_root()/src_tauri/data/
+    #[cfg(not(mobile))]
+    {
+        static DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        DATA.get_or_init(|| {
+            let dir = repo_root().join("src_tauri").join("data");
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        }).clone()
+    }
+}
+
+fn config_path() -> PathBuf {
+    // Android: config lives alongside data
+    #[cfg(mobile)]
+    { data_dir().join("config.json") }
+
+    // Desktop: config.json at repo root (legacy location, shared with Python)
+    #[cfg(not(mobile))]
+    { repo_root().join("config.json") }
 }
 
 struct SessionCache {
@@ -645,6 +677,69 @@ fn find_optimal_bedtime(sessions: Vec<Session>, now_iso: String) -> Option<predi
 }
 
 #[tauri::command]
+fn is_mobile() -> bool {
+    cfg!(mobile)
+}
+
+// Android: fetch sleep_events.txt from Drive and rebuild local session cache.
+// Does NOT push anything back — read-only from Android's perspective.
+#[tauri::command]
+fn fetch_from_cloud() -> Result<Vec<Session>, String> {
+    let cfg = load_config_inner();
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
+        _ => return Err("クラウド接続が未設定です".into()),
+    };
+    let url = format!("{}?secret={}&action=restore", base_url.trim_end_matches('/'), secret);
+    let client = gist_client()?;
+    let resp = client.get(&url).send().map_err(|e| format!("取得失敗: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    let content = resp.text().map_err(|e| format!("レスポンス読み取り失敗: {}", e))?;
+    if content.trim().is_empty() || content.trim() == "Unauthorized" {
+        if content.trim() == "Unauthorized" {
+            return Err("認証失敗（シークレットを確認）".into());
+        }
+        return Ok(vec![]);
+    }
+    // Write locally so parse_sessions_rust() can read it
+    let path = data_dir().join("sleep_events.txt");
+    std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+    // Invalidate and rebuild cache
+    *SESSION_CACHE.lock().unwrap() = None;
+    let sessions = parse_sessions_rust()?;
+    let mtime = path.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions: sessions.clone(), mtime });
+    Ok(sessions)
+}
+
+// Send a SCREEN_ON event to the Apps Script (Android: called every 5 min while app is active).
+// The Apps Script stores it in mobile_event.txt; the Windows app picks it up on next sync.
+#[tauri::command]
+fn send_screen_on() -> Result<String, String> {
+    let cfg = load_config_inner();
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
+        _ => return Err("クラウド接続が未設定です".into()),
+    };
+    let ts = chrono::Local::now().timestamp_millis();
+    let url = format!("{}?secret={}", base_url.trim_end_matches('/'), secret);
+    let client = gist_client()?;
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "text/plain")
+        .body(format!("SCREEN_ON,{}", ts))
+        .send()
+        .map_err(|e| format!("送信失敗: {}", e))?;
+    if resp.status().is_success() {
+        Ok("SCREEN_ON 送信完了".into())
+    } else {
+        Err(format!("HTTP {}", resp.status().as_u16()))
+    }
+}
+
+#[tauri::command]
 fn add_session(start: String, end: String) -> Result<(), String> {
     let path = data_dir().join("sleep_events.txt");
     let mut content = if path.exists() {
@@ -675,6 +770,7 @@ fn delete_session(start: String, end: String) -> Result<(), String> {
     sort_events_file(&path)
 }
 
+#[cfg(not(mobile))]
 fn show_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
@@ -683,6 +779,7 @@ fn show_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(not(mobile))]
 fn append_shutdown_event() {
     let path = data_dir().join("sleep_events.txt");
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -691,10 +788,12 @@ fn append_shutdown_event() {
     }
 }
 
+#[cfg(not(mobile))]
 fn write_pid() {
     let _ = std::fs::write(data_dir().join("monitor.pid"), std::process::id().to_string());
 }
 
+#[cfg(not(mobile))]
 fn remove_pid() {
     let _ = std::fs::remove_file(data_dir().join("monitor.pid"));
 }
@@ -705,45 +804,67 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // PID file
-            write_pid();
+            // ── Android setup ────────────────────────────────────────────────
+            #[cfg(mobile)]
+            {
+                // Initialize app data dir (must come first, before any data_dir() call)
+                let dir = app.path().app_data_dir()
+                    .map_err(|e| format!("app_data_dir: {}", e))?;
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = APP_DIR.set(dir);
+            }
 
-            // System tray
-            let show_item = MenuItem::with_id(app, "show", "開く", true, None::<&str>)?;
-            let sep       = PredefinedMenuItem::separator(app)?;
-            let quit_item = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &sep, &quit_item])?;
+            // ── Desktop-only setup ───────────────────────────────────────────
+            #[cfg(not(mobile))]
+            {
+                write_pid();
 
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("睡眠トラッカー")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => show_window(app),
-                    "quit" => {
-                        append_shutdown_event();
-                        remove_pid();
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event {
-                        show_window(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+                // System tray
+                let show_item = MenuItem::with_id(app, "show", "開く", true, None::<&str>)?;
+                let sep       = PredefinedMenuItem::separator(app)?;
+                let quit_item = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &sep, &quit_item])?;
+                TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("睡眠トラッカー")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => show_window(app),
+                        "quit" => {
+                            append_shutdown_event();
+                            remove_pid();
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event {
+                            show_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
 
-            // Background startup: restore from Gist if missing → pull mobile →
-            // pre-warm cache → auto-pull every 5 min
+                // Initialize shared threshold from config before starting monitor
+                let init_cfg = load_config_inner();
+                THRESHOLD_SECS.store(
+                    init_cfg.idle_threshold_minutes.unwrap_or(60) as u64 * 60,
+                    Ordering::Relaxed,
+                );
+
+                // Start background idle monitor
+                monitor::start(data_dir());
+            }
+
+            // ── Shared background thread (both platforms) ────────────────────
+            // Restore from Drive if sleep_events.txt missing → pull mobile events
+            // → pre-warm session cache → auto-pull every 5 min (desktop only)
             std::thread::spawn(|| {
                 ensure_events_from_drive();
-                // Deduplicate on startup in case of prior monitor oscillation
                 let events_path = data_dir().join("sleep_events.txt");
                 if events_path.exists() {
                     let _ = sort_events_file(&events_path);
@@ -755,30 +876,27 @@ pub fn run() {
                                        .unwrap_or(std::time::UNIX_EPOCH);
                     *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
                 });
+                // Desktop: keep auto-pulling. Android: the frontend's SCREEN_ON
+                // timer and manual sync button handle freshness.
+                #[cfg(not(mobile))]
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(300));
                     pull_mobile_events_inner();
                 }
             });
 
-            // Initialize shared threshold from config before starting monitor
-            let init_cfg = load_config_inner();
-            THRESHOLD_SECS.store(
-                init_cfg.idle_threshold_minutes.unwrap_or(60) as u64 * 60,
-                Ordering::Relaxed,
-            );
-
-            // Start background monitor
-            monitor::start(data_dir());
-
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Desktop: hide to tray on close instead of quitting
+            #[cfg(not(mobile))]
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Minimize to tray instead of quitting
                 let _ = window.hide();
                 api.prevent_close();
             }
+            // Suppress unused-variable warning on mobile
+            #[cfg(mobile)]
+            let _ = (window, event);
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
@@ -789,6 +907,7 @@ pub fn run() {
             get_events_content, restore_events,
             read_text_file, sync_gist, clear_all_data, create_desktop_shortcut,
             get_monitor_status, set_monitor_paused,
+            is_mobile, send_screen_on, fetch_from_cloud,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

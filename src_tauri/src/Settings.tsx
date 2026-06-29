@@ -47,9 +47,10 @@ function Section({ title, children }: SectionProps) {
 interface Props {
   sessions: Session[];
   onRefresh?: () => void;
+  isMobile?: boolean;
 }
 
-export default function Settings({ sessions, onRefresh }: Props) {
+export default function Settings({ sessions, onRefresh, isMobile = false }: Props) {
   const [threshold, setThreshold] = useState(60);
   const [configSaved, setConfigSaved] = useState(false);
   const [targetWakeEnabled, setTargetWakeEnabled] = useState(false);
@@ -214,31 +215,33 @@ export default function Settings({ sessions, onRefresh }: Props) {
   return (
     <div className="settings-page">
 
-      {/* 起動設定 */}
-      <Section title="起動設定">
-        <label className="settings-check-row">
-          <input
-            type="checkbox"
-            checked={startup}
-            onChange={handleStartupToggle}
-            className="settings-checkbox"
-          />
-          <span>PC 起動時に自動起動する</span>
-        </label>
-        <button
-          className="settings-btn"
-          onClick={handleCreateShortcut}
-          disabled={shortcutBusy}
-          style={{ alignSelf: "flex-start" }}
-        >
-          {shortcutBusy ? "作成中..." : "デスクトップにショートカットを作成"}
-        </button>
-        {shortcutMsg && (
-          <div className={`settings-status ${shortcutMsg.startsWith("作成失敗") ? "err" : "ok"}`}>
-            {shortcutMsg}
-          </div>
-        )}
-      </Section>
+      {/* 起動設定 (デスクトップのみ) */}
+      {!isMobile && (
+        <Section title="起動設定">
+          <label className="settings-check-row">
+            <input
+              type="checkbox"
+              checked={startup}
+              onChange={handleStartupToggle}
+              className="settings-checkbox"
+            />
+            <span>PC 起動時に自動起動する</span>
+          </label>
+          <button
+            className="settings-btn"
+            onClick={handleCreateShortcut}
+            disabled={shortcutBusy}
+            style={{ alignSelf: "flex-start" }}
+          >
+            {shortcutBusy ? "作成中..." : "デスクトップにショートカットを作成"}
+          </button>
+          {shortcutMsg && (
+            <div className={`settings-status ${shortcutMsg.startsWith("作成失敗") ? "err" : "ok"}`}>
+              {shortcutMsg}
+            </div>
+          )}
+        </Section>
+      )}
 
       {/* 睡眠判定時間 */}
       <Section title="睡眠判定時間">
@@ -319,9 +322,24 @@ export default function Settings({ sessions, onRefresh }: Props) {
           <button className="settings-btn" onClick={handleTestMobile} disabled={mobileTesting}>
             {mobileTesting ? "テスト中..." : "接続テスト"}
           </button>
-          <button className="settings-btn" onClick={handleSyncGist} disabled={syncing}>
-            {syncing ? "同期中..." : "今すぐ同期"}
-          </button>
+          {!isMobile && (
+            <button className="settings-btn" onClick={handleSyncGist} disabled={syncing}>
+              {syncing ? "同期中..." : "今すぐ同期"}
+            </button>
+          )}
+          {isMobile && (
+            <button className="settings-btn" onClick={async () => {
+              setSyncing(true); setSyncMsg(null);
+              try {
+                await invoke("fetch_from_cloud");
+                setSyncMsg("データを取得しました");
+                onRefresh?.();
+              } catch (e) { setSyncMsg(`エラー: ${e}`); }
+              finally { setSyncing(false); }
+            }} disabled={syncing}>
+              {syncing ? "取得中..." : "今すぐ取得"}
+            </button>
+          )}
         </div>
         {mobileTestStatus && (
           <div className={`settings-status ${mobileTestStatus.ok ? "ok" : "err"}`}>
