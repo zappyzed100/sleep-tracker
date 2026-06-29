@@ -16,8 +16,6 @@ use tauri::{
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct AppConfig {
-    pub gist_id: Option<String>,
-    pub github_token: Option<String>,
     pub idle_threshold_minutes: Option<u32>,
     pub mobile_url: Option<String>,
     pub mobile_secret: Option<String>,
@@ -43,15 +41,11 @@ fn get_config() -> AppConfig {
 
 #[tauri::command]
 fn save_config(
-    gist_id: String,
-    github_token: String,
     idle_threshold_minutes: u32,
     mobile_url: String,
     mobile_secret: String,
 ) -> Result<(), String> {
     let cfg = AppConfig {
-        gist_id: if gist_id.is_empty() { None } else { Some(gist_id) },
-        github_token: if github_token.is_empty() { None } else { Some(github_token) },
         idle_threshold_minutes: Some(idle_threshold_minutes),
         mobile_url: if mobile_url.is_empty() { None } else { Some(mobile_url) },
         mobile_secret: if mobile_secret.is_empty() { None } else { Some(mobile_secret) },
@@ -60,36 +54,6 @@ fn save_config(
     std::fs::write(config_path(), json).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn test_github_connection(gist_id: String, github_token: String) -> Result<String, String> {
-    if gist_id.is_empty() || github_token.is_empty() {
-        return Err("Gist ID とトークンを入力してください".to_string());
-    }
-    let url = format!("https://api.github.com/gists/{}", gist_id);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", github_token))
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Sleep-Tracker-Tauri/1.0")
-        .send()
-        .map_err(|e| format!("ネットワークエラー: {}", e))?;
-    let status = resp.status();
-    if status.is_success() {
-        Ok(format!("接続成功 (HTTP {})", status.as_u16()))
-    } else {
-        Err(format!("HTTP {} — {}", status.as_u16(),
-            match status.as_u16() {
-                401 => "認証失敗（トークンを確認）",
-                404 => "Gist が見つかりません（IDを確認）",
-                _ => status.canonical_reason().unwrap_or("エラー"),
-            }
-        ))
-    }
-}
 
 // ── Startup / shortcuts ───────────────────────────────────────────────────────
 
@@ -168,14 +132,6 @@ fn gist_client() -> Result<reqwest::blocking::Client, String> {
         .timeout(std::time::Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())
-}
-
-fn gist_headers(token: &str) -> reqwest::header::HeaderMap {
-    let mut h = reqwest::header::HeaderMap::new();
-    h.insert("Authorization", format!("Bearer {}", token).parse().unwrap());
-    h.insert("Accept", "application/vnd.github+json".parse().unwrap());
-    h.insert("User-Agent", "Sleep-Tracker-Tauri/1.0".parse().unwrap());
-    h
 }
 
 // Parse and apply one "TAG,TIMESTAMP" line from mobile_event.txt.
@@ -304,26 +260,6 @@ fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Result<S
     }
 }
 
-fn push_events_to_gist(content: &str) -> Result<String, String> {
-    let cfg = load_config_inner();
-    let gist_id = match cfg.gist_id { Some(g) if !g.is_empty() => g, _ => return Ok("Gistスキップ(未設定)".into()) };
-    let token   = match cfg.github_token { Some(t) if !t.is_empty() => t, _ => return Ok("Gistスキップ(未設定)".into()) };
-
-    let body = serde_json::json!({ "files": { "sleep_events.txt": { "content": content } } });
-    let resp = gist_client()?
-        .patch(format!("https://api.github.com/gists/{}", gist_id))
-        .headers(gist_headers(&token))
-        .json(&body)
-        .send()
-        .map_err(|e| format!("ネットワークエラー: {}", e))?;
-
-    if resp.status().is_success() {
-        Ok(format!("Gist {} 行", content.lines().count()))
-    } else {
-        Err(format!("Gist HTTP {}", resp.status().as_u16()))
-    }
-}
-
 fn backup_to_drive(content: &str) -> String {
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
@@ -359,13 +295,10 @@ fn sync_gist() -> Result<String, String> {
         String::new()
     };
 
-    // 3. Push to Gist
-    let gist_msg = push_events_to_gist(&content).unwrap_or_else(|e| e);
-
-    // 4. Backup to Google Drive via Apps Script
+    // 3. Backup to Google Drive via Apps Script
     let drive_msg = backup_to_drive(&content);
 
-    Ok(format!("同期完了 — モバイル: {} / {} / {}", pull_msg, gist_msg, drive_msg))
+    Ok(format!("同期完了 — モバイル: {} / {}", pull_msg, drive_msg))
 }
 
 // ── Data management ───────────────────────────────────────────────────────────
@@ -380,30 +313,26 @@ fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
     std::fs::write(path, lines.join("\n") + "\n").map_err(|e| e.to_string())
 }
 
-fn ensure_events_from_gist() {
+fn ensure_events_from_drive() {
     let path = data_dir().join("sleep_events.txt");
     if path.exists() { return; }
 
     let cfg = load_config_inner();
-    let (gist_id, token) = match (cfg.gist_id, cfg.github_token) {
-        (Some(g), Some(t)) if !g.is_empty() && !t.is_empty() => (g, t),
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
         _ => return,
     };
     let client = match gist_client() { Ok(c) => c, Err(_) => return };
-    let resp = match client
-        .get(format!("https://api.github.com/gists/{}", gist_id))
-        .headers(gist_headers(&token))
-        .send()
-    {
+    let url = format!("{}?secret={}&action=restore", base_url.trim_end_matches('/'), secret);
+    let resp = match client.get(&url).send() {
         Ok(r) if r.status().is_success() => r,
         _ => return,
     };
-    let json: serde_json::Value = match resp.json() { Ok(j) => j, Err(_) => return };
-    let content = json["files"]["sleep_events.txt"]["content"]
-        .as_str().unwrap_or("").to_string();
-    if !content.is_empty() {
-        let _ = std::fs::write(&path, content);
-    }
+    let content = match resp.text() {
+        Ok(t) if !t.trim().is_empty() => t,
+        _ => return,
+    };
+    let _ = std::fs::write(&path, content);
 }
 
 #[tauri::command]
@@ -705,7 +634,7 @@ pub fn run() {
             // Background startup: restore from Gist if missing → pull mobile →
             // pre-warm cache → auto-pull every 5 min
             std::thread::spawn(|| {
-                ensure_events_from_gist();
+                ensure_events_from_drive();
                 pull_mobile_events_inner();
                 let _ = run_parse_sessions().map(|sessions| {
                     let events = data_dir().join("sleep_events.txt");
@@ -734,7 +663,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
             add_session, delete_session,
-            get_config, save_config, test_github_connection, test_mobile_connection,
+            get_config, save_config, test_mobile_connection,
             get_startup_enabled, set_startup,
             export_csv, write_csv_file, import_csv,
             get_events_content, restore_events,

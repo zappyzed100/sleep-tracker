@@ -23,8 +23,6 @@ function ConfirmDeleteModal({ onConfirm, onCancel }: { onConfirm: () => void; on
 }
 
 interface AppConfig {
-  gist_id: string | null;
-  github_token: string | null;
   idle_threshold_minutes: number | null;
   mobile_url: string | null;
   mobile_secret: string | null;
@@ -50,10 +48,6 @@ interface Props {
 }
 
 export default function Settings({ sessions, onRefresh }: Props) {
-  // Config state
-  const [gistId, setGistId] = useState("");
-  const [token, setToken] = useState("");
-  const [showToken, setShowToken] = useState(false);
   const [threshold, setThreshold] = useState(60);
   const [configSaved, setConfigSaved] = useState(false);
   const [mobileUrl, setMobileUrl] = useState("");
@@ -61,30 +55,16 @@ export default function Settings({ sessions, onRefresh }: Props) {
   const [showMobileSecret, setShowMobileSecret] = useState(false);
   const [mobileTestStatus, setMobileTestStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [mobileTesting, setMobileTesting] = useState(false);
-
-  // Startup
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [startup, setStartup] = useState(false);
-
-  // GitHub test
-  const [testStatus, setTestStatus] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [testing, setTesting] = useState(false);
-
-  // CSV / data
   const [csvMsg, setCsvMsg] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  // Shortcut
   const [shortcutMsg, setShortcutMsg] = useState<string | null>(null);
   const [shortcutBusy, setShortcutBusy] = useState(false);
 
-  // Gist sync
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState<string | null>(null);
-
   useEffect(() => {
     invoke<AppConfig>("get_config").then((cfg) => {
-      setGistId(cfg.gist_id ?? "");
-      setToken(cfg.github_token ?? "");
       setThreshold(cfg.idle_threshold_minutes ?? 60);
       setMobileUrl(cfg.mobile_url ?? "");
       setMobileSecret(cfg.mobile_secret ?? "");
@@ -96,8 +76,6 @@ export default function Settings({ sessions, onRefresh }: Props) {
   async function handleSaveConfig() {
     try {
       await invoke("save_config", {
-        gistId,
-        githubToken: token,
         idleThresholdMinutes: threshold,
         mobileUrl,
         mobileSecret,
@@ -119,22 +97,6 @@ export default function Settings({ sessions, onRefresh }: Props) {
       setMobileTestStatus({ ok: false, msg: String(e) });
     } finally {
       setMobileTesting(false);
-    }
-  }
-
-  async function handleTestConnection() {
-    setTesting(true);
-    setTestStatus(null);
-    try {
-      const msg = await invoke<string>("test_github_connection", {
-        gistId,
-        githubToken: token,
-      });
-      setTestStatus({ ok: true, msg });
-    } catch (e) {
-      setTestStatus({ ok: false, msg: String(e) });
-    } finally {
-      setTesting(false);
     }
   }
 
@@ -284,74 +246,8 @@ export default function Settings({ sessions, onRefresh }: Props) {
         <div className="settings-note">変更後はタスクトレイのアイコンを右クリック →「終了」して再起動すると反映されます</div>
       </Section>
 
-      {/* GitHub 連携 */}
-      <Section title="GitHub 連携">
-        <div className="settings-field">
-          <label className="settings-label">Gist ID</label>
-          <input
-            className="settings-input"
-            value={gistId}
-            onChange={(e) => setGistId(e.target.value)}
-            placeholder="bfdc8b9bd96f083d85c6f04380e38b4a"
-          />
-        </div>
-        <div className="settings-field">
-          <label className="settings-label">Personal Access Token</label>
-          <div className="settings-input-wrap">
-            <input
-              className="settings-input"
-              type={showToken ? "text" : "password"}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="ghp_..."
-            />
-            <button
-              className="settings-eye-btn"
-              onClick={() => setShowToken((v) => !v)}
-              title={showToken ? "隠す" : "表示"}
-            >
-              {showToken ? "🙈" : "👁"}
-            </button>
-          </div>
-          <div className="settings-note">Gist の read/write 権限のみ付与されたトークン</div>
-        </div>
-
-        <div className="settings-btn-row">
-          <button className="settings-btn primary" onClick={handleSaveConfig}>
-            {configSaved ? "✓ 保存しました" : "保存"}
-          </button>
-          <button
-            className="settings-btn"
-            onClick={handleTestConnection}
-            disabled={testing}
-          >
-            {testing ? "テスト中..." : "接続テスト"}
-          </button>
-          <button
-            className="settings-btn"
-            onClick={handleSyncGist}
-            disabled={syncing}
-          >
-            {syncing ? "同期中..." : "今すぐ同期"}
-          </button>
-        </div>
-
-        {testStatus && (
-          <div className={`settings-status ${testStatus.ok ? "ok" : "err"}`}>
-            {testStatus.ok ? "✓" : "✗"} {testStatus.msg}
-          </div>
-        )}
-        {syncMsg && (
-          <div className={`settings-status ${syncMsg.startsWith("エラー") ? "err" : "ok"}`}>
-            {syncMsg}
-          </div>
-        )}
-
-        <div className="settings-note">設定は config.json にローカル保存されます</div>
-      </Section>
-
-      {/* モバイル連携 */}
-      <Section title="モバイル連携 (Google Apps Script)">
+      {/* クラウド連携 */}
+      <Section title="クラウド連携">
         <div className="settings-field">
           <label className="settings-label">Apps Script URL</label>
           <input
@@ -387,15 +283,21 @@ export default function Settings({ sessions, onRefresh }: Props) {
           <button className="settings-btn" onClick={handleTestMobile} disabled={mobileTesting}>
             {mobileTesting ? "テスト中..." : "接続テスト"}
           </button>
+          <button className="settings-btn" onClick={handleSyncGist} disabled={syncing}>
+            {syncing ? "同期中..." : "今すぐ同期"}
+          </button>
         </div>
         {mobileTestStatus && (
           <div className={`settings-status ${mobileTestStatus.ok ? "ok" : "err"}`}>
             {mobileTestStatus.ok ? "✓" : "✗"} {mobileTestStatus.msg}
           </div>
         )}
-        <div className="settings-note">
-          iPhone ショートカットから POST でイベントを送信。スプレッドシートに1行ずつ記録されます。
-        </div>
+        {syncMsg && (
+          <div className={`settings-status ${syncMsg.startsWith("エラー") ? "err" : "ok"}`}>
+            {syncMsg}
+          </div>
+        )}
+        <div className="settings-note">設定は config.json にローカル保存されます</div>
       </Section>
 
       {/* データ管理 */}
