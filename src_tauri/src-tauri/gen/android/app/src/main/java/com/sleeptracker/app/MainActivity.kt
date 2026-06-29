@@ -36,6 +36,15 @@ class MainActivity : TauriActivity() {
   inner class AppBridge {
     @JavascriptInterface
     fun setTab(tab: String) { currentTab = tab }
+
+    // Called from JS when React has finished mounting — dismisses the startup overlay.
+    @JavascriptInterface
+    fun notifyReady() {
+      uiHandler.post {
+        hideRunnable?.let { uiHandler.removeCallbacks(it) }
+        overlay?.visibility = View.GONE
+      }
+    }
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -44,7 +53,6 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    WebView.setWebContentsDebuggingEnabled(true)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
 
@@ -104,24 +112,31 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    val isFirstLaunch = pauseTime == Long.MAX_VALUE
     val elapsed = SystemClock.elapsedRealtime() - pauseTime
-    if (elapsed > 10_000L) showResumeOverlay()
+    if (isFirstLaunch || elapsed > 10_000L) showResumeOverlay(isFirstLaunch)
   }
 
-  private fun showResumeOverlay() {
+  private fun showResumeOverlay(isFirstLaunch: Boolean = false) {
     val ov = overlay ?: return
     ov.visibility = View.VISIBLE
     hideRunnable?.let { uiHandler.removeCallbacks(it) }
-    val wv = appWebView
-    if (wv != null && android.os.Build.VERSION.SDK_INT >= 23) {
-      wv.postVisualStateCallback(0L, object : WebView.VisualStateCallback() {
-        override fun onComplete(requestId: Long) {
-          runOnUiThread { ov.visibility = View.GONE }
-        }
-      })
+    if (!isFirstLaunch) {
+      // Deep sleep resume: hide when WebView repaints its first frame
+      val wv = appWebView
+      if (wv != null && android.os.Build.VERSION.SDK_INT >= 23) {
+        wv.postVisualStateCallback(0L, object : WebView.VisualStateCallback() {
+          override fun onComplete(requestId: Long) {
+            runOnUiThread { ov.visibility = View.GONE }
+          }
+        })
+      }
     }
+    // First launch: JS calls notifyReady() when React mounts (up to 8s fallback).
+    // Deep sleep resume: postVisualStateCallback fires quickly; 2s is the fallback.
+    val timeout = if (isFirstLaunch) 8000L else 2000L
     val runnable = Runnable { ov.visibility = View.GONE }
     hideRunnable = runnable
-    uiHandler.postDelayed(runnable, 2000L)
+    uiHandler.postDelayed(runnable, timeout)
   }
 }

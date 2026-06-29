@@ -40,6 +40,9 @@ export default function App() {
 
   // Detect platform and load screen_on_enabled config on mount
   useEffect(() => {
+    // React has mounted and click handlers are attached — dismiss native startup overlay
+    (window as any).AppBridge?.notifyReady?.();
+
     invoke<boolean>("is_mobile").then(mobile => {
       setIsMobile(mobile);
       if (!mobile) {
