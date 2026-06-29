@@ -53,7 +53,7 @@ interface Props {
   onScreenOnEnabledChange?: (enabled: boolean) => void;
 }
 
-export default function Settings({ sessions, onRefresh, isMobile = false, onBack, onScreenOnEnabledChange }: Props) {
+export default function Settings({ sessions, onRefresh, isMobile = false, onScreenOnEnabledChange }: Props) {
   const [threshold, setThreshold] = useState(60);
   const [configSaved, setConfigSaved] = useState(false);
   const [targetWakeEnabled, setTargetWakeEnabled] = useState(false);
@@ -223,11 +223,6 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onBack
 
   return (
     <div className="settings-page">
-
-      {/* 戻るボタン */}
-      {onBack && (
-        <button className="settings-back-btn" onClick={onBack}>← ホームに戻る</button>
-      )}
 
       {/* 起動設定 (デスクトップのみ) */}
       {!isMobile && (

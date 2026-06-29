@@ -118,6 +118,21 @@ export default function App() {
     return () => window.removeEventListener("wheel", handler);
   }, [tab, selectedDay]);
 
+  // Notify Android native bridge of tab changes (for hardware back button)
+  useEffect(() => {
+    if (isMobile && (window as any).AppBridge) {
+      (window as any).AppBridge.setTab(tab);
+    }
+  }, [tab, isMobile]);
+
+  // Handle Android back button event dispatched from native
+  useEffect(() => {
+    if (!isMobile) return;
+    const handler = () => setTab("home");
+    window.addEventListener("__androidBack", handler);
+    return () => window.removeEventListener("__androidBack", handler);
+  }, [isMobile]);
+
   // Touch swipe: week navigation (mobile)
   function handleTouchStart(e: React.TouchEvent) {
     touchStartX.current = e.touches[0].clientX;
