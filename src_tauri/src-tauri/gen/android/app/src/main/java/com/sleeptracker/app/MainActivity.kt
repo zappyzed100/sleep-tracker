@@ -14,6 +14,12 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
   @Volatile private var currentTab: String = "home"
@@ -42,7 +48,7 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
 
-    // Loading screen: dark background + centered app icon
+    // Loading screen overlay
     val logo = ImageView(this).apply {
       setImageResource(R.mipmap.ic_launcher)
       scaleType = ImageView.ScaleType.FIT_CENTER
@@ -57,6 +63,7 @@ class MainActivity : TauriActivity() {
       ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     )
 
+    // Hardware back button
     onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
       override fun handleOnBackPressed() {
         if (currentTab == "settings") {
@@ -70,6 +77,20 @@ class MainActivity : TauriActivity() {
         }
       }
     })
+
+    // Background Drive signal every 15 minutes (Android WorkManager minimum interval)
+    val workRequest = PeriodicWorkRequestBuilder<DriveSignalWorker>(15, TimeUnit.MINUTES)
+      .setConstraints(
+        Constraints.Builder()
+          .setRequiredNetworkType(NetworkType.CONNECTED)
+          .build()
+      )
+      .build()
+    WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+      "drive_signal",
+      ExistingPeriodicWorkPolicy.KEEP,
+      workRequest
+    )
   }
 
   override fun onPause() {
@@ -86,9 +107,7 @@ class MainActivity : TauriActivity() {
   private fun showResumeOverlay() {
     val ov = overlay ?: return
     ov.visibility = View.VISIBLE
-
     hideRunnable?.let { uiHandler.removeCallbacks(it) }
-
     val wv = appWebView
     if (wv != null && android.os.Build.VERSION.SDK_INT >= 23) {
       wv.postVisualStateCallback(0L, object : WebView.VisualStateCallback() {
@@ -97,7 +116,6 @@ class MainActivity : TauriActivity() {
         }
       })
     }
-
     val runnable = Runnable { ov.visibility = View.GONE }
     hideRunnable = runnable
     uiHandler.postDelayed(runnable, 2000L)

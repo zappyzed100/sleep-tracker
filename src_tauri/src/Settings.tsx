@@ -66,6 +66,8 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
   const [mobileTesting, setMobileTesting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [screenOnTesting, setScreenOnTesting] = useState(false);
+  const [screenOnMsg, setScreenOnMsg] = useState<string | null>(null);
   const [startup, setStartup] = useState(false);
   const [csvMsg, setCsvMsg] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -310,14 +312,31 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
             <span>画面ON情報を5分ごとにGoogleDriveへ送信</span>
           </label>
           <div className="settings-note">
-            アプリが起動・表示されている間、画面ON状態を5分ごとに記録します。アプリを完全に終了すると送信されません。
+            バックグラウンドでも15分ごとにGoogleDriveへ送信します（WorkManager）。
           </div>
           <div className="settings-note">
             ※ タブレット起動時に自動で起動させるには、端末の設定 → アプリ管理 → 自動起動（メーカーにより異なります）をONにしてください。
           </div>
-          <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
-            {configSaved ? "✓ 保存しました" : "保存"}
-          </button>
+          <div className="settings-btn-row">
+            <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
+              {configSaved ? "✓ 保存しました" : "保存"}
+            </button>
+            <button className="settings-btn" onClick={async () => {
+              setScreenOnTesting(true); setScreenOnMsg(null);
+              try {
+                const msg = await invoke<string>("send_screen_on");
+                setScreenOnMsg(`✓ ${msg}`);
+              } catch (e) { setScreenOnMsg(`✗ ${e}`); }
+              finally { setScreenOnTesting(false); }
+            }} disabled={screenOnTesting}>
+              {screenOnTesting ? "送信中..." : "今すぐ送信テスト"}
+            </button>
+          </div>
+          {screenOnMsg && (
+            <div className={`settings-status ${screenOnMsg.startsWith("✗") ? "err" : "ok"}`}>
+              {screenOnMsg}
+            </div>
+          )}
         </Section>
       )}
 
