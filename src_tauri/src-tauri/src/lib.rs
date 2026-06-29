@@ -250,8 +250,8 @@ fn import_csv(csv: String) -> Result<usize, String> {
         let start = cols[0].trim();
         let end = cols[1].trim();
         if start.len() < 19 || end.len() < 19 { continue; }
-        lines.push(format!("{} IDLE_START", start));
-        lines.push(format!("{} IDLE_RESUME", end));
+        lines.push(format!("{},IDLE_START", start));
+        lines.push(format!("{},IDLE_RESUME", end));
         added += 1;
     }
     lines.sort_by(|a, b| a[..a.len().min(19)].cmp(&b[..b.len().min(19)]));
@@ -341,8 +341,8 @@ fn add_session(start: String, end: String) -> Result<(), String> {
         .filter(|l| !l.trim().is_empty())
         .map(String::from)
         .collect();
-    lines.push(format!("{} IDLE_START", start));
-    lines.push(format!("{} IDLE_RESUME", end));
+    lines.push(format!("{},IDLE_START", start));
+    lines.push(format!("{},IDLE_RESUME", end));
     lines.sort_by(|a, b| a[..a.len().min(19)].cmp(&b[..b.len().min(19)]));
     std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())
 }
@@ -354,8 +354,8 @@ fn delete_session(start: String, end: String) -> Result<(), String> {
         return Err("sleep_events.txt not found".to_string());
     }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let start_line = format!("{} IDLE_START", start);
-    let end_line = format!("{} IDLE_RESUME", end);
+    let start_line = format!("{},IDLE_START", start);
+    let end_line = format!("{},IDLE_RESUME", end);
     let filtered: Vec<&str> = content
         .lines()
         .filter(|l| l.trim() != start_line.as_str() && l.trim() != end_line.as_str())
