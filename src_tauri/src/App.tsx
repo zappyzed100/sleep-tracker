@@ -33,7 +33,6 @@ export default function App() {
   const calBtnRef = useRef<HTMLButtonElement>(null);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
   const [isMobile, setIsMobile] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [screenOnEnabled, setScreenOnEnabled] = useState(true);
   const touchStartX = useRef<number | null>(null);
 
@@ -108,20 +107,6 @@ export default function App() {
     }
   }
 
-  // Android: manual sync button
-  async function handleAndroidSync() {
-    setSyncing(true);
-    setError(null);
-    try {
-      const data = await invoke<Session[]>("fetch_from_cloud");
-      setSessions(data);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSyncing(false);
-    }
-  }
-
   // Wheel: week navigation (desktop)
   useEffect(() => {
     const handler = (e: WheelEvent) => {
@@ -154,7 +139,7 @@ export default function App() {
       {isMobile && <div className="safe-area-spacer" />}
 
       <div className="topbar">
-        <span className="app-title">睡眠トラッカー</span>
+        <span className="app-title">睡眠トラッカー★v2★</span>
         <div className="tabs">
           <button className={tab === "home" ? "tab active" : "tab"} onClick={() => setTab("home")}>ホーム</button>
           <button className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>設定</button>
@@ -175,16 +160,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Android: sync button */}
-        {isMobile && (
-          <button
-            className="monitor-toggle-btn"
-            onClick={handleAndroidSync}
-            disabled={syncing}
-          >
-            {syncing ? "同期中..." : "同期"}
-          </button>
-        )}
       </div>
 
       {error && <div className="error-banner">{error}</div>}
@@ -247,6 +222,8 @@ export default function App() {
           onScreenOnEnabledChange={setScreenOnEnabled}
         />
       )}
+
+      {isMobile && <div className="bottom-spacer" />}
     </div>
   );
 }

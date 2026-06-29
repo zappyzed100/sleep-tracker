@@ -36,6 +36,7 @@ interface Props {
 export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+  const touchStartXRef = useRef<number | null>(null);
 
   // Build bar colors based on activeIndex
   function barColors(len: number, active: number | undefined) {
@@ -133,16 +134,7 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
         maintainAspectRatio: false,
         animation: false,
         hover: { mode: undefined },
-        onClick(event: any, _elements: any, chart: any) {
-          const x = event?.x;
-          if (x == null) return;
-          const raw = chart.scales["x"].getValueForPixel(x);
-          if (raw == null) return;
-          const idx = Math.round(raw);
-          if (idx >= 0 && idx < week.length) {
-            onDayClick(week[idx].date);
-          }
-        },
+        events: [],
         plugins: {
           legend: {
             labels: { color: CAT.TEXT, font: { size: 14 } },
@@ -206,5 +198,34 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
     chart.update("none");
   }, [activeIndex]);
 
-  return <canvas ref={ref} style={{ width: "100%", height: "100%", cursor: "pointer" }} />;
+  function hitColumn(clientX: number, rect: DOMRect): number | null {
+    const chart = chartRef.current;
+    if (!chart) return null;
+    const x = clientX - rect.left;
+    const raw = chart.scales["x"].getValueForPixel(x);
+    if (raw == null) return null;
+    const idx = Math.round(raw);
+    return idx >= 0 && idx < week.length ? idx : null;
+  }
+
+  return (
+    <canvas
+      ref={ref}
+      style={{ width: "100%", height: "100%", cursor: "pointer" }}
+      onClick={(e) => {
+        const idx = hitColumn(e.clientX, e.currentTarget.getBoundingClientRect());
+        if (idx != null) onDayClick(week[idx].date);
+      }}
+      onTouchStart={(e) => { touchStartXRef.current = e.touches[0].clientX; }}
+      onTouchEnd={(e) => {
+        const startX = touchStartXRef.current;
+        touchStartXRef.current = null;
+        if (startX == null) return;
+        const endX = e.changedTouches[0].clientX;
+        if (Math.abs(endX - startX) >= 60) return; // swipe → parent handles
+        const idx = hitColumn(endX, e.currentTarget.getBoundingClientRect());
+        if (idx != null) onDayClick(week[idx].date);
+      }}
+    />
+  );
 }

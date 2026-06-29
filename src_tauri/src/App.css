@@ -37,6 +37,14 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Android bottom nav bar spacer ── */
+.bottom-spacer {
+  height: env(safe-area-inset-bottom, 24px);
+  min-height: 24px;
+  background: var(--crust);
+  flex-shrink: 0;
+}
+
 /* ── Topbar ── */
 .topbar {
   display: flex;
