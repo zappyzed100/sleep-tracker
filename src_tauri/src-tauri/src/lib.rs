@@ -296,6 +296,42 @@ fn sync_gist() -> Result<String, String> {
 
 // ── Data management ───────────────────────────────────────────────────────────
 
+fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut lines: Vec<&str> = content.lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    lines.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
+    lines.dedup();
+    std::fs::write(path, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+fn ensure_events_from_gist() {
+    let path = data_dir().join("sleep_events.txt");
+    if path.exists() { return; }
+
+    let cfg = load_config_inner();
+    let (gist_id, token) = match (cfg.gist_id, cfg.github_token) {
+        (Some(g), Some(t)) if !g.is_empty() && !t.is_empty() => (g, t),
+        _ => return,
+    };
+    let client = match gist_client() { Ok(c) => c, Err(_) => return };
+    let resp = match client
+        .get(format!("https://api.github.com/gists/{}", gist_id))
+        .headers(gist_headers(&token))
+        .send()
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return,
+    };
+    let json: serde_json::Value = match resp.json() { Ok(j) => j, Err(_) => return };
+    let content = json["files"]["sleep_events.txt"]["content"]
+        .as_str().unwrap_or("").to_string();
+    if !content.is_empty() {
+        let _ = std::fs::write(&path, content);
+    }
+}
+
 #[tauri::command]
 fn get_events_content() -> Result<String, String> {
     let path = data_dir().join("sleep_events.txt");
@@ -305,7 +341,9 @@ fn get_events_content() -> Result<String, String> {
 
 #[tauri::command]
 fn restore_events(content: String) -> Result<(), String> {
-    std::fs::write(data_dir().join("sleep_events.txt"), content).map_err(|e| e.to_string())
+    let path = data_dir().join("sleep_events.txt");
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    sort_events_file(&path)
 }
 
 #[tauri::command]
@@ -392,9 +430,8 @@ fn import_csv(csv: String) -> Result<usize, String> {
         lines.push(format!("{},IDLE_RESUME", end));
         added += 1;
     }
-    lines.sort_by(|a, b| a[..a.len().min(19)].cmp(&b[..b.len().min(19)]));
-    lines.dedup();
     std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
+    sort_events_file(&path)?;
     Ok(added)
 }
 
@@ -499,20 +536,14 @@ fn find_optimal_bedtime(sessions: Vec<Session>, now_iso: String) -> Option<predi
 #[tauri::command]
 fn add_session(start: String, end: String) -> Result<(), String> {
     let path = data_dir().join("sleep_events.txt");
-    let existing = if path.exists() {
+    let mut content = if path.exists() {
         std::fs::read_to_string(&path).map_err(|e| e.to_string())?
     } else {
         String::new()
     };
-    let mut lines: Vec<String> = existing
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(String::from)
-        .collect();
-    lines.push(format!("{},IDLE_START", start));
-    lines.push(format!("{},IDLE_RESUME", end));
-    lines.sort_by(|a, b| a[..a.len().min(19)].cmp(&b[..b.len().min(19)]));
-    std::fs::write(&path, lines.join("\n") + "\n").map_err(|e| e.to_string())
+    content.push_str(&format!("{},IDLE_START\n{},IDLE_RESUME\n", start, end));
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    sort_events_file(&path)
 }
 
 #[tauri::command]
@@ -523,12 +554,14 @@ fn delete_session(start: String, end: String) -> Result<(), String> {
     }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let start_line = format!("{},IDLE_START", start);
-    let end_line = format!("{},IDLE_RESUME", end);
-    let filtered: Vec<&str> = content
+    let end_line   = format!("{},IDLE_RESUME", end);
+    let filtered: String = content
         .lines()
         .filter(|l| l.trim() != start_line.as_str() && l.trim() != end_line.as_str())
+        .flat_map(|l| [l, "\n"])
         .collect();
-    std::fs::write(&path, filtered.join("\n") + "\n").map_err(|e| e.to_string())
+    std::fs::write(&path, &filtered).map_err(|e| e.to_string())?;
+    sort_events_file(&path)
 }
 
 fn show_window(app: &tauri::AppHandle) {
@@ -595,16 +628,17 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Pre-warm session cache so first get_sessions call returns immediately
-            std::thread::spawn(|| { let _ = run_parse_sessions().map(|sessions| {
-                let events = data_dir().join("sleep_events.txt");
-                let mtime = events.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-                *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
-            }); });
-
-            // Pull mobile events on startup, then every 5 minutes
+            // Background startup: restore from Gist if missing → pull mobile →
+            // pre-warm cache → auto-pull every 5 min
             std::thread::spawn(|| {
+                ensure_events_from_gist();
                 pull_mobile_events_inner();
+                let _ = run_parse_sessions().map(|sessions| {
+                    let events = data_dir().join("sleep_events.txt");
+                    let mtime  = events.metadata().and_then(|m| m.modified())
+                                       .unwrap_or(std::time::UNIX_EPOCH);
+                    *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
+                });
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(300));
                     pull_mobile_events_inner();

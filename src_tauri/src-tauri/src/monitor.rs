@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
 mod win {
+    // ── Keyboard / mouse idle (GetLastInputInfo) ──────────────────────────────
     #[repr(C)]
     pub struct LASTINPUTINFO {
         pub cb_size: u32,
@@ -33,6 +34,84 @@ mod win {
                 0
             }
         }
+    }
+
+    // ── XInput gamepad (loaded dynamically so missing DLL won't crash) ────────
+    #[repr(C)]
+    struct XINPUT_GAMEPAD {
+        w_buttons:       u16,
+        b_left_trigger:  u8,
+        b_right_trigger: u8,
+        s_thumb_lx:      i16,
+        s_thumb_ly:      i16,
+        s_thumb_rx:      i16,
+        s_thumb_ry:      i16,
+    }
+
+    #[repr(C)]
+    struct XINPUT_STATE {
+        dw_packet_number: u32,
+        gamepad:          XINPUT_GAMEPAD,
+    }
+
+    type XInputGetStateFn = unsafe extern "system" fn(u32, *mut XINPUT_STATE) -> u32;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn LoadLibraryA(name: *const u8) -> usize;
+        fn GetProcAddress(module: usize, name: *const u8) -> usize;
+    }
+
+    fn xinput_fn() -> Option<XInputGetStateFn> {
+        static ADDR: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let addr = *ADDR.get_or_init(|| unsafe {
+            for dll in &[b"xinput1_4.dll\0" as &[u8], b"xinput1_3.dll\0"] {
+                let h = LoadLibraryA(dll.as_ptr());
+                if h != 0 {
+                    let f = GetProcAddress(h, b"XInputGetState\0".as_ptr());
+                    if f != 0 { return f; }
+                }
+            }
+            0
+        });
+        if addr == 0 { None } else { Some(unsafe { std::mem::transmute(addr) }) }
+    }
+
+    /// Returns `(any_connected, any_active)`.
+    /// `any_connected` = at least one controller is plugged in.
+    /// `any_active`    = a connected controller has button/trigger/stick input.
+    pub fn poll_gamepad() -> (bool, bool) {
+        let Some(xinput) = xinput_fn() else { return (false, false) };
+
+        const TRIGGER_THRESHOLD: u8  = 30;
+        const THUMB_DEADZONE:    i16 = 8000;
+
+        let mut any_connected = false;
+        let mut any_active    = false;
+
+        for i in 0..4u32 {
+            let mut state = XINPUT_STATE {
+                dw_packet_number: 0,
+                gamepad: XINPUT_GAMEPAD {
+                    w_buttons: 0, b_left_trigger: 0, b_right_trigger: 0,
+                    s_thumb_lx: 0, s_thumb_ly: 0, s_thumb_rx: 0, s_thumb_ry: 0,
+                },
+            };
+            if unsafe { xinput(i, &mut state) } != 0 { continue; } // not connected
+            any_connected = true;
+            let gp = &state.gamepad;
+            if gp.w_buttons != 0
+                || gp.b_left_trigger  > TRIGGER_THRESHOLD
+                || gp.b_right_trigger > TRIGGER_THRESHOLD
+                || gp.s_thumb_lx.abs() > THUMB_DEADZONE
+                || gp.s_thumb_ly.abs() > THUMB_DEADZONE
+                || gp.s_thumb_rx.abs() > THUMB_DEADZONE
+                || gp.s_thumb_ry.abs() > THUMB_DEADZONE
+            {
+                any_active = true;
+            }
+        }
+        (any_connected, any_active)
     }
 }
 
@@ -106,11 +185,12 @@ fn run(data_dir: PathBuf, config_path: PathBuf) {
 
     append_event(&events_path, &now_str(), "STARTUP");
 
-    let mut sleeping     = false;
-    let mut threshold    = read_threshold_secs(&config_path);
-    let mut last_hb      = Instant::now();
-    let mut last_tick    = Instant::now();
-    let mut cfg_counter  = 0u32;
+    let mut sleeping              = false;
+    let mut threshold             = read_threshold_secs(&config_path);
+    let mut last_hb               = Instant::now();
+    let mut last_tick             = Instant::now();
+    let mut cfg_counter           = 0u32;
+    let mut gamepad_last_active   = Instant::now();
 
     // If already idle at startup beyond the threshold, enter sleeping state
     // immediately so we don't miss a session in progress.
@@ -150,8 +230,20 @@ fn run(data_dir: PathBuf, config_path: PathBuf) {
             cfg_counter = 0;
         }
 
-        let idle   = idle_secs();
-        let idle_m = idle_ms();
+        let mut idle_m = idle_ms();
+
+        // ── Gamepad: if connected use min(kb/mouse idle, gamepad idle) ─────────
+        #[cfg(target_os = "windows")]
+        {
+            let (connected, active) = win::poll_gamepad();
+            if active { gamepad_last_active = Instant::now(); }
+            if connected {
+                let gp_ms = gamepad_last_active.elapsed().as_millis() as u64;
+                idle_m = idle_m.min(gp_ms);
+            }
+        }
+
+        let idle = idle_m / 1000;
 
         // ── Heartbeat (always, even when paused) ──────────────────────────────
         if last_hb.elapsed() >= HB_INTERVAL {
