@@ -4,7 +4,6 @@ mod monitor;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Shared threshold: updated instantly by save_config, read by monitor thread.
@@ -494,30 +493,122 @@ struct SessionCache {
 }
 static SESSION_CACHE: std::sync::Mutex<Option<SessionCache>> = std::sync::Mutex::new(None);
 
-fn run_parse_sessions() -> Result<Vec<Session>, String> {
-    let root = repo_root();
-    let exe = root.join("src_cpp/parse_sessions.exe");
-    let events = data_dir().join("sleep_events.txt");
-    let heartbeat = data_dir().join("sleep_heartbeat.txt");
-    let config = root.join("config.json");
+fn parse_sessions_rust() -> Result<Vec<Session>, String> {
+    use chrono::{NaiveDateTime, TimeZone, Local};
 
-    if !exe.exists() {
-        return Err(format!("parse_sessions.exe not found at {:?}", exe));
+    let events_path   = data_dir().join("sleep_events.txt");
+    let heartbeat_path = data_dir().join("sleep_heartbeat.txt");
+    let min_sleep_secs = THRESHOLD_SECS.load(Ordering::Relaxed) as i64;
+
+    let ts_to_epoch = |s: &str| -> Option<i64> {
+        let ndt = NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+        Local.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
+    };
+
+    let epoch_to_ts = |ep: i64| -> String {
+        Local.timestamp_opt(ep, 0)
+            .single()
+            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_default()
+    };
+
+    // Heartbeat (for POWER_LOSS start-time correction)
+    let mut hb_epoch: i64 = 0;
+    let mut hb_idle_ms: i64 = 0;
+    if let Ok(txt) = std::fs::read_to_string(&heartbeat_path) {
+        if let Some(line) = txt.lines().next() {
+            let line = line.trim_end_matches('\r');
+            if let Some(c) = line.find(',') {
+                if let Some(ep) = ts_to_epoch(&line[..c]) {
+                    hb_epoch = ep;
+                    hb_idle_ms = line[c+1..].trim().parse().unwrap_or(0);
+                }
+            }
+        }
     }
 
-    let out = Command::new(&exe)
-        .arg(&events)
-        .arg(&heartbeat)
-        .arg(&config)
-        .output()
-        .map_err(|e| e.to_string())?;
+    // Events
+    if !events_path.exists() { return Ok(vec![]); }
+    let raw = std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?;
 
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    struct Ev { epoch: i64, ts: String, ty: String }
+    let mut evs: Vec<Ev> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() { continue; }
+        if let Some(c) = line.find(',') {
+            if let Some(ep) = ts_to_epoch(&line[..c]) {
+                evs.push(Ev { epoch: ep, ts: line[..c].to_string(), ty: line[c+1..].to_string() });
+            }
+        }
+    }
+    evs.sort_by_key(|e| e.epoch);
+
+    // State machine (mirrors parse_sessions.cpp logic)
+    let mut sessions: Vec<Session> = Vec::new();
+    let mut sleeping = false;
+    let mut sleep_start_ep: i64 = 0;
+    let mut sleep_start_ts = String::new();
+    let mut session_type = String::new();
+    let mut is_out = false;
+
+    let push = |sessions: &mut Vec<Session>, start_ts: &str, start_ep: i64,
+                end_ts: &str, end_ep: i64, stype: &str| {
+        let dur = end_ep - start_ep;
+        if dur >= min_sleep_secs {
+            sessions.push(Session {
+                start: start_ts.to_string(),
+                end: end_ts.to_string(),
+                duration_hours: dur as f64 / 3600.0,
+                session_type: stype.to_string(),
+            });
+        }
+    };
+
+    let n = evs.len();
+    for i in 0..n {
+        let (ep, ts, ty) = (evs[i].epoch, evs[i].ts.as_str(), evs[i].ty.as_str());
+
+        if ty == "DEVICE_ON" {
+            if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
+            continue;
+        }
+        if ty == "OUT_START" {
+            is_out = true;
+            if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
+            continue;
+        }
+        if ty == "OUT_END" { is_out = false; continue; }
+
+        if !sleeping {
+            if !is_out && matches!(ty, "IDLE_START" | "SUSPEND" | "SHUTDOWN") {
+                sleeping = true;
+                sleep_start_ep = ep;
+                sleep_start_ts = ts.to_string();
+                session_type = if ty == "IDLE_START" { "IDLE" } else { "POWER" }.to_string();
+            } else if matches!(ty, "STARTUP" | "RESUME") && i > 0 {
+                if !is_out && ep - evs[i-1].epoch > 4 * 3600 {
+                    let prev_ep = evs[i-1].epoch;
+                    let (start_ep, start_ts_s) = if hb_epoch > 0 && hb_epoch > prev_ep && hb_epoch < ep {
+                        let adj = hb_epoch - hb_idle_ms / 1000;
+                        if adj > prev_ep { (adj, epoch_to_ts(adj)) } else { (prev_ep, evs[i-1].ts.clone()) }
+                    } else {
+                        (prev_ep, evs[i-1].ts.clone())
+                    };
+                    push(&mut sessions, &start_ts_s, start_ep, ts, ep, "POWER_LOSS");
+                }
+            }
+        } else {
+            if matches!(ty, "IDLE_RESUME" | "RESUME" | "STARTUP") {
+                push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type);
+                sleeping = false;
+            } else if matches!(ty, "SUSPEND" | "SHUTDOWN") {
+                session_type = "POWER".to_string();
+            }
+        }
     }
 
-    let json = String::from_utf8_lossy(&out.stdout);
-    serde_json::from_str::<Vec<Session>>(&json).map_err(|e| e.to_string())
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -534,7 +625,7 @@ fn get_sessions() -> Result<Vec<Session>, String> {
         }
     }
 
-    let sessions = run_parse_sessions()?;
+    let sessions = parse_sessions_rust()?;
     *cache = Some(SessionCache { sessions: sessions.clone(), mtime: current_mtime });
     Ok(sessions)
 }
@@ -654,7 +745,7 @@ pub fn run() {
                     let _ = sort_events_file(&events_path);
                 }
                 pull_mobile_events_inner();
-                let _ = run_parse_sessions().map(|sessions| {
+                let _ = parse_sessions_rust().map(|sessions| {
                     let events = data_dir().join("sleep_events.txt");
                     let mtime  = events.metadata().and_then(|m| m.modified())
                                        .unwrap_or(std::time::UNIX_EPOCH);
