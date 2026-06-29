@@ -5,6 +5,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// Shared threshold: updated instantly by save_config, read by monitor thread.
+pub static THRESHOLD_SECS: AtomicU64 = AtomicU64::new(3600);
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -51,7 +55,9 @@ fn save_config(
         mobile_secret: if mobile_secret.is_empty() { None } else { Some(mobile_secret) },
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    std::fs::write(config_path(), json).map_err(|e| e.to_string())
+    std::fs::write(config_path(), json).map_err(|e| e.to_string())?;
+    THRESHOLD_SECS.store(idle_threshold_minutes as u64 * 60, Ordering::Relaxed);
+    Ok(())
 }
 
 
@@ -659,8 +665,15 @@ pub fn run() {
                 }
             });
 
+            // Initialize shared threshold from config before starting monitor
+            let init_cfg = load_config_inner();
+            THRESHOLD_SECS.store(
+                init_cfg.idle_threshold_minutes.unwrap_or(60) as u64 * 60,
+                Ordering::Relaxed,
+            );
+
             // Start background monitor
-            monitor::start(data_dir(), config_path());
+            monitor::start(data_dir());
 
             Ok(())
         })

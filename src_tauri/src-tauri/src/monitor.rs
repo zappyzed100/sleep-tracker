@@ -147,33 +147,18 @@ fn write_heartbeat(path: &PathBuf, idle_ms_val: u64) {
     let _ = fs::write(path, format!("{},{}\n", now_str(), idle_ms_val));
 }
 
-// ── Config ────────────────────────────────────────────────────────────────────
 
-fn read_threshold_secs(config_path: &PathBuf) -> u64 {
-    let minutes: u64 = fs::read_to_string(config_path).ok()
-        .and_then(|s| {
-            let needle = "\"idle_threshold_minutes\"";
-            let pos = s.find(needle)?;
-            let after = &s[pos + needle.len()..];
-            let colon = after.find(':')?;
-            let v = after[colon + 1..].trim_start();
-            let end = v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len());
-            v[..end].parse().ok()
-        })
-        .unwrap_or(60);
-    minutes.max(1) * 60
-}
 
 // ── Monitor loop ──────────────────────────────────────────────────────────────
 
-pub fn start(data_dir: PathBuf, config_path: PathBuf) {
+pub fn start(data_dir: PathBuf) {
     thread::Builder::new()
         .name("sleep-monitor".into())
-        .spawn(move || run(data_dir, config_path))
+        .spawn(move || run(data_dir))
         .expect("failed to spawn monitor thread");
 }
 
-fn run(data_dir: PathBuf, config_path: PathBuf) {
+fn run(data_dir: PathBuf) {
     let events_path    = data_dir.join("sleep_events.txt");
     let heartbeat_path = data_dir.join("sleep_heartbeat.txt");
     let pause_flag     = data_dir.join("monitor_paused");
@@ -187,10 +172,9 @@ fn run(data_dir: PathBuf, config_path: PathBuf) {
     append_event(&events_path, &now_str(), "STARTUP");
 
     let mut sleeping              = false;
-    let mut threshold             = read_threshold_secs(&config_path);
+    let mut threshold             = crate::THRESHOLD_SECS.load(std::sync::atomic::Ordering::Relaxed);
     let mut last_hb               = Instant::now();
     let mut last_tick             = Instant::now();
-    let mut cfg_counter           = 0u32;
     let mut gamepad_last_active   = Instant::now();
 
     // If already idle at startup beyond the threshold, enter sleeping state
@@ -224,12 +208,7 @@ fn run(data_dir: PathBuf, config_path: PathBuf) {
         }
         last_tick = now;
 
-        // ── Reload config periodically (~5 min) ───────────────────────────────
-        cfg_counter += 1;
-        if cfg_counter >= 60 {
-            threshold = read_threshold_secs(&config_path);
-            cfg_counter = 0;
-        }
+        threshold = crate::THRESHOLD_SECS.load(std::sync::atomic::Ordering::Relaxed);
 
         let mut idle_m = idle_ms();
 
