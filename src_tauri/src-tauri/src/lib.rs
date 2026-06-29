@@ -1,8 +1,16 @@
 mod prediction;
 mod monitor;
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -364,14 +372,81 @@ fn delete_session(start: String, end: String) -> Result<(), String> {
     std::fs::write(&path, filtered.join("\n") + "\n").map_err(|e| e.to_string())
 }
 
+fn show_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+fn append_shutdown_event() {
+    let path = data_dir().join("sleep_events.txt");
+    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{},SHUTDOWN", ts);
+    }
+}
+
+fn write_pid() {
+    let _ = std::fs::write(data_dir().join("monitor.pid"), std::process::id().to_string());
+}
+
+fn remove_pid() {
+    let _ = std::fs::remove_file(data_dir().join("monitor.pid"));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|_app| {
+        .setup(|app| {
+            // PID file
+            write_pid();
+
+            // System tray
+            let show_item = MenuItem::with_id(app, "show", "開く", true, None::<&str>)?;
+            let sep       = PredefinedMenuItem::separator(app)?;
+            let quit_item = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &sep, &quit_item])?;
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("睡眠トラッカー")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_window(app),
+                    "quit" => {
+                        append_shutdown_event();
+                        remove_pid();
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event {
+                        show_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
+            // Start background monitor
             monitor::start(data_dir(), config_path());
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // Minimize to tray instead of quitting
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
