@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import WeeklyChart from "./WeeklyChart";
 import StatsCard from "./StatsCard";
 import PredictionCard from "./PredictionCard";
@@ -34,11 +35,21 @@ export default function App() {
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
   const [isMobile, setIsMobile] = useState(false);
   const [screenOnEnabled, setScreenOnEnabled] = useState(true);
+  const [appVersion, setAppVersion] = useState("");
   const touchStartX = useRef<number | null>(null);
 
   // Detect platform and load screen_on_enabled config on mount
   useEffect(() => {
-    invoke<boolean>("is_mobile").then(setIsMobile).catch(() => {});
+    invoke<boolean>("is_mobile").then(mobile => {
+      setIsMobile(mobile);
+      if (!mobile) {
+        // PC: fetch settings (idle threshold, target wake time) from Drive on startup
+        invoke("fetch_settings_from_cloud")
+          .then(() => loadSessions())
+          .catch(() => {});
+      }
+    }).catch(() => {});
+    getVersion().then(setAppVersion).catch(() => {});
     invoke<{ screen_on_enabled: boolean | null }>("get_config")
       .then(cfg => setScreenOnEnabled(cfg.screen_on_enabled ?? true))
       .catch(() => {});
@@ -67,6 +78,13 @@ export default function App() {
       } catch {
         loadSessions();
       }
+      // Also sync settings (idle threshold, target wake time) from Drive.
+      // Re-run session parse so the new threshold is applied immediately.
+      try {
+        await invoke("fetch_settings_from_cloud");
+        const refreshed = await invoke<Session[]>("get_sessions");
+        setSessions(refreshed);
+      } catch { /* ignore */ }
     };
     doFetch();
     const id = setInterval(doFetch, 30 * 60 * 1000);
@@ -159,7 +177,7 @@ export default function App() {
       {isMobile && <div className="safe-area-spacer" />}
 
       <div className="topbar">
-        <span className="app-title">睡眠トラッカー★v2★</span>
+        <span className="app-title">睡眠トラッカー{appVersion && <small className="app-version">v{appVersion}</small>}</span>
         <div className="tabs">
           <button className={tab === "home" ? "tab active" : "tab"} onClick={() => setTab("home")}>ホーム</button>
           <button className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>設定</button>

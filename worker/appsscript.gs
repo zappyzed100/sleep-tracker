@@ -80,6 +80,24 @@ function doPost(e) {
     }
   }
 
+  // Sync settings (idle_threshold_minutes, target_wake_time): PC → Drive
+  if (e.parameter.action === "set_settings") {
+    try {
+      const content = e.postData ? e.postData.getDataAsString() : "{}";
+      const folder = getBackupFolder();
+      const fileName = "sync_settings.json";
+      const files = folder.getFilesByName(fileName);
+      if (files.hasNext()) {
+        files.next().setContent(content);
+      } else {
+        folder.createFile(fileName, content, MimeType.PLAIN_TEXT);
+      }
+      return ContentService.createTextOutput("ok");
+    } catch (err) {
+      return ContentService.createTextOutput("error: " + err.message);
+    }
+  }
+
   // iPhone / Android event: URL params
   const tag = (e.parameter.tag ?? "").trim();
   const ts  = (e.parameter.ts  ?? "").trim();
@@ -102,6 +120,13 @@ function doGet(e) {
   // Health check (used by the desktop app's connection test)
   if (e.parameter.action === "health") {
     return ContentService.createTextOutput("ok");
+  }
+
+  // Sync settings: Android reads PC-pushed settings
+  if (e.parameter.action === "get_settings") {
+    const files = getBackupFolder().getFilesByName("sync_settings.json");
+    if (!files.hasNext()) return ContentService.createTextOutput("not found").setMimeType(ContentService.MimeType.TEXT);
+    return ContentService.createTextOutput(files.next().getBlob().getDataAsString()).setMimeType(ContentService.MimeType.JSON);
   }
 
   // Restore: return sleep_events_backup.txt content

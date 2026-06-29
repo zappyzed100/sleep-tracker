@@ -253,25 +253,26 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
       )}
 
       {/* 睡眠判定時間 */}
-      {!isMobile && (
-        <Section title="睡眠判定時間">
-          <div className="settings-row">
-            <span>キーボード / マウス操作がない状態が</span>
-            <input
-              type="number"
-              className="settings-number"
-              value={threshold}
-              min={1}
-              max={9999}
-              onChange={(e) => setThreshold(Number(e.target.value))}
-            />
-            <span>分以上続いたら睡眠と判定</span>
-          </div>
-          <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
-            {configSaved ? "✓ 保存しました" : "保存"}
-          </button>
-        </Section>
-      )}
+      <Section title="睡眠判定時間">
+        <div className="settings-row">
+          {!isMobile && <span>キーボード / マウス操作がない状態が</span>}
+          <input
+            type="number"
+            className="settings-number"
+            value={threshold}
+            min={1}
+            max={9999}
+            onChange={(e) => setThreshold(Number(e.target.value))}
+          />
+          <span>分以上続いたら睡眠と判定</span>
+        </div>
+        <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
+          {configSaved ? "✓ 保存しました" : "保存"}
+        </button>
+        {isMobile && (
+          <div className="settings-note">変更するとDrive経由でPCにも反映されます。</div>
+        )}
+      </Section>
 
       {/* 目標起床時刻 */}
       <Section title="目標起床時刻">
@@ -367,7 +368,16 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
               setSyncing(true); setSyncMsg(null);
               try {
                 await invoke("fetch_from_cloud");
-                setSyncMsg("データを取得しました");
+                await invoke("fetch_settings_from_cloud");
+                const cfg = await invoke<AppConfig>("get_config");
+                setThreshold(cfg.idle_threshold_minutes ?? 60);
+                if (cfg.target_wake_time) {
+                  setTargetWakeEnabled(true);
+                  setTargetWake(cfg.target_wake_time);
+                } else {
+                  setTargetWakeEnabled(false);
+                }
+                setSyncMsg("データと設定を取得しました");
                 onRefresh?.();
               } catch (e) { setSyncMsg(`エラー: ${e}`); }
               finally { setSyncing(false); }

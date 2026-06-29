@@ -33,6 +33,13 @@ pub struct AppConfig {
     pub screen_on_enabled: Option<bool>,
 }
 
+// Subset of config synced between PC and Android via Drive.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SyncSettings {
+    idle_threshold_minutes: Option<u32>,
+    target_wake_time: Option<String>,
+}
+
 fn load_config_inner() -> AppConfig {
     let path = config_path();
     if !path.exists() { return AppConfig::default(); }
@@ -66,7 +73,53 @@ fn save_config(
     std::fs::write(config_path(), json).map_err(|e| e.to_string())?;
     THRESHOLD_SECS.store(idle_threshold_minutes as u64 * 60, Ordering::Relaxed);
     *SESSION_CACHE.lock().unwrap() = None;
+    // Push shared settings to Drive (best-effort, errors are silent)
+    push_settings_to_drive_inner(&cfg);
     Ok(())
+}
+
+// Push idle_threshold_minutes and target_wake_time to Drive (PC → Android).
+// PC is always the source of truth; Android reads this on next fetch.
+fn push_settings_to_drive_inner(cfg: &AppConfig) {
+    let (base_url, secret) = match (&cfg.mobile_url, &cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u.clone(), s.clone()),
+        _ => return,
+    };
+    let sync = SyncSettings {
+        idle_threshold_minutes: cfg.idle_threshold_minutes,
+        target_wake_time: cfg.target_wake_time.clone(),
+    };
+    let Ok(body) = serde_json::to_string(&sync) else { return };
+    let url = format!("{}?secret={}&action=set_settings", base_url.trim_end_matches('/'), secret);
+    let _ = gist_client().and_then(|c|
+        c.post(&url).header("Content-Type", "application/json").body(body).send().map_err(|e| e.to_string())
+    );
+}
+
+// Android: fetch shared settings from Drive and merge into local config.
+// PC settings take priority — Android never pushes settings back.
+#[tauri::command]
+fn fetch_settings_from_cloud() -> Result<(), String> {
+    let cfg = load_config_inner();
+    let (base_url, secret) = match (cfg.mobile_url.as_ref(), cfg.mobile_secret.as_ref()) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u.clone(), s.clone()),
+        _ => return Ok(()),
+    };
+    let url = format!("{}?secret={}&action=get_settings", base_url.trim_end_matches('/'), secret);
+    let resp = match gist_client().and_then(|c| c.get(&url).send().map_err(|e| e.to_string())) {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Ok(()),
+    };
+    let text = resp.text().unwrap_or_default();
+    if text.trim().is_empty() || text.trim() == "Unauthorized" || text.trim().starts_with("not found") {
+        return Ok(());
+    }
+    let Ok(sync) = serde_json::from_str::<SyncSettings>(&text) else { return Ok(()) };
+    let mut local = load_config_inner();
+    if let Some(v) = sync.idle_threshold_minutes { local.idle_threshold_minutes = Some(v); }
+    if let Some(v) = sync.target_wake_time { local.target_wake_time = Some(v); }
+    let json = serde_json::to_string_pretty(&local).map_err(|e| e.to_string())?;
+    std::fs::write(config_path(), json).map_err(|e| e.to_string())
 }
 
 
@@ -911,6 +964,7 @@ pub fn run() {
             read_text_file, sync_gist, clear_all_data, create_desktop_shortcut,
             get_monitor_status, set_monitor_paused,
             is_mobile, send_screen_on, fetch_from_cloud,
+            fetch_settings_from_cloud,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
