@@ -117,6 +117,7 @@ export default function Settings({ sessions, onRefresh }: Props) {
     try {
       const msg = await invoke<string>("sync_gist");
       setSyncMsg(msg);
+      onRefresh?.();
     } catch (e) {
       setSyncMsg(`エラー: ${e}`);
     } finally {
@@ -247,7 +248,6 @@ export default function Settings({ sessions, onRefresh }: Props) {
         <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
           {configSaved ? "✓ 保存しました" : "保存"}
         </button>
-        <div className="settings-note">変更後はタスクトレイのアイコンを右クリック →「終了」して再起動すると反映されます</div>
       </Section>
 
       {/* クラウド連携 */}
