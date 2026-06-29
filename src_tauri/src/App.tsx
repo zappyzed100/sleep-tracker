@@ -96,7 +96,7 @@ export default function App() {
   useEffect(() => {
     if (!isMobile || !screenOnEnabled) return;
     const send = () => invoke("send_screen_on").catch(() => {});
-    const id = setInterval(send, 5 * 60 * 1000);
+    const id = setInterval(send, 15 * 60 * 1000);
     return () => clearInterval(id);
   }, [isMobile, screenOnEnabled]);
 
