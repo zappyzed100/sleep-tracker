@@ -781,12 +781,10 @@ fn send_screen_on() -> Result<String, String> {
         _ => return Err("クラウド接続が未設定です".into()),
     };
     let ts = chrono::Local::now().timestamp_millis();
-    let url = format!("{}?secret={}", base_url.trim_end_matches('/'), secret);
+    let url = format!("{}?secret={}&tag=SCREEN_ON&ts={}", base_url.trim_end_matches('/'), secret, ts);
     let client = gist_client()?;
     let resp = client
         .post(&url)
-        .header("Content-Type", "text/plain")
-        .body(format!("SCREEN_ON,{}", ts))
         .send()
         .map_err(|e| format!("送信失敗: {}", e))?;
     if resp.status().is_success() {

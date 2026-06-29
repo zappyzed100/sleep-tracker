@@ -21,15 +21,12 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             if (baseUrl.isEmpty() || secret.isEmpty()) return@withContext Result.success()
 
             val ts   = System.currentTimeMillis()
-            val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret")
+            val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret&tag=SCREEN_ON&ts=$ts")
             val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "text/plain")
-                doOutput      = true
+                requestMethod  = "POST"
                 connectTimeout = 15_000
                 readTimeout    = 15_000
             }
-            conn.outputStream.use { it.write("SCREEN_ON,$ts".toByteArray()) }
             conn.responseCode   // trigger request
             conn.disconnect()
             Result.success()
