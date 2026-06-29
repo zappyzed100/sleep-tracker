@@ -15,6 +15,20 @@ function doPost(e) {
     return ContentService.createTextOutput("Unauthorized");
   }
 
+  // PC backup: raw body = sleep_events.txt content
+  if (e.parameter.action === "backup") {
+    const content = e.postData ? e.postData.getDataAsString() : "";
+    const fileName = "sleep_events_backup.txt";
+    const files = DriveApp.getFilesByName(fileName);
+    if (files.hasNext()) {
+      files.next().setContent(content);
+    } else {
+      DriveApp.createFile(fileName, content, MimeType.PLAIN_TEXT);
+    }
+    return ContentService.createTextOutput("ok");
+  }
+
+  // iPhone / Android event: URL params
   const tag = (e.parameter.tag ?? "").trim();
   const ts  = (e.parameter.ts  ?? "").trim();
   if (!tag || !ts) {

@@ -304,28 +304,12 @@ fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Result<S
     }
 }
 
-#[tauri::command]
-fn sync_gist() -> Result<String, String> {
-    // 1. Pull mobile events from Gist
-    let pull_msg = pull_mobile_events_inner();
-
-    // 2. Push sleep_events.txt to Gist
+fn push_events_to_gist(content: &str) -> Result<String, String> {
     let cfg = load_config_inner();
-    let gist_id = cfg.gist_id.ok_or_else(|| "Gist ID が設定されていません".to_string())?;
-    let token = cfg.github_token.ok_or_else(|| "GitHub Token が設定されていません".to_string())?;
+    let gist_id = match cfg.gist_id { Some(g) if !g.is_empty() => g, _ => return Ok("Gistスキップ(未設定)".into()) };
+    let token   = match cfg.github_token { Some(t) if !t.is_empty() => t, _ => return Ok("Gistスキップ(未設定)".into()) };
 
-    let events_path = data_dir().join("sleep_events.txt");
-    let content = if events_path.exists() {
-        std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?
-    } else {
-        String::new()
-    };
-    let line_count = content.lines().count();
-
-    let body = serde_json::json!({
-        "files": { "sleep_events.txt": { "content": content } }
-    });
-
+    let body = serde_json::json!({ "files": { "sleep_events.txt": { "content": content } } });
     let resp = gist_client()?
         .patch(format!("https://api.github.com/gists/{}", gist_id))
         .headers(gist_headers(&token))
@@ -333,11 +317,55 @@ fn sync_gist() -> Result<String, String> {
         .send()
         .map_err(|e| format!("ネットワークエラー: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {} — アップロード失敗", resp.status().as_u16()));
+    if resp.status().is_success() {
+        Ok(format!("Gist {} 行", content.lines().count()))
+    } else {
+        Err(format!("Gist HTTP {}", resp.status().as_u16()))
     }
+}
 
-    Ok(format!("同期完了 — {} 行アップロード / モバイル: {}", line_count, pull_msg))
+fn backup_to_drive(content: &str) -> String {
+    let cfg = load_config_inner();
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
+        _ => return "Driveスキップ(未設定)".into(),
+    };
+
+    let url = format!("{}?secret={}&action=backup", base_url.trim_end_matches('/'), secret);
+    let resp = match gist_client()
+        .and_then(|c| c.post(&url).header("Content-Type", "text/plain").body(content.to_string()).send().map_err(|e| e.to_string()))
+    {
+        Ok(r) => r,
+        Err(e) => return format!("Drive送信失敗: {}", e),
+    };
+
+    if resp.status().is_success() {
+        "Drive バックアップ完了".into()
+    } else {
+        format!("Drive HTTP {}", resp.status().as_u16())
+    }
+}
+
+#[tauri::command]
+fn sync_gist() -> Result<String, String> {
+    // 1. Pull mobile events from Google Sheets
+    let pull_msg = pull_mobile_events_inner();
+
+    // 2. Read updated sleep_events.txt
+    let events_path = data_dir().join("sleep_events.txt");
+    let content = if events_path.exists() {
+        std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+
+    // 3. Push to Gist
+    let gist_msg = push_events_to_gist(&content).unwrap_or_else(|e| e);
+
+    // 4. Backup to Google Drive via Apps Script
+    let drive_msg = backup_to_drive(&content);
+
+    Ok(format!("同期完了 — モバイル: {} / {} / {}", pull_msg, gist_msg, drive_msg))
 }
 
 // ── Data management ───────────────────────────────────────────────────────────
