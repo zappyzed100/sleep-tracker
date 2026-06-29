@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub idle_threshold_minutes: Option<u32>,
     pub mobile_url: Option<String>,
     pub mobile_secret: Option<String>,
+    pub target_wake_time: Option<String>,
 }
 
 fn config_path() -> PathBuf {
@@ -47,11 +48,13 @@ fn save_config(
     idle_threshold_minutes: u32,
     mobile_url: String,
     mobile_secret: String,
+    target_wake_time: Option<String>,
 ) -> Result<(), String> {
     let cfg = AppConfig {
         idle_threshold_minutes: Some(idle_threshold_minutes),
         mobile_url: if mobile_url.is_empty() { None } else { Some(mobile_url) },
         mobile_secret: if mobile_secret.is_empty() { None } else { Some(mobile_secret) },
+        target_wake_time: target_wake_time.filter(|s| !s.is_empty()),
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(config_path(), json).map_err(|e| e.to_string())?;
@@ -637,7 +640,8 @@ fn predict_sleep(sessions: Vec<Session>, now_iso: String) -> prediction::Predict
 
 #[tauri::command]
 fn find_optimal_bedtime(sessions: Vec<Session>, now_iso: String) -> Option<prediction::OptimalResult> {
-    prediction::find_optimal(&sessions, &now_iso)
+    let target_wake = load_config_inner().target_wake_time;
+    prediction::find_optimal(&sessions, &now_iso, target_wake.as_deref())
 }
 
 #[tauri::command]

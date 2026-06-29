@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { Session } from "./types";
+import TimePicker from "./TimePicker";
 
 function ConfirmDeleteModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
   return (
@@ -26,6 +27,7 @@ interface AppConfig {
   idle_threshold_minutes: number | null;
   mobile_url: string | null;
   mobile_secret: string | null;
+  target_wake_time: string | null;
 }
 
 interface SectionProps {
@@ -50,6 +52,8 @@ interface Props {
 export default function Settings({ sessions, onRefresh }: Props) {
   const [threshold, setThreshold] = useState(60);
   const [configSaved, setConfigSaved] = useState(false);
+  const [targetWakeEnabled, setTargetWakeEnabled] = useState(false);
+  const [targetWake, setTargetWake] = useState("07:00");
   const [mobileUrl, setMobileUrl] = useState("");
   const [mobileSecret, setMobileSecret] = useState("");
   const [showMobileSecret, setShowMobileSecret] = useState(false);
@@ -68,6 +72,10 @@ export default function Settings({ sessions, onRefresh }: Props) {
       setThreshold(cfg.idle_threshold_minutes ?? 60);
       setMobileUrl(cfg.mobile_url ?? "");
       setMobileSecret(cfg.mobile_secret ?? "");
+      if (cfg.target_wake_time) {
+        setTargetWakeEnabled(true);
+        setTargetWake(cfg.target_wake_time);
+      }
     }).catch(console.error);
 
     invoke<boolean>("get_startup_enabled").then(setStartup).catch(console.error);
@@ -79,6 +87,7 @@ export default function Settings({ sessions, onRefresh }: Props) {
         idleThresholdMinutes: threshold,
         mobileUrl,
         mobileSecret,
+        targetWakeTime: targetWakeEnabled ? targetWake : null,
       });
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
@@ -245,6 +254,29 @@ export default function Settings({ sessions, onRefresh }: Props) {
           />
           <span>分以上続いたら睡眠と判定</span>
         </div>
+        <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
+          {configSaved ? "✓ 保存しました" : "保存"}
+        </button>
+      </Section>
+
+      {/* 目標起床時刻 */}
+      <Section title="目標起床時刻">
+        <label className="settings-check-row">
+          <input
+            type="checkbox"
+            checked={targetWakeEnabled}
+            onChange={(e) => setTargetWakeEnabled(e.target.checked)}
+            className="settings-checkbox"
+          />
+          <span>目標起床時刻を指定する</span>
+        </label>
+        {targetWakeEnabled ? (
+          <div className="settings-row">
+            <TimePicker value={targetWake} onChange={setTargetWake} />
+          </div>
+        ) : (
+          <div className="settings-note">未指定の場合、過去の起床時刻の中央値を自動で使用します</div>
+        )}
         <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
           {configSaved ? "✓ 保存しました" : "保存"}
         </button>
