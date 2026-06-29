@@ -287,15 +287,21 @@ fn sync_gist() -> Result<String, String> {
     // 1. Pull mobile events from Google Sheets
     let pull_msg = pull_mobile_events_inner();
 
-    // 2. Read updated sleep_events.txt
+    // 2. Always sort+dedup the file (removes duplicate IDLE_START lines caused
+    //    by monitor oscillation when threshold < WAKE_SECS)
     let events_path = data_dir().join("sleep_events.txt");
+    if events_path.exists() {
+        let _ = sort_events_file(&events_path);
+    }
+
+    // 3. Read updated sleep_events.txt
     let content = if events_path.exists() {
         std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?
     } else {
         String::new()
     };
 
-    // 3. Backup to Google Drive via Apps Script
+    // 4. Backup to Google Drive via Apps Script
     let drive_msg = backup_to_drive(&content);
 
     Ok(format!("同期完了 — モバイル: {} / {}", pull_msg, drive_msg))
@@ -635,6 +641,11 @@ pub fn run() {
             // pre-warm cache → auto-pull every 5 min
             std::thread::spawn(|| {
                 ensure_events_from_drive();
+                // Deduplicate on startup in case of prior monitor oscillation
+                let events_path = data_dir().join("sleep_events.txt");
+                if events_path.exists() {
+                    let _ = sort_events_file(&events_path);
+                }
                 pull_mobile_events_inner();
                 let _ = run_parse_sessions().map(|sessions| {
                     let events = data_dir().join("sleep_events.txt");

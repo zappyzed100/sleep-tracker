@@ -180,8 +180,9 @@ fn run(data_dir: PathBuf, config_path: PathBuf) {
 
     const POLL:        Duration = Duration::from_secs(5);
     const HB_INTERVAL: Duration = Duration::from_secs(30);
-    // User is considered "awake" once idle drops below this
-    const WAKE_SECS: u64 = 300; // 5 minutes
+    // User is considered "awake" once idle drops below 60s.
+    // Must be < any realistic threshold to prevent start/resume oscillation.
+    const WAKE_SECS: u64 = 60;
 
     append_event(&events_path, &now_str(), "STARTUP");
 
