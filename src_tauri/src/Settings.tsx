@@ -66,6 +66,10 @@ export default function Settings({ sessions, onRefresh }: Props) {
   const [csvMsg, setCsvMsg] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+  // Shortcut
+  const [shortcutMsg, setShortcutMsg] = useState<string | null>(null);
+  const [shortcutBusy, setShortcutBusy] = useState(false);
+
   // Gist sync
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -145,10 +149,15 @@ export default function Settings({ sessions, onRefresh }: Props) {
   }
 
   async function handleCreateShortcut() {
+    setShortcutBusy(true);
+    setShortcutMsg(null);
     try {
       await invoke("create_desktop_shortcut");
+      setShortcutMsg("デスクトップにショートカットを作成しました");
     } catch (e) {
-      setCsvMsg(`ショートカット: ${e}`);
+      setShortcutMsg(`作成失敗: ${e}`);
+    } finally {
+      setShortcutBusy(false);
     }
   }
 
@@ -219,9 +228,19 @@ export default function Settings({ sessions, onRefresh }: Props) {
           />
           <span>PC 起動時に自動起動する</span>
         </label>
-        <button className="settings-btn" onClick={handleCreateShortcut} style={{ alignSelf: "flex-start" }}>
-          デスクトップにショートカットを作成
+        <button
+          className="settings-btn"
+          onClick={handleCreateShortcut}
+          disabled={shortcutBusy}
+          style={{ alignSelf: "flex-start" }}
+        >
+          {shortcutBusy ? "作成中..." : "デスクトップにショートカットを作成"}
         </button>
+        {shortcutMsg && (
+          <div className={`settings-status ${shortcutMsg.startsWith("作成失敗") ? "err" : "ok"}`}>
+            {shortcutMsg}
+          </div>
+        )}
       </Section>
 
       {/* 睡眠判定時間 */}

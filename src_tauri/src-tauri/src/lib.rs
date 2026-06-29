@@ -218,8 +218,44 @@ fn clear_all_data() -> Result<(), String> {
 
 #[tauri::command]
 fn create_desktop_shortcut() -> Result<(), String> {
-    // TODO: Phase 5 — create .lnk via Windows Shell API
-    Err("デスクトップショートカット作成は未実装です".to_string())
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_str  = exe.to_string_lossy().replace('\'', "''");
+    let work_dir = exe.parent()
+        .unwrap_or(exe.as_path())
+        .to_string_lossy()
+        .replace('\'', "''");
+
+    let script = format!(
+        "$ws  = New-Object -ComObject WScript.Shell\n\
+         $lnk = $ws.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\\睡眠トラッカー.lnk')\n\
+         $lnk.TargetPath       = '{}'\n\
+         $lnk.WorkingDirectory = '{}'\n\
+         $lnk.Description      = '睡眠トラッカー'\n\
+         $lnk.Save()\n",
+        exe_str, work_dir
+    );
+
+    // Write UTF-16LE with BOM (PowerShell on Windows 5.1 reads this reliably)
+    let tmp = std::env::temp_dir().join("st_shortcut.ps1");
+    let utf16: Vec<u8> = std::iter::once(0xFFFEu16)
+        .chain(script.encode_utf16())
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    std::fs::write(&tmp, &utf16).map_err(|e| e.to_string())?;
+
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+               "-File", tmp.to_str().unwrap_or("")])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&tmp);
+
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!("失敗: {}", String::from_utf8_lossy(&out.stderr).trim()))
+    }
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────
@@ -279,29 +315,40 @@ pub struct Session {
     pub session_type: String,
 }
 
-fn repo_root() -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_default();
-    let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
-    for _ in 0..6 {
-        if dir.join("src_cpp").exists() {
-            return dir;
+fn repo_root() -> &'static PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+        for _ in 0..8 {
+            if dir.join("src_cpp").exists() {
+                return dir;
+            }
+            match dir.parent() {
+                Some(p) => dir = p.to_path_buf(),
+                None => break,
+            }
         }
-        match dir.parent() {
-            Some(p) => dir = p.to_path_buf(),
-            None => break,
-        }
-    }
-    std::env::current_dir().unwrap_or_default()
+        std::env::current_dir().unwrap_or_default()
+    })
 }
 
 fn data_dir() -> PathBuf {
-    let dir = repo_root().join("src_tauri").join("data");
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    static DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DATA.get_or_init(|| {
+        let dir = repo_root().join("src_tauri").join("data");
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }).clone()
 }
 
-#[tauri::command]
-fn get_sessions() -> Result<Vec<Session>, String> {
+struct SessionCache {
+    sessions: Vec<Session>,
+    mtime: std::time::SystemTime,
+}
+static SESSION_CACHE: std::sync::Mutex<Option<SessionCache>> = std::sync::Mutex::new(None);
+
+fn run_parse_sessions() -> Result<Vec<Session>, String> {
     let root = repo_root();
     let exe = root.join("src_cpp/parse_sessions.exe");
     let events = data_dir().join("sleep_events.txt");
@@ -325,6 +372,25 @@ fn get_sessions() -> Result<Vec<Session>, String> {
 
     let json = String::from_utf8_lossy(&out.stdout);
     serde_json::from_str::<Vec<Session>>(&json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_sessions() -> Result<Vec<Session>, String> {
+    let events = data_dir().join("sleep_events.txt");
+    let current_mtime = events.metadata()
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::UNIX_EPOCH);
+
+    let mut cache = SESSION_CACHE.lock().unwrap();
+    if let Some(c) = cache.as_ref() {
+        if c.mtime == current_mtime {
+            return Ok(c.sessions.clone());
+        }
+    }
+
+    let sessions = run_parse_sessions()?;
+    *cache = Some(SessionCache { sessions: sessions.clone(), mtime: current_mtime });
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -435,6 +501,13 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Pre-warm session cache so first get_sessions call returns immediately
+            std::thread::spawn(|| { let _ = run_parse_sessions().map(|sessions| {
+                let events = data_dir().join("sleep_events.txt");
+                let mtime = events.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
+            }); });
 
             // Start background monitor
             monitor::start(data_dir(), config_path());

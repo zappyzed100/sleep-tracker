@@ -976,6 +976,7 @@ body {
 }
 
 .settings-btn:hover:not(:disabled) { background: var(--surface1); }
+.settings-btn:active:not(:disabled) { background: var(--surface2); transform: translateY(1px); }
 .settings-btn:disabled { opacity: 0.5; cursor: wait; }
 
 .settings-btn.primary {
