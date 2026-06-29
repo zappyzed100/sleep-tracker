@@ -150,30 +150,28 @@ fn run(data_dir: PathBuf, config_path: PathBuf) {
             cfg_counter = 0;
         }
 
+        let idle   = idle_secs();
+        let idle_m = idle_ms();
+
+        // ── Heartbeat (always, even when paused) ──────────────────────────────
+        if last_hb.elapsed() >= HB_INTERVAL {
+            write_heartbeat(&heartbeat_path, idle_m);
+            last_hb = Instant::now();
+        }
+
         // ── Skip detection if paused ──────────────────────────────────────────
         if pause_flag.exists() {
             continue;
         }
 
-        let idle   = idle_secs();
-        let idle_m = idle_ms();
-
         // ── State machine ─────────────────────────────────────────────────────
         if !sleeping && idle >= threshold {
-            // Became idle long enough → record sleep start at actual idle onset
             let start_ts = ago_str(idle);
             append_event(&events_path, &start_ts, "IDLE_START");
             sleeping = true;
         } else if sleeping && idle < WAKE_SECS {
-            // User is active again → end sleep session
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             sleeping = false;
-        }
-
-        // ── Heartbeat ─────────────────────────────────────────────────────────
-        if last_hb.elapsed() >= HB_INTERVAL {
-            write_heartbeat(&heartbeat_path, idle_m);
-            last_hb = Instant::now();
         }
     }
 }

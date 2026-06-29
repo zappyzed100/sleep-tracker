@@ -63,13 +63,9 @@ export default function App() {
     const shouldPause = monitorStatus === "active";
     try {
       await invoke("set_monitor_paused", { paused: shouldPause });
-      if (shouldPause) {
-        setMonitorStatus("paused");
-      } else {
-        await pollMonitor();
-      }
+      setMonitorStatus(shouldPause ? "paused" : "active");
     } catch (e) {
-      console.error(e);
+      setError(`モニター操作失敗: ${e}`);
     }
   }
 
