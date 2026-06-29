@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub gist_id: Option<String>,
     pub github_token: Option<String>,
     pub idle_threshold_minutes: Option<u32>,
+    pub mobile_url: Option<String>,
+    pub mobile_secret: Option<String>,
 }
 
 fn config_path() -> PathBuf {
@@ -40,11 +42,19 @@ fn get_config() -> AppConfig {
 }
 
 #[tauri::command]
-fn save_config(gist_id: String, github_token: String, idle_threshold_minutes: u32) -> Result<(), String> {
+fn save_config(
+    gist_id: String,
+    github_token: String,
+    idle_threshold_minutes: u32,
+    mobile_url: String,
+    mobile_secret: String,
+) -> Result<(), String> {
     let cfg = AppConfig {
         gist_id: if gist_id.is_empty() { None } else { Some(gist_id) },
         github_token: if github_token.is_empty() { None } else { Some(github_token) },
         idle_threshold_minutes: Some(idle_threshold_minutes),
+        mobile_url: if mobile_url.is_empty() { None } else { Some(mobile_url) },
+        mobile_secret: if mobile_secret.is_empty() { None } else { Some(mobile_secret) },
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(config_path(), json).map_err(|e| e.to_string())
@@ -175,10 +185,10 @@ fn apply_mobile_event_line(line: &str) -> Result<String, String> {
     let time_raw = parts.next().ok_or("フォーマット不正")?.trim();
 
     let event_type = match tag {
-        "LEAVE"     => "OUT_START",
-        "ARRIVE"    => "OUT_END",
-        "SCREEN_ON" => "DEVICE_ON",
-        other       => return Err(format!("不明タグ: {}", other)),
+        "LEAVE_HOME" | "LEAVE"   => "OUT_START",
+        "ARRIVE_HOME" | "ARRIVE" => "OUT_END",
+        "SCREEN_ON"              => "DEVICE_ON",
+        other                    => return Err(format!("不明タグ: {}", other)),
     };
 
     let ts = if let Ok(ms) = time_raw.parse::<i64>() {
@@ -214,12 +224,12 @@ fn apply_mobile_event_line(line: &str) -> Result<String, String> {
     Ok(format!("追加: {}", new_line))
 }
 
-// Pull all lines from mobile_event.txt, merge into sleep_events.txt,
-// then reset mobile_event.txt to "INIT".
+// Pull events from Google Apps Script Web App (GET returns all rows as TAG,TIMESTAMP lines).
+// Duplicate check in apply_mobile_event_line skips already-processed events.
 fn pull_mobile_events_inner() -> String {
     let cfg = load_config_inner();
-    let (gist_id, token) = match (cfg.gist_id, cfg.github_token) {
-        (Some(g), Some(t)) if !g.is_empty() && !t.is_empty() => (g, t),
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
         _ => return "スキップ (設定なし)".into(),
     };
 
@@ -228,32 +238,29 @@ fn pull_mobile_events_inner() -> String {
         Err(e) => return format!("クライアントエラー: {}", e),
     };
 
-    let url = format!("https://api.github.com/gists/{}", gist_id);
-    let resp = match client.get(&url).headers(gist_headers(&token)).send() {
+    let url = format!("{}?secret={}", base_url.trim_end_matches('/'), secret);
+    let resp = match client.get(&url).send() {
         Ok(r) => r,
         Err(e) => return format!("取得失敗: {}", e),
     };
     if !resp.status().is_success() {
         return format!("HTTP {}", resp.status().as_u16());
     }
-    let json: serde_json::Value = match resp.json() {
-        Ok(j) => j,
-        Err(e) => return format!("JSON パース失敗: {}", e),
+    let content = match resp.text() {
+        Ok(t) => t.trim().to_string(),
+        Err(e) => return format!("レスポンス読み取り失敗: {}", e),
     };
 
-    let content = json["files"]["mobile_event.txt"]["content"]
-        .as_str().unwrap_or("").trim().to_string();
-
-    if content.is_empty() || content == "INIT" {
+    if content.is_empty() || content == "Unauthorized" {
+        if content == "Unauthorized" { return "認証失敗（シークレットを確認）".into(); }
         return "モバイルイベントなし".into();
     }
 
-    // Process every non-empty, non-INIT line
-    let mut msgs     = Vec::new();
+    let mut msgs = Vec::new();
     let mut new_events = 0usize;
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line == "INIT" { continue; }
+        if line.is_empty() { continue; }
         match apply_mobile_event_line(line) {
             Ok(msg) => {
                 if msg.starts_with("追加") { new_events += 1; }
@@ -263,21 +270,38 @@ fn pull_mobile_events_inner() -> String {
         }
     }
 
+    if new_events > 0 {
+        let events_path = data_dir().join("sleep_events.txt");
+        let _ = sort_events_file(&events_path);
+        *SESSION_CACHE.lock().unwrap() = None;
+    }
+
     if msgs.is_empty() {
         return "モバイルイベントなし".into();
     }
 
-    // Reset mobile_event.txt to "INIT" so processed events are not re-read
-    let reset = serde_json::json!({
-        "files": { "mobile_event.txt": { "content": "INIT" } }
-    });
-    let _ = client.patch(&url).headers(gist_headers(&token)).json(&reset).send();
-
-    if new_events > 0 {
-        *SESSION_CACHE.lock().unwrap() = None;
-    }
-
     format!("{} 件処理: {}", msgs.len(), msgs.join(" / "))
+}
+
+#[tauri::command]
+fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Result<String, String> {
+    if mobile_url.is_empty() || mobile_secret.is_empty() {
+        return Err("URL とシークレットを入力してください".to_string());
+    }
+    let url = format!("{}?secret={}&action=health", mobile_url.trim_end_matches('/'), mobile_secret);
+    let resp = gist_client()?
+        .get(&url)
+        .send()
+        .map_err(|e| format!("ネットワークエラー: {}", e))?;
+    let status = resp.status();
+    let body = resp.text().unwrap_or_default();
+    if status.is_success() && body.trim() == "ok" {
+        Ok("接続成功".to_string())
+    } else if body.trim() == "Unauthorized" {
+        Err("認証失敗（シークレットを確認）".to_string())
+    } else {
+        Err(format!("HTTP {} — レスポンス: {}", status.as_u16(), body.trim()))
+    }
 }
 
 #[tauri::command]
@@ -682,7 +706,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sessions, predict_sleep, find_optimal_bedtime,
             add_session, delete_session,
-            get_config, save_config, test_github_connection,
+            get_config, save_config, test_github_connection, test_mobile_connection,
             get_startup_enabled, set_startup,
             export_csv, write_csv_file, import_csv,
             get_events_content, restore_events,

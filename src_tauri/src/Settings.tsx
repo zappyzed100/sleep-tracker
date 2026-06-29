@@ -26,6 +26,8 @@ interface AppConfig {
   gist_id: string | null;
   github_token: string | null;
   idle_threshold_minutes: number | null;
+  mobile_url: string | null;
+  mobile_secret: string | null;
 }
 
 interface SectionProps {
@@ -54,6 +56,11 @@ export default function Settings({ sessions, onRefresh }: Props) {
   const [showToken, setShowToken] = useState(false);
   const [threshold, setThreshold] = useState(60);
   const [configSaved, setConfigSaved] = useState(false);
+  const [mobileUrl, setMobileUrl] = useState("");
+  const [mobileSecret, setMobileSecret] = useState("");
+  const [showMobileSecret, setShowMobileSecret] = useState(false);
+  const [mobileTestStatus, setMobileTestStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [mobileTesting, setMobileTesting] = useState(false);
 
   // Startup
   const [startup, setStartup] = useState(false);
@@ -79,6 +86,8 @@ export default function Settings({ sessions, onRefresh }: Props) {
       setGistId(cfg.gist_id ?? "");
       setToken(cfg.github_token ?? "");
       setThreshold(cfg.idle_threshold_minutes ?? 60);
+      setMobileUrl(cfg.mobile_url ?? "");
+      setMobileSecret(cfg.mobile_secret ?? "");
     }).catch(console.error);
 
     invoke<boolean>("get_startup_enabled").then(setStartup).catch(console.error);
@@ -90,11 +99,26 @@ export default function Settings({ sessions, onRefresh }: Props) {
         gistId,
         githubToken: token,
         idleThresholdMinutes: threshold,
+        mobileUrl,
+        mobileSecret,
       });
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
     } catch (e) {
       console.error(e);
+    }
+  }
+
+  async function handleTestMobile() {
+    setMobileTesting(true);
+    setMobileTestStatus(null);
+    try {
+      const msg = await invoke<string>("test_mobile_connection", { mobileUrl, mobileSecret });
+      setMobileTestStatus({ ok: true, msg });
+    } catch (e) {
+      setMobileTestStatus({ ok: false, msg: String(e) });
+    } finally {
+      setMobileTesting(false);
     }
   }
 
@@ -324,6 +348,54 @@ export default function Settings({ sessions, onRefresh }: Props) {
         )}
 
         <div className="settings-note">設定は config.json にローカル保存されます</div>
+      </Section>
+
+      {/* モバイル連携 */}
+      <Section title="モバイル連携 (Google Apps Script)">
+        <div className="settings-field">
+          <label className="settings-label">Apps Script URL</label>
+          <input
+            className="settings-input"
+            value={mobileUrl}
+            onChange={(e) => setMobileUrl(e.target.value)}
+            placeholder="https://script.google.com/macros/s/SCRIPT_ID/exec"
+          />
+        </div>
+        <div className="settings-field">
+          <label className="settings-label">シークレット</label>
+          <div className="settings-input-wrap">
+            <input
+              className="settings-input"
+              type={showMobileSecret ? "text" : "password"}
+              value={mobileSecret}
+              onChange={(e) => setMobileSecret(e.target.value)}
+              placeholder="スクリプトプロパティに設定した SECRET の値"
+            />
+            <button
+              className="settings-eye-btn"
+              onClick={() => setShowMobileSecret((v) => !v)}
+              title={showMobileSecret ? "隠す" : "表示"}
+            >
+              {showMobileSecret ? "🙈" : "👁"}
+            </button>
+          </div>
+        </div>
+        <div className="settings-btn-row">
+          <button className="settings-btn primary" onClick={handleSaveConfig}>
+            {configSaved ? "✓ 保存しました" : "保存"}
+          </button>
+          <button className="settings-btn" onClick={handleTestMobile} disabled={mobileTesting}>
+            {mobileTesting ? "テスト中..." : "接続テスト"}
+          </button>
+        </div>
+        {mobileTestStatus && (
+          <div className={`settings-status ${mobileTestStatus.ok ? "ok" : "err"}`}>
+            {mobileTestStatus.ok ? "✓" : "✗"} {mobileTestStatus.msg}
+          </div>
+        )}
+        <div className="settings-note">
+          iPhone ショートカットから POST でイベントを送信。スプレッドシートに1行ずつ記録されます。
+        </div>
       </Section>
 
       {/* データ管理 */}
