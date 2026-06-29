@@ -29,6 +29,14 @@ body {
   overflow: hidden;
 }
 
+/* ── Android status bar spacer ── */
+.safe-area-spacer {
+  height: env(safe-area-inset-top, 28px);
+  min-height: 28px;
+  background: var(--crust);
+  flex-shrink: 0;
+}
+
 /* ── Topbar ── */
 .topbar {
   display: flex;
@@ -900,6 +908,19 @@ body {
   font-size: 18px;
   color: var(--subtext);
 }
+
+/* ── Settings back button ── */
+.settings-back-btn {
+  background: none;
+  border: none;
+  color: var(--blue);
+  font-size: 16px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 4px 0 8px;
+  align-self: flex-start;
+}
+.settings-back-btn:hover { opacity: 0.75; }
 
 /* ── Settings ── */
 .settings-page {

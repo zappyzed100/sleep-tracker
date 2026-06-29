@@ -24,14 +24,25 @@ Chart.register(
 const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
 const CAT = { CRUST: "#313244", GREEN: "#a6e3a1", YELLOW: "#f9e2af", TEXT: "#cdd6f4", SUBTEXT: "#a6adc8" };
 
+const BAR_ACTIVE = "#89b4fa";
+const BAR_NORMAL = "rgba(137,180,250,0.45)";
+
 interface Props {
   week: DaySummary[];
   onDayClick: (date: string) => void;
+  activeIndex?: number;
 }
 
-export default function WeeklyChart({ week, onDayClick }: Props) {
+export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+
+  // Build bar colors based on activeIndex
+  function barColors(len: number, active: number | undefined) {
+    return Array.from({ length: len }, (_, i) =>
+      i === active ? BAR_ACTIVE : BAR_NORMAL
+    );
+  }
 
   useEffect(() => {
     if (!ref.current) return;
@@ -85,7 +96,7 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
           {
             label: "睡眠時間",
             data: durations,
-            backgroundColor: "rgba(137,180,250,0.7)",
+            backgroundColor: barColors(week.length, activeIndex),
             borderColor: "#89b4fa",
             borderWidth: 1,
             yAxisID: "y",
@@ -120,6 +131,8 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
+        hover: { mode: undefined },
         onClick(event: any, _elements: any, chart: any) {
           const x = event?.x;
           if (x == null) return;
@@ -184,6 +197,14 @@ export default function WeeklyChart({ week, onDayClick }: Props) {
 
     return () => chartRef.current?.destroy();
   }, [week]);
+
+  // Update only bar colors when activeIndex changes (no full redraw)
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.data.datasets[0].backgroundColor = barColors(week.length, activeIndex);
+    chart.update("none");
+  }, [activeIndex]);
 
   return <canvas ref={ref} style={{ width: "100%", height: "100%", cursor: "pointer" }} />;
 }

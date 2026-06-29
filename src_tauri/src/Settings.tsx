@@ -28,6 +28,7 @@ interface AppConfig {
   mobile_url: string | null;
   mobile_secret: string | null;
   target_wake_time: string | null;
+  screen_on_enabled: boolean | null;
 }
 
 interface SectionProps {
@@ -48,13 +49,16 @@ interface Props {
   sessions: Session[];
   onRefresh?: () => void;
   isMobile?: boolean;
+  onBack?: () => void;
+  onScreenOnEnabledChange?: (enabled: boolean) => void;
 }
 
-export default function Settings({ sessions, onRefresh, isMobile = false }: Props) {
+export default function Settings({ sessions, onRefresh, isMobile = false, onBack, onScreenOnEnabledChange }: Props) {
   const [threshold, setThreshold] = useState(60);
   const [configSaved, setConfigSaved] = useState(false);
   const [targetWakeEnabled, setTargetWakeEnabled] = useState(false);
   const [targetWake, setTargetWake] = useState("07:00");
+  const [screenOnEnabled, setScreenOnEnabled] = useState(true);
   const [mobileUrl, setMobileUrl] = useState("");
   const [mobileSecret, setMobileSecret] = useState("");
   const [showMobileSecret, setShowMobileSecret] = useState(false);
@@ -77,6 +81,9 @@ export default function Settings({ sessions, onRefresh, isMobile = false }: Prop
         setTargetWakeEnabled(true);
         setTargetWake(cfg.target_wake_time);
       }
+      const soe = cfg.screen_on_enabled ?? true;
+      setScreenOnEnabled(soe);
+      onScreenOnEnabledChange?.(soe);
     }).catch(console.error);
 
     invoke<boolean>("get_startup_enabled").then(setStartup).catch(console.error);
@@ -89,8 +96,10 @@ export default function Settings({ sessions, onRefresh, isMobile = false }: Prop
         mobileUrl,
         mobileSecret,
         targetWakeTime: targetWakeEnabled ? targetWake : null,
+        screenOnEnabled,
       });
       setConfigSaved(true);
+      onScreenOnEnabledChange?.(screenOnEnabled);
       setTimeout(() => setConfigSaved(false), 2000);
       onRefresh?.();
     } catch (e) {
@@ -215,6 +224,11 @@ export default function Settings({ sessions, onRefresh, isMobile = false }: Prop
   return (
     <div className="settings-page">
 
+      {/* 戻るボタン */}
+      {onBack && (
+        <button className="settings-back-btn" onClick={onBack}>← ホームに戻る</button>
+      )}
+
       {/* 起動設定 (デスクトップのみ) */}
       {!isMobile && (
         <Section title="起動設定">
@@ -244,23 +258,25 @@ export default function Settings({ sessions, onRefresh, isMobile = false }: Prop
       )}
 
       {/* 睡眠判定時間 */}
-      <Section title="睡眠判定時間">
-        <div className="settings-row">
-          <span>キーボード / マウス操作がない状態が</span>
-          <input
-            type="number"
-            className="settings-number"
-            value={threshold}
-            min={1}
-            max={9999}
-            onChange={(e) => setThreshold(Number(e.target.value))}
-          />
-          <span>分以上続いたら睡眠と判定</span>
-        </div>
-        <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
-          {configSaved ? "✓ 保存しました" : "保存"}
-        </button>
-      </Section>
+      {!isMobile && (
+        <Section title="睡眠判定時間">
+          <div className="settings-row">
+            <span>キーボード / マウス操作がない状態が</span>
+            <input
+              type="number"
+              className="settings-number"
+              value={threshold}
+              min={1}
+              max={9999}
+              onChange={(e) => setThreshold(Number(e.target.value))}
+            />
+            <span>分以上続いたら睡眠と判定</span>
+          </div>
+          <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
+            {configSaved ? "✓ 保存しました" : "保存"}
+          </button>
+        </Section>
+      )}
 
       {/* 目標起床時刻 */}
       <Section title="目標起床時刻">
@@ -284,6 +300,30 @@ export default function Settings({ sessions, onRefresh, isMobile = false }: Prop
           {configSaved ? "✓ 保存しました" : "保存"}
         </button>
       </Section>
+
+      {/* バックグラウンド送信 (Androidのみ) */}
+      {isMobile && (
+        <Section title="バックグラウンド送信">
+          <label className="settings-check-row">
+            <input
+              type="checkbox"
+              checked={screenOnEnabled}
+              onChange={(e) => setScreenOnEnabled(e.target.checked)}
+              className="settings-checkbox"
+            />
+            <span>画面ON情報を5分ごとにGoogleDriveへ送信</span>
+          </label>
+          <div className="settings-note">
+            アプリが起動・表示されている間、画面ON状態を5分ごとに記録します。アプリを完全に終了すると送信されません。
+          </div>
+          <div className="settings-note">
+            ※ タブレット起動時に自動で起動させるには、端末の設定 → アプリ管理 → 自動起動（メーカーにより異なります）をONにしてください。
+          </div>
+          <button className="settings-btn primary" onClick={handleSaveConfig} style={{ alignSelf: "flex-start" }}>
+            {configSaved ? "✓ 保存しました" : "保存"}
+          </button>
+        </Section>
+      )}
 
       {/* クラウド連携 */}
       <Section title="クラウド連携">

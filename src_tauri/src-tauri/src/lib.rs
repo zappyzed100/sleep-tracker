@@ -30,6 +30,7 @@ pub struct AppConfig {
     pub mobile_url: Option<String>,
     pub mobile_secret: Option<String>,
     pub target_wake_time: Option<String>,
+    pub screen_on_enabled: Option<bool>,
 }
 
 fn load_config_inner() -> AppConfig {
@@ -52,12 +53,14 @@ fn save_config(
     mobile_url: String,
     mobile_secret: String,
     target_wake_time: Option<String>,
+    screen_on_enabled: Option<bool>,
 ) -> Result<(), String> {
     let cfg = AppConfig {
         idle_threshold_minutes: Some(idle_threshold_minutes),
         mobile_url: if mobile_url.is_empty() { None } else { Some(mobile_url) },
         mobile_secret: if mobile_secret.is_empty() { None } else { Some(mobile_secret) },
         target_wake_time: target_wake_time.filter(|s| !s.is_empty()),
+        screen_on_enabled,
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(config_path(), json).map_err(|e| e.to_string())?;

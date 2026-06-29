@@ -34,10 +34,15 @@ export default function App() {
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
   const [isMobile, setIsMobile] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [screenOnEnabled, setScreenOnEnabled] = useState(true);
+  const touchStartX = useRef<number | null>(null);
 
-  // Detect platform on mount
+  // Detect platform and load screen_on_enabled config on mount
   useEffect(() => {
     invoke<boolean>("is_mobile").then(setIsMobile).catch(() => {});
+    invoke<{ screen_on_enabled: boolean | null }>("get_config")
+      .then(cfg => setScreenOnEnabled(cfg.screen_on_enabled ?? true))
+      .catch(() => {});
   }, []);
 
   const loadSessions = useCallback(async () => {
@@ -52,7 +57,7 @@ export default function App() {
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
-  // Android: fetch from Drive on mount, then every 5 min
+  // Android: fetch from Drive on mount, then every 30 min
   useEffect(() => {
     if (!isMobile) return;
     const doFetch = async () => {
@@ -61,23 +66,22 @@ export default function App() {
         setSessions(data);
         setError(null);
       } catch {
-        // If fetch fails (no connection, unconfigured), fall back to local cache
         loadSessions();
       }
     };
     doFetch();
-    const id = setInterval(doFetch, 5 * 60 * 1000);
+    const id = setInterval(doFetch, 30 * 60 * 1000);
     return () => clearInterval(id);
   }, [isMobile, loadSessions]);
 
-  // Android: send SCREEN_ON immediately on load, then every 5 min
+  // Android: send SCREEN_ON every 5 min (if enabled)
   useEffect(() => {
-    if (!isMobile) return;
+    if (!isMobile || !screenOnEnabled) return;
     const send = () => invoke("send_screen_on").catch(() => {});
     send();
     const id = setInterval(send, 5 * 60 * 1000);
     return () => clearInterval(id);
-  }, [isMobile]);
+  }, [isMobile, screenOnEnabled]);
 
   // Desktop: poll monitor status
   const pollMonitor = useCallback(async () => {
@@ -104,7 +108,7 @@ export default function App() {
     }
   }
 
-  // Android: manual sync button — fetch from Drive immediately
+  // Android: manual sync button
   async function handleAndroidSync() {
     setSyncing(true);
     setError(null);
@@ -118,6 +122,7 @@ export default function App() {
     }
   }
 
+  // Wheel: week navigation (desktop)
   useEffect(() => {
     const handler = (e: WheelEvent) => {
       if (tab !== "home") return;
@@ -128,10 +133,26 @@ export default function App() {
     return () => window.removeEventListener("wheel", handler);
   }, [tab, selectedDay]);
 
+  // Touch swipe: week navigation (mobile)
+  function handleTouchStart(e: React.TouchEvent) {
+    touchStartX.current = e.touches[0].clientX;
+  }
+  function handleTouchEnd(e: React.TouchEvent) {
+    if (touchStartX.current === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    touchStartX.current = null;
+    if (Math.abs(dx) < 60) return;
+    setWeekBase((p) => addDays(p, dx < 0 ? 7 : -7));
+  }
+
   const week = buildWeek(sessions, weekBase);
+  const activeIndex = selectedDay ? week.findIndex((d) => d.date === selectedDay) : undefined;
 
   return (
     <div className="app">
+      {/* Android status bar spacer */}
+      {isMobile && <div className="safe-area-spacer" />}
+
       <div className="topbar">
         <span className="app-title">睡眠トラッカー</span>
         <div className="tabs">
@@ -198,8 +219,12 @@ export default function App() {
             <button onClick={() => setWeekBase((p) => addDays(p, 7))}>次の週 ▶</button>
           </div>
 
-          <div className="chart-area">
-            <WeeklyChart week={week} onDayClick={setSelectedDay} />
+          <div
+            className="chart-area"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+          >
+            <WeeklyChart week={week} onDayClick={setSelectedDay} activeIndex={activeIndex !== -1 ? activeIndex : undefined} />
           </div>
 
           {selectedDay && (
@@ -214,7 +239,13 @@ export default function App() {
       )}
 
       {tab === "settings" && (
-        <Settings sessions={sessions} onRefresh={loadSessions} isMobile={isMobile} />
+        <Settings
+          sessions={sessions}
+          onRefresh={loadSessions}
+          isMobile={isMobile}
+          onBack={() => setTab("home")}
+          onScreenOnEnabledChange={setScreenOnEnabled}
+        />
       )}
     </div>
   );
