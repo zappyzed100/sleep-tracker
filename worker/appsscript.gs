@@ -105,9 +105,14 @@ function doPost(e) {
     return ContentService.createTextOutput("missing tag or ts");
   }
 
+  // Convert Unix ms timestamp to "YYYY-MM-DD HH:mm:ss" for readability
+  const tsMs = parseInt(ts, 10);
+  const tz = Session.getScriptTimeZone();
+  const tsStr = isNaN(tsMs) ? ts : Utilities.formatDate(new Date(tsMs), tz, "yyyy-MM-dd HH:mm:ss");
+
   SpreadsheetApp.getActiveSpreadsheet()
     .getSheetByName("events")
-    .appendRow([ts, tag]);
+    .appendRow([tsStr, tag]);
 
   return ContentService.createTextOutput("ok");
 }

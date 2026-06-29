@@ -70,19 +70,21 @@ export default function App() {
   // Android: fetch from Drive on mount, every 30 min, and on screen ON / app foreground
   useEffect(() => {
     if (!isMobile) return;
-    const doFetch = async () => {
-      try {
-        const data = await invoke<Session[]>("fetch_from_cloud");
-        setSessions(data);
-        setError(null);
-      } catch {
-        loadSessions();
-      }
-      // Sync settings in background — don't block the UI
+    let lastFetch = 0;
+    const doFetch = (force = false) => {
+      const now = Date.now();
+      // Throttle: skip if fetched within the last 5 minutes (unless forced)
+      if (!force && now - lastFetch < 5 * 60 * 1000) return;
+      lastFetch = now;
+      // Show local data immediately, update from cloud in background
+      loadSessions();
+      invoke<Session[]>("fetch_from_cloud")
+        .then(data => { setSessions(data); setError(null); })
+        .catch(() => {});
       invoke("fetch_settings_from_cloud").catch(() => {});
     };
-    doFetch();
-    const id = setInterval(doFetch, 30 * 60 * 1000);
+    doFetch(true);
+    const id = setInterval(() => doFetch(true), 30 * 60 * 1000);
     const onVisible = () => { if (document.visibilityState === "visible") doFetch(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -91,11 +93,10 @@ export default function App() {
     };
   }, [isMobile, loadSessions]);
 
-  // Android: send SCREEN_ON every 5 min (if enabled)
+  // Android: send SCREEN_ON every 5 min (if enabled) — skip immediate send on mount
   useEffect(() => {
     if (!isMobile || !screenOnEnabled) return;
     const send = () => invoke("send_screen_on").catch(() => {});
-    send();
     const id = setInterval(send, 5 * 60 * 1000);
     return () => clearInterval(id);
   }, [isMobile, screenOnEnabled]);

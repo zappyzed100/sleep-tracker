@@ -103,7 +103,8 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
       setConfigSaved(true);
       onScreenOnEnabledChange?.(screenOnEnabled);
       setTimeout(() => setConfigSaved(false), 2000);
-      onRefresh?.();
+      // On mobile, settings don't affect sleep event parsing — skip re-fetch
+      if (!isMobile) onRefresh?.();
     } catch (e) {
       console.error(e);
     }
