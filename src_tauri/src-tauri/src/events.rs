@@ -123,7 +123,7 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
 }
 
 pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
-    use chrono::{NaiveDateTime, TimeZone, Local};
+    use chrono::NaiveDateTime;
 
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
@@ -134,13 +134,13 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
 
     let ts_to_epoch = |s: &str| -> Option<i64> {
         let ndt = NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
-        Local.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
+        Some(ndt.and_utc().timestamp())
     };
 
     let epoch_to_ts = |ep: i64| -> String {
-        Local.timestamp_opt(ep, 0)
-            .single()
-            .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+        use chrono::DateTime;
+        let dt = DateTime::from_timestamp(ep, 0).map(|d| d.naive_utc());
+        dt.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
             .unwrap_or_default()
     };
 
