@@ -2,9 +2,9 @@
 // WeeklyChart.tsx — 週間睡眠チャート（棒グラフ＋折れ線グラフ）
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 役割 : 週 7 日分の睡眠時間を棒グラフ、入眠・起床時刻を折れ線グラフで表示する。
-//        タップ／クリックで DayDetail を開く。タッチスワイプ（親）との競合を防ぐ
-//        透明オーバーレイ方式でイベントを処理する。
-//        Chart.js は動的インポートで遅延ロード（初期バンドルから除外）。
+//        コールドスタート高速化のため localStorage に PNG キャッシュを保持し、
+//        Chart.js ロード前にキャッシュ画像を即時表示する。
+//        Chart.js 準備完了後にライブ Canvas へ切り替え、新しいキャッシュを保存。
 //
 // 依存 : core（DaySummary, formatDuration）, chart.js（動的）
 // 公開 : default export WeeklyChart
@@ -20,9 +20,41 @@ const CAT = { CRUST: "#313244", GREEN: "#a6e3a1", YELLOW: "#f9e2af", TEXT: "#cdd
 
 const BAR_ACTIVE = "#89b4fa";
 const BAR_NORMAL = "rgba(137,180,250,0.45)";
+const CACHE_PREFIX = "chart_img_";
+const CACHE_MAX_WEEKS = 8; // 約2ヶ月分
 
 // Chart.js は1プロセス内で1回だけ register すれば良い
 let chartJsRegistered = false;
+
+// ── キャッシュユーティリティ ───────────────────────────────
+
+function cacheKey(week: DaySummary[]): string | null {
+  return week.length > 0 ? `${CACHE_PREFIX}${week[0].date}` : null;
+}
+
+function readCache(key: string): string | null {
+  try { return localStorage.getItem(key); }
+  catch { return null; }
+}
+
+function writeCache(key: string, dataUrl: string) {
+  try {
+    localStorage.setItem(key, dataUrl);
+    // 古いキャッシュを削除（8週分を超えたら）
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(CACHE_PREFIX)) keys.push(k);
+    }
+    keys.sort().reverse(); // 新しい順（日付降順）
+    keys.slice(CACHE_MAX_WEEKS).forEach(k => localStorage.removeItem(k));
+    console.log(TAG, `cache write: ${key} (total ${Math.min(keys.length, CACHE_MAX_WEEKS)} weeks)`);
+  } catch {
+    // localStorage quota exceeded などは無視
+  }
+}
+
+// ─────────────────────────────────────────────────────────
 
 interface Props {
   week: DaySummary[];
@@ -34,6 +66,7 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<any>(null);
   const [chartReady, setChartReady] = useState(false);
+  const [cachedImg, setCachedImg] = useState<string | null>(null);
   const touchStartXRef = useRef<number | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -43,9 +76,25 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
     );
   }
 
+  // week が変わったらキャッシュを即時確認して表示
+  useEffect(() => {
+    const key = cacheKey(week);
+    if (!key) { setCachedImg(null); return; }
+    const img = readCache(key);
+    if (img) {
+      console.log(TAG, `cache HIT: ${key}`);
+      setCachedImg(img);
+    } else {
+      console.log(TAG, `cache MISS: ${key}`);
+      setCachedImg(null);
+    }
+  }, [week]);
+
+  // Chart.js 動的インポートと描画
   useEffect(() => {
     if (!canvasRef.current) return;
     if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; }
+    setChartReady(false);
 
     const n = callCount(TAG, "render");
     const t0 = performance.now();
@@ -109,7 +158,7 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
         },
       };
 
-      chartRef.current = new Chart(canvasRef.current, {
+      const chart = new Chart(canvasRef.current, {
         type: "bar",
         plugins: [durationPlugin],
         data: {
@@ -208,13 +257,31 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
         },
       });
 
+      chartRef.current = chart;
       setChartReady(true);
+      setCachedImg(null); // キャッシュ画像をライブCanvasで置き換え
 
       const ms = Math.round(performance.now() - t0);
       if (ms > 100) {
         console.warn(TAG, `render #${n}: 7 days  (+${ms}ms)`);
       } else {
         console.log(TAG, `render #${n}: 7 days`);
+      }
+
+      // 描画完了後（2フレーム待機）にキャッシュ保存
+      const key = cacheKey(week);
+      if (key) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!isMounted || !canvasRef.current) return;
+            try {
+              const dataUrl = canvasRef.current.toDataURL("image/png");
+              writeCache(key, dataUrl);
+            } catch {
+              // セキュリティエラー等は無視
+            }
+          });
+        });
       }
     });
 
@@ -233,12 +300,23 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
   }, [activeIndex, chartReady]);
 
   function hitColumn(clientX: number, rect: DOMRect): number | null {
+    if (week.length === 0) return null;
     const chart = chartRef.current;
-    if (!chart) return null;
-    const x = clientX - rect.left;
-    const raw = chart.scales["x"].getValueForPixel(x);
-    if (raw == null) return null;
-    const idx = Math.round(raw);
+    if (chart) {
+      // Chart.js 準備済み: 正確な座標系で判定
+      const x = clientX - rect.left;
+      const raw = chart.scales["x"].getValueForPixel(x);
+      if (raw == null) return null;
+      const idx = Math.round(raw);
+      return idx >= 0 && idx < week.length ? idx : null;
+    }
+    // キャッシュ画像表示中: canvasを均等分割で簡易判定
+    // Chart.jsの左右余白（Y軸ラベル分）を除いたエリアを7等分する
+    const PAD_L = 48; // 左の Y 軸ラベル幅（概算）
+    const PAD_R = 52; // 右の Y2 軸ラベル幅（概算）
+    const chartW = rect.width - PAD_L - PAD_R;
+    const x = clientX - rect.left - PAD_L;
+    const idx = Math.floor((x / chartW) * week.length);
     return idx >= 0 && idx < week.length ? idx : null;
   }
 
@@ -251,14 +329,26 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {/* Chart.js ロード中のスケルトン */}
-      {!chartReady && (
+      {/* キャッシュ画像: Chart.js 準備完了まで即時表示 */}
+      {cachedImg && !chartReady && (
+        <img
+          src={cachedImg}
+          alt=""
+          style={{
+            position: "absolute", inset: 0,
+            width: "100%", height: "100%",
+            objectFit: "fill", pointerEvents: "none",
+          }}
+        />
+      )}
+      {/* キャッシュなし・Chart.js 未準備のスケルトン */}
+      {!cachedImg && !chartReady && (
         <div style={{
           position: "absolute", inset: 0,
           display: "flex", alignItems: "center", justifyContent: "center",
           color: CAT.SUBTEXT, fontSize: "14px", pointerEvents: "none",
         }}>
-          グラフ読み込み中…
+          起動中です。しばらくお待ちください…
         </div>
       )}
       <canvas

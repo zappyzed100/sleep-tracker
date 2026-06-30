@@ -7,7 +7,7 @@
 // 依存 : core, chart, detail, prediction, settings, ui
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-import { useState, useEffect, useCallback, useRef, startTransition } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { WeeklyChart, StatsCard } from "./chart";
@@ -42,7 +42,8 @@ export default function App() {
   const [showCal, setShowCal] = useState(false);
   const calBtnRef = useRef<HTMLButtonElement>(null);
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
-  const [isMobile, setIsMobile] = useState(false);
+  // AppBridge is injected synchronously before JS runs on Android — check at init time.
+  const [isMobile, setIsMobile] = useState(() => typeof (window as any).AppBridge !== 'undefined');
   const [screenOnEnabled, setScreenOnEnabled] = useState(true);
   const [appVersion, setAppVersion] = useState("");
   const touchStartX = useRef<number | null>(null);
@@ -189,7 +190,7 @@ export default function App() {
     setWeekBase((p) => addDays(p, dx < 0 ? 7 : -7));
   }
 
-  const week = buildWeek(sessions, weekBase);
+  const week = useMemo(() => buildWeek(sessions, weekBase), [sessions, weekBase]);
   const activeIndex = selectedDay ? week.findIndex((d) => d.date === selectedDay) : undefined;
 
   return (

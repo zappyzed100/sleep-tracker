@@ -138,6 +138,40 @@ pub fn backup_to_drive(content: &str) -> String {
     }
 }
 
+// Download raw sleep_events.txt content from Drive. Returns None on error / empty / unauthorized.
+fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
+    let url = format!("{}?secret={}&action=restore", base_url.trim_end_matches('/'), secret);
+    let resp = crate::gist_client().ok()?.get(&url).send().ok()?;
+    if !resp.status().is_success() { return None; }
+    let text = resp.text().ok()?;
+    let t = text.trim();
+    if t.is_empty() || t == "Unauthorized" || t.starts_with("not found") { return None; }
+    Some(text)
+}
+
+// Merge drive_content lines into the local file (sort by timestamp, dedup).
+// Returns true if the local file was updated (new lines added from Drive).
+fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
+    let local = if path.exists() {
+        std::fs::read_to_string(path).unwrap_or_default()
+    } else { String::new() };
+
+    let local_n = local.lines().filter(|l| !l.trim().is_empty()).count();
+    let mut all: Vec<String> = local.lines()
+        .chain(drive_content.lines())
+        .map(|l| l.trim_end_matches('\r').trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
+    all.dedup();
+
+    if all.len() <= local_n { return false; }
+    let _ = std::fs::write(path, all.join("\n") + "\n");
+    eprintln!("{} merge_into_local: {} → {} lines (+{} from Drive)",
+        TAG, local_n, all.len(), all.len() - local_n);
+    true
+}
+
 #[tauri::command]
 pub fn sync_gist() -> Result<String, String> {
     static N: AtomicU64 = AtomicU64::new(0);
@@ -145,12 +179,29 @@ pub fn sync_gist() -> Result<String, String> {
     eprintln!("{} sync_gist #{}: started", TAG, n);
     let t0 = std::time::Instant::now();
 
+    let events_path = crate::data_dir().join("sleep_events.txt");
+
+    // 0. Download Drive data and merge into local (Drive → local, preserves history)
+    {
+        let cfg = load_config_inner();
+        if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
+            if !u.is_empty() && !s.is_empty() {
+                if let Some(drive_content) = fetch_drive_events(&u, &s) {
+                    let kb = drive_content.len() as f64 / 1024.0;
+                    eprintln!("{} sync_gist #{}: {:.1}KB from Drive", TAG, n, kb);
+                    if merge_into_local(&events_path, &drive_content) {
+                        *SESSION_CACHE.lock().unwrap() = None;
+                    }
+                }
+            }
+        }
+    }
+
     // 1. Pull mobile events from Google Sheets
     let pull_msg = pull_mobile_events_inner();
 
     // 2. Always sort+dedup the file (removes duplicate IDLE_START lines caused
     //    by monitor oscillation when threshold < WAKE_SECS)
-    let events_path = crate::data_dir().join("sleep_events.txt");
     if events_path.exists() {
         let _ = sort_events_file(&events_path);
     }
@@ -162,7 +213,7 @@ pub fn sync_gist() -> Result<String, String> {
         String::new()
     };
 
-    // 4. Backup to Google Drive via Apps Script
+    // 4. Backup merged result to Google Drive (local → Drive)
     let drive_msg = backup_to_drive(&content);
 
     let ms = t0.elapsed().as_millis();
@@ -172,29 +223,83 @@ pub fn sync_gist() -> Result<String, String> {
 
 pub fn ensure_events_from_drive() {
     let path = crate::data_dir().join("sleep_events.txt");
-    if path.exists() { return; }
-
-    eprintln!("{} ensure_events_from_drive: sleep_events.txt missing — fetching from Drive", TAG);
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
         (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
-        _ => return,
+        _ => {
+            if !path.exists() {
+                eprintln!("{} ensure_events_from_drive: cloud not configured and no local file", TAG);
+            }
+            return;
+        }
     };
-    let client = match crate::gist_client() { Ok(c) => c, Err(_) => return };
-    let url = format!("{}?secret={}&action=restore", base_url.trim_end_matches('/'), secret);
+
+    eprintln!("{} ensure_events_from_drive: fetching from Drive", TAG);
     let t0 = std::time::Instant::now();
-    let resp = match client.get(&url).send() {
-        Ok(r) if r.status().is_success() => r,
-        _ => return,
-    };
-    let content = match resp.text() {
-        Ok(t) if !t.trim().is_empty() => t,
-        _ => return,
-    };
-    let kb = content.len() as f64 / 1024.0;
-    let _ = std::fs::write(&path, content);
+    match fetch_drive_events(&base_url, &secret) {
+        Some(drive_content) => {
+            let kb = drive_content.len() as f64 / 1024.0;
+            merge_into_local(&path, &drive_content);
+            eprintln!("{} ensure_events_from_drive: {:.1}KB  (+{}ms)", TAG, kb, t0.elapsed().as_millis());
+        }
+        None => {
+            eprintln!("{} ensure_events_from_drive: Drive unavailable  (+{}ms)", TAG, t0.elapsed().as_millis());
+        }
+    }
+}
+
+// Android "今すぐ同期": merge sleep_events_backup.txt + Sheet events into local,
+// upload merged result back to Drive, then return parsed sessions.
+#[tauri::command]
+pub fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
+    eprintln!("{} sync_mobile #{}: started", TAG, n);
+    let t0 = std::time::Instant::now();
+
+    let events_path = crate::data_dir().join("sleep_events.txt");
+
+    // 1. Fetch settings (update THRESHOLD_SECS from Drive)
+    let _ = crate::config::fetch_settings_from_cloud();
+
+    // 2. Download sleep_events_backup.txt from Drive and merge into local
+    let cfg = load_config_inner();
+    if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
+        if !u.is_empty() && !s.is_empty() {
+            if let Some(drive_content) = fetch_drive_events(&u, &s) {
+                let kb = drive_content.len() as f64 / 1024.0;
+                eprintln!("{} sync_mobile #{}: {:.1}KB from Drive", TAG, n, kb);
+                if merge_into_local(&events_path, &drive_content) {
+                    *SESSION_CACHE.lock().unwrap() = None;
+                }
+            }
+        }
+    }
+
+    // 3. Pull mobile events from Sheet (SCREEN_ON / LEAVE_HOME / ARRIVE_HOME)
+    pull_mobile_events_inner();
+
+    // 4. Sort + dedup
+    if events_path.exists() {
+        let _ = sort_events_file(&events_path);
+    }
+
+    // 5. Upload merged result back to Drive as sleep_events_backup.txt
+    if let Ok(content) = std::fs::read_to_string(&events_path) {
+        let drive_msg = backup_to_drive(&content);
+        eprintln!("{} sync_mobile #{}: upload: {}", TAG, n, drive_msg);
+    }
+
+    // 6. Parse sessions (rebuild cache)
+    let sessions = parse_sessions_rust()?;
+    let mtime = events_path.metadata()
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::UNIX_EPOCH);
+    *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions: sessions.clone(), mtime });
+
     let ms = t0.elapsed().as_millis();
-    eprintln!("{} ensure_events_from_drive: {:.1}KB restored  (+{}ms)", TAG, kb, ms);
+    eprintln!("{} sync_mobile #{}: {} sessions  (+{}ms)", TAG, n, sessions.len(), ms);
+    Ok(sessions)
 }
 
 #[tauri::command]

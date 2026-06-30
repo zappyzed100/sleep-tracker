@@ -283,6 +283,12 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = APP_DIR.set(dir.clone());
                 eprintln!("{} setup: platform=android, data_dir={:?}", TAG, dir);
+                // Initialize THRESHOLD_SECS from local config (same as desktop setup)
+                let init_cfg = config::load_config_inner();
+                THRESHOLD_SECS.store(
+                    init_cfg.idle_threshold_minutes.unwrap_or(60) as u64 * 60,
+                    Ordering::Relaxed,
+                );
             }
 
             // ── Desktop-only setup ───────────────────────────────────────────
@@ -391,6 +397,7 @@ pub fn run() {
             config::fetch_settings_from_cloud,
             // cloud
             cloud::sync_gist,
+            cloud::sync_mobile,
             cloud::fetch_from_cloud,
             cloud::send_screen_on,
             cloud::test_mobile_connection,

@@ -208,9 +208,6 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     for i in 0..n_ev {
         let (ep, ts, ty) = (evs[i].epoch, evs[i].ts.as_str(), evs[i].ty.as_str());
 
-        // IN_HOUSE: tablet/PC activity while marked as out → cancel out-state
-        if ty == "IN_HOUSE" { is_out = false; continue; }
-
         if ty == "DEVICE_ON" {
             if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
             continue;
@@ -220,11 +217,7 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
             if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
             continue;
         }
-        if ty == "OUT_END" { is_out = false; continue; }
-
-        // IDLE_START means the user had PC input until this timestamp → they are home.
-        // Clears a stale is_out caused by an unmatched OUT_START.
-        if ty == "IDLE_START" && is_out { is_out = false; }
+        if ty == "OUT_END" || ty == "IN_HOUSE" { is_out = false; continue; }
 
         if !sleeping {
             if !is_out && matches!(ty, "IDLE_START" | "SUSPEND" | "SHUTDOWN") {

@@ -117,7 +117,11 @@ pub fn fetch_settings_from_cloud() -> Result<(), String> {
     }
     let Ok(sync) = serde_json::from_str::<SyncSettings>(&text) else { return Ok(()) };
     let mut local = load_config_inner();
-    if let Some(v) = sync.idle_threshold_minutes { local.idle_threshold_minutes = Some(v); }
+    if let Some(v) = sync.idle_threshold_minutes {
+        local.idle_threshold_minutes = Some(v);
+        crate::THRESHOLD_SECS.store(v as u64 * 60, Ordering::Relaxed);
+        *crate::SESSION_CACHE.lock().unwrap() = None;
+    }
     if let Some(v) = sync.target_wake_time { local.target_wake_time = Some(v); }
     let json = serde_json::to_string_pretty(&local).map_err(|e| e.to_string())?;
     std::fs::write(crate::config_path(), json).map_err(|e| e.to_string())?;

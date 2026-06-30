@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -47,7 +48,9 @@ class MainActivity : TauriActivity() {
       val elapsed = SystemClock.elapsedRealtime() - overlayShownAt
       val isFirst = pauseTime == Long.MAX_VALUE
       val delay = if (isFirst) maxOf(0L, FIRST_LAUNCH_MIN_MS - elapsed) else 0L
+      Log.i("SleepTracker", "[overlay] notifyReady called: elapsed=${elapsed}ms, isFirst=$isFirst, delay=${delay}ms")
       uiHandler.postDelayed({
+        Log.i("SleepTracker", "[overlay] hiding overlay now")
         hideRunnable?.let { uiHandler.removeCallbacks(it) }
         overlay?.visibility = View.GONE
       }, delay)
@@ -128,6 +131,7 @@ class MainActivity : TauriActivity() {
     val ov = overlay ?: return
     ov.visibility = View.VISIBLE
     overlayShownAt = SystemClock.elapsedRealtime()
+    Log.i("SleepTracker", "[overlay] shown: isFirstLaunch=$isFirstLaunch")
     hideRunnable?.let { uiHandler.removeCallbacks(it) }
     if (!isFirstLaunch) {
       // Deep sleep resume: hide when WebView repaints its first frame
@@ -140,10 +144,13 @@ class MainActivity : TauriActivity() {
         })
       }
     }
-    // First launch: notifyReady() enforces FIRST_LAUNCH_MIN_MS minimum; 8s absolute fallback.
+    // First launch: notifyReady() enforces FIRST_LAUNCH_MIN_MS minimum; 3s absolute fallback.
     // Deep sleep resume: postVisualStateCallback fires quickly; 2s is the fallback.
-    val timeout = if (isFirstLaunch) 8000L else 2000L
-    val runnable = Runnable { ov.visibility = View.GONE }
+    val timeout = if (isFirstLaunch) 1500L else 2000L
+    val runnable = Runnable {
+      Log.i("SleepTracker", "[overlay] fallback timeout fired (${timeout}ms)")
+      ov.visibility = View.GONE
+    }
     hideRunnable = runnable
     uiHandler.postDelayed(runnable, timeout)
   }

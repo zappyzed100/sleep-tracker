@@ -85,6 +85,8 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [shortcutMsg, setShortcutMsg] = useState<string | null>(null);
   const [shortcutBusy, setShortcutBusy] = useState(false);
+  const [eventsContent, setEventsContent] = useState<string | null>(null);
+  const [eventsLoading, setEventsLoading] = useState(false);
 
   useEffect(() => {
     invoke<AppConfig>("get_config").then((cfg) => {
@@ -432,15 +434,14 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
           )}
           {isMobile && (
             <button className="settings-btn" onClick={async () => {
-              const n = callCount(TAG, "fetch_from_cloud");
+              const n = callCount(TAG, "sync_mobile");
               setSyncing(true); setSyncMsg(null);
               const t0 = performance.now();
               try {
-                await invoke("fetch_from_cloud");
-                await invoke("fetch_settings_from_cloud");
+                const data = await invoke<Session[]>("sync_mobile");
                 const cfg = await invoke<AppConfig>("get_config");
                 const ms = Math.round(performance.now() - t0);
-                console.log(TAG, `fetch_from_cloud #${n}: done  (+${ms}ms)`);
+                console.log(TAG, `sync_mobile #${n}: ${data.length} sessions  (+${ms}ms)`);
                 setThreshold(cfg.idle_threshold_minutes ?? 60);
                 if (cfg.target_wake_time) {
                   setTargetWakeEnabled(true);
@@ -448,15 +449,15 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
                 } else {
                   setTargetWakeEnabled(false);
                 }
-                setSyncMsg("データと設定を取得しました");
+                setSyncMsg(`同期完了 — ${data.length} 件 (閾値: ${cfg.idle_threshold_minutes ?? 60}分)`);
                 onRefresh?.();
               } catch (e) {
-                console.error(TAG, `ERROR fetch_from_cloud #${n}:`, e);
+                console.error(TAG, `ERROR sync_mobile #${n}:`, e);
                 setSyncMsg(`エラー: ${e}`);
               }
               finally { setSyncing(false); }
             }} disabled={syncing}>
-              {syncing ? "取得中..." : "今すぐ取得"}
+              {syncing ? "同期中..." : "今すぐ同期"}
             </button>
           )}
         </div>
@@ -479,9 +480,11 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
           <button className="settings-btn" onClick={handleExportCsv}>
             CSV エクスポート
           </button>
-          <button className="settings-btn" onClick={handleImportCsv}>
-            CSV インポート
-          </button>
+          {!isMobile && (
+            <button className="settings-btn" onClick={handleImportCsv}>
+              CSV インポート
+            </button>
+          )}
         </div>
         <div className="settings-note">Excel等で分析用。就寝・起床・睡眠時間・種別の4列。</div>
         <div className="settings-btn-row" style={{ marginTop: 8 }}>
@@ -500,6 +503,46 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
         </div>
         {csvMsg && <div className="settings-csv-msg">{csvMsg}</div>}
       </Section>
+
+      {/* sleep_events.txt の中身 (Androidのみ) */}
+      {isMobile && (
+        <Section title="sleep_events.txt">
+          <button
+            className="settings-btn"
+            style={{ alignSelf: "flex-start" }}
+            disabled={eventsLoading}
+            onClick={async () => {
+              setEventsLoading(true);
+              try {
+                const content = await invoke<string>("get_events_content");
+                setEventsContent(content || "（空）");
+              } catch (e) {
+                setEventsContent(`エラー: ${e}`);
+              } finally {
+                setEventsLoading(false);
+              }
+            }}
+          >
+            {eventsLoading ? "読み込み中..." : "内容を表示"}
+          </button>
+          {eventsContent !== null && (
+            <>
+              <div className="settings-note">{eventsContent.split("\n").filter(Boolean).length} 行</div>
+              <pre style={{
+                background: "#1e1e2e", color: "#cdd6f4",
+                fontSize: 11, lineHeight: 1.5,
+                padding: "8px 10px", borderRadius: 6,
+                overflowX: "auto", overflowY: "auto",
+                maxHeight: 320, whiteSpace: "pre",
+                margin: 0, fontFamily: "monospace",
+                userSelect: "text",
+              }}>
+                {eventsContent}
+              </pre>
+            </>
+          )}
+        </Section>
+      )}
 
       {showDeleteConfirm && (
         <ConfirmDeleteModal
