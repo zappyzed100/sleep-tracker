@@ -291,7 +291,97 @@ eprintln!("{} ERROR fetch_from_cloud: {}", TAG, err);
 - ポーリングの正常完了（heartbeat 書き込みなど）
 - 設定の読み込み（軽量なもの）
 
-### 7-6. Android パフォーマンス計測
+### 7-6. 呼び出し回数のログ
+
+ログフォーマットに **`#N`**（起動後の累計呼び出し回数）を含める。
+「何度も呼ばれすぎていないか」「想定外の再呼び出しが起きていないか」を検出できる。
+
+```
+[タグ] 操作名 #N: 詳細  (+Xms)
+```
+
+**例：**
+```
+[cloud] fetch_from_cloud #1: started
+[cloud] fetch_from_cloud #1: 2.4KB received  (+1204ms)
+[cloud] fetch_from_cloud #2: started          ← 2回目の呼び出し
+[events] parse_sessions #3: 47 sessions  (+83ms)
+```
+
+#### TypeScript での実装
+
+`core/logger.ts` に共通カウンター関数を定義して全フォルダから使う。
+
+```typescript
+// core/logger.ts
+const _counts: Record<string, number> = {};
+
+/** 操作の累計呼び出し回数をインクリメントして返す */
+export function callCount(tag: string, op: string): number {
+  const key = `${tag}:${op}`;
+  return (_counts[key] = (_counts[key] ?? 0) + 1);
+}
+
+/** 全操作の呼び出し回数を一括出力（デバッグ用） */
+export function dumpCounts(): void {
+  console.log('[core] call counts:', JSON.stringify(_counts, null, 2));
+}
+```
+
+各フォルダでの使い方：
+
+```typescript
+import { callCount } from '../core/logger';
+
+const TAG = '[cloud]';
+
+async function fetchFromCloud() {
+  const n = callCount(TAG, 'fetch_from_cloud');
+  console.log(TAG, `fetch_from_cloud #${n}: started`);
+
+  const t0 = performance.now();
+  // ... 処理 ...
+  const ms = Math.round(performance.now() - t0);
+  console.log(TAG, `fetch_from_cloud #${n}: done  (+${ms}ms)`);
+}
+```
+
+#### Rust での実装
+
+関数内に `static AtomicU64` を置く。グローバルな依存なしで完結する。
+
+```rust
+fn fetch_from_cloud_inner() {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+
+    let t0 = std::time::Instant::now();
+    eprintln!("[cloud] fetch_from_cloud #{}: started", n);
+
+    // ... 処理 ...
+
+    eprintln!("[cloud] fetch_from_cloud #{}: done  (+{}ms)", n, t0.elapsed().as_millis());
+}
+```
+
+#### 異常な呼び出し回数の検出
+
+回数が想定を超えたら警告を出す。
+
+```typescript
+const n = callCount(TAG, 'fetch_from_cloud');
+if (n > 5) console.warn(TAG, `fetch_from_cloud #${n}: called more than expected`);
+```
+
+```rust
+if n > 5 {
+    eprintln!("[cloud] fetch_from_cloud #{}: WARN called more than expected", n);
+}
+```
+
+---
+
+### 7-7. Android パフォーマンス計測
 
 Android では WebView の `console.log` が logcat に `chromium:` タグで出力される。
 `[タグ]` プレフィックスがあれば `adb logcat | grep "\[cloud\]"` のように絞り込める。
