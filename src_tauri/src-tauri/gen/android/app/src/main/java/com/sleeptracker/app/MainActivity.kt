@@ -30,7 +30,7 @@ class MainActivity : TauriActivity() {
   private var hideRunnable: Runnable? = null
   private var pauseTime: Long = Long.MAX_VALUE
   private var overlayShownAt: Long = 0L
-  private val FIRST_LAUNCH_MIN_MS = 5000L
+  private val FIRST_LAUNCH_MIN_MS = 0L
 
   private fun dp(value: Int): Int =
     TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()

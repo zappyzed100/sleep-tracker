@@ -397,6 +397,100 @@ adb logcat | grep "\[events\]"
 adb logcat | grep -E "\+[0-9]{3,}ms"   # 100ms 以上かかった処理
 ```
 
+### 7-8. 追加で記録する指標
+
+呼び出し回数・実行時間に加えて、以下の 3 つを必要な箇所で記録する。
+
+#### ① 連続エラー回数
+
+ネットワーク通信の連続失敗を検出する。1 回の失敗は許容、3 回連続でネットワーク障害と判断できる。
+
+```typescript
+// cloud/ のどこか
+let consecutiveErrors = 0;
+const MAX_CONSECUTIVE = 3;
+
+try {
+  const res = await fetch(...);
+  consecutiveErrors = 0; // 成功したらリセット
+} catch (err) {
+  consecutiveErrors++;
+  console.error(TAG, `fetch_from_cloud: error (${consecutiveErrors}回連続)`, err);
+  if (consecutiveErrors >= MAX_CONSECUTIVE) {
+    console.error(TAG, `fetch_from_cloud: WARN ${consecutiveErrors}回連続失敗 — ネットワーク障害の可能性`);
+  }
+}
+```
+
+```rust
+static CONSECUTIVE_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+match fetch_from_cloud_inner() {
+    Ok(_)  => { CONSECUTIVE_ERRORS.store(0, Ordering::Relaxed); }
+    Err(e) => {
+        let n = CONSECUTIVE_ERRORS.fetch_add(1, Ordering::Relaxed) + 1;
+        eprintln!("[cloud] fetch_from_cloud: error ({}回連続) {}", n, e);
+        if n >= 3 {
+            eprintln!("[cloud] fetch_from_cloud: WARN {}回連続失敗", n);
+        }
+    }
+}
+```
+
+#### ② データサイズ（バイト数）
+
+I/O 操作にバイト数を付ける。ファイルサイズと実行時間を並べることで「どこが重い原因か」がわかる。
+`sleep_events.txt` が大きくなるとパース時間に比例して伸びるため、両方の記録が必要。
+
+```typescript
+const text = await readFile(...);
+console.log(TAG, `read: ${(text.length / 1024).toFixed(1)}KB  (+${ms}ms)`);
+// → [events] read: 48.2KB  (+31ms)
+```
+
+```rust
+let content = fs::read_to_string(path)?;
+eprintln!("[events] read: {}KB  (+{}ms)", content.len() / 1024, ms);
+```
+
+ネットワーク受信時も同様：
+
+```
+[cloud] fetch_from_cloud #1: 2.4KB received  (+1204ms)
+```
+
+#### ③ キャッシュヒット / ミス
+
+セッションキャッシュ（`SESSION_CACHE` など）が有効に機能しているかを確認する。
+「ミスが多い＝毎回フルパース」という無駄を検出できる。
+
+```typescript
+const cached = sessionCache.get(key);
+if (cached) {
+  console.log(TAG, `parse_sessions: cache HIT (${key})`);
+  return cached;
+}
+console.log(TAG, `parse_sessions: cache MISS (${key}) — parsing...`);
+// ... フルパース
+```
+
+```rust
+if let Some(cached) = SESSION_CACHE.get(&key) {
+    eprintln!("[events] parse_sessions: cache HIT");
+    return Ok(cached.clone());
+}
+eprintln!("[events] parse_sessions: cache MISS — parsing file");
+```
+
+ログ例：
+```
+[events] parse_sessions: cache MISS — parsing file
+[events] parse_sessions: 47 sessions  (+83ms)
+[events] parse_sessions: cache HIT       ← 次回は一瞬
+```
+
+**メモリ使用量はログ不要。** この規模のアプリ（sleep_events.txt は数百 KB 以下）ではメモリ問題は起きにくく、問題が起きても「処理時間が遅い」として先に顕在化するため。
+
 ---
 
 ## 8. 適用タイミング
