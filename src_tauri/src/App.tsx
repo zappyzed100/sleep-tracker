@@ -1,15 +1,24 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// App.tsx — アプリケーションルートコンポーネント
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : タブ切り替え・週ナビゲーション・セッション取得・クラウド同期など
+//        アプリ全体の状態管理と UI 組み合わせを行う Layer 3 コンポーネント。
+//
+// 依存 : core, chart, detail, prediction, settings, ui
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState, useEffect, useCallback, useRef, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import WeeklyChart from "./WeeklyChart";
-import StatsCard from "./StatsCard";
-import PredictionCard from "./PredictionCard";
-import CalendarPicker from "./CalendarPicker";
-import DayDetail from "./DayDetail";
-import Settings from "./Settings";
-import { Session } from "./types";
-import { buildWeek, weekStart, addDays } from "./utils";
+import { WeeklyChart, StatsCard } from "./chart";
+import { PredictionCard } from "./prediction";
+import { CalendarPicker } from "./ui";
+import { DayDetail } from "./detail";
+import { Settings } from "./settings";
+import { Session, buildWeek, weekStart, addDays, callCount } from "./core";
 import "./App.css";
+
+const TAG = "[app]";
 
 const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
 
@@ -44,6 +53,8 @@ export default function App() {
     (window as any).AppBridge?.notifyReady?.();
 
     invoke<boolean>("is_mobile").then(mobile => {
+      const platform = mobile ? "Android" : "PC";
+      console.log(TAG, `mount: platform=${platform}`);
       setIsMobile(mobile);
       if (!mobile) {
         // PC: fetch settings (idle threshold, target wake time) from Drive on startup
@@ -59,10 +70,15 @@ export default function App() {
   }, []);
 
   const loadSessions = useCallback(async () => {
+    const n = callCount(TAG, "loadSessions");
+    const t0 = performance.now();
     try {
       const data = await invoke<Session[]>("get_sessions");
+      const ms = Math.round(performance.now() - t0);
+      console.log(TAG, `loadSessions #${n}: ${data.length} sessions  (+${ms}ms)`);
       startTransition(() => { setSessions(data); setError(null); });
     } catch (e) {
+      console.error(TAG, `ERROR loadSessions #${n}:`, e);
       setError(String(e));
     }
   }, []);
@@ -80,9 +96,16 @@ export default function App() {
       lastFetch = now;
       // Show local data immediately, update from cloud as low-priority background task
       loadSessions();
+      const n = callCount(TAG, "fetch_from_cloud");
+      const t0 = performance.now();
+      console.log(TAG, `fetch_from_cloud #${n}: started`);
       invoke<Session[]>("fetch_from_cloud")
-        .then(data => startTransition(() => { setSessions(data); setError(null); }))
-        .catch(() => {});
+        .then(data => {
+          const ms = Math.round(performance.now() - t0);
+          console.log(TAG, `fetch_from_cloud #${n}: ${data.length} sessions  (+${ms}ms)`);
+          startTransition(() => { setSessions(data); setError(null); });
+        })
+        .catch(e => console.error(TAG, `ERROR fetch_from_cloud #${n}:`, e));
       invoke("fetch_settings_from_cloud").catch(() => {});
     };
     doFetch(true);

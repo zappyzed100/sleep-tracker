@@ -1,6 +1,17 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// vite-env.d.ts — Vite クライアント型定義の参照
+// index.ts — core フォルダの公開 API
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 役割 : Vite の import.meta.env などクライアント固有の型を有効にする。
+// 役割 : 外部フォルダが core/ から import できるものだけを re-export する
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/// <reference types="vite/client" />
+
+export type { Session, DaySummary } from "./types";
+export {
+  parseLocalDate,
+  weekStart,
+  addDays,
+  isoDate,
+  toNightHour,
+  buildWeek,
+  formatDuration,
+} from "./utils";
+export { callCount, dumpCounts } from "./logger";

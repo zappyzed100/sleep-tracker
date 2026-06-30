@@ -1,6 +1,15 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// StatsCard.tsx — 期間別睡眠統計カード
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 先週・先月・1年・全期間の4つの期間タブで、
+//        記録日数・平均睡眠時間・最後の睡眠時間を表示する統計カード。
+//
+// 依存 : core（Session, parseLocalDate, formatDuration）
+// 公開 : default export StatsCard
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState } from "react";
-import { Session } from "./types";
-import { parseLocalDate, formatDuration } from "./utils";
+import { Session, parseLocalDate, formatDuration } from "../core";
 
 type Period = "week" | "month" | "year" | "all";
 

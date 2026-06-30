@@ -1,6 +1,8 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// vite-env.d.ts — Vite クライアント型定義の参照
+// index.ts — ui フォルダの公開 API
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 役割 : Vite の import.meta.env などクライアント固有の型を有効にする。
+// 役割 : 外部フォルダが ui/ から import できる汎用 UI コンポーネントを re-export する
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/// <reference types="vite/client" />
+
+export { default as TimePicker } from "./TimePicker";
+export { default as CalendarPicker } from "./CalendarPicker";
