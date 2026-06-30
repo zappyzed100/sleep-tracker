@@ -184,7 +184,132 @@ src/
 
 ---
 
-## 7. 適用タイミング
+## 7. ログ規則
+
+### 7-1. フォルダタグ
+
+すべてのログに **`[フォルダ名]`** プレフィックスを付ける。
+どのフォルダで問題が起きているかをログ検索で即座に特定できるようにする。
+
+| フォルダ / モジュール | タグ |
+|----------------------|------|
+| src/core/            | `[core]` |
+| src/ui/              | `[ui]` |
+| src/chart/           | `[chart]` |
+| src/detail/          | `[detail]` |
+| src/prediction/      | `[prediction]` |
+| src/settings/        | `[settings]` |
+| src/（App.tsx）      | `[app]` |
+| src-tauri/src/events.rs  | `[events]` |
+| src-tauri/src/cloud.rs   | `[cloud]` |
+| src-tauri/src/config.rs  | `[config]` |
+| src-tauri/src/platform.rs| `[platform]` |
+| src-tauri/src/monitor.rs | `[monitor]` |
+| src-tauri/src/prediction.rs | `[prediction]` |
+
+### 7-2. ログフォーマット
+
+```
+[タグ] 操作名: 詳細  (+Xms)
+```
+
+- `[タグ]` は 7-1 の固定文字列
+- 処理時間は `+Xms` の形式で末尾に付ける（計測した場合のみ）
+- エラーは `ERROR` を操作名の前に付ける
+
+**例：**
+
+```
+[cloud] fetch_from_cloud: started
+[cloud] fetch_from_cloud: 2.4KB received  (+1204ms)
+[events] parse_sessions: 1523 events → 47 sessions  (+83ms)
+[settings] save_config: saved
+[chart] render: 7 days
+[app] ERROR fetch_from_cloud: HTTP 401
+```
+
+### 7-3. TypeScript での実装パターン
+
+各フォルダに **タグ定数** を定義し、ログ関数を通じて出力する。
+
+```typescript
+// chart/index.ts（または各ファイルの先頭）
+const TAG = '[chart]';
+
+// 通常ログ
+console.log(TAG, 'render:', week.length, 'days');
+
+// エラー
+console.error(TAG, 'ERROR render:', err);
+
+// 処理時間の計測（100ms 超えたときだけ出力）
+const t0 = performance.now();
+// ... 処理 ...
+const ms = Math.round(performance.now() - t0);
+if (ms > 100) console.warn(TAG, 'slow render:', `+${ms}ms`);
+```
+
+### 7-4. Rust での実装パターン
+
+各モジュール（ファイル）に **タグ定数** を定義する。
+
+```rust
+const TAG: &str = "[cloud]";
+
+// 通常ログ（stderr → Windowsコンソール / Android logcat）
+eprintln!("{} fetch_from_cloud: started", TAG);
+
+// 処理時間の計測
+let t0 = std::time::Instant::now();
+// ... 処理 ...
+let ms = t0.elapsed().as_millis();
+eprintln!("{} fetch_from_cloud: {} bytes received  (+{}ms)", TAG, len, ms);
+
+// エラー
+eprintln!("{} ERROR fetch_from_cloud: {}", TAG, err);
+```
+
+### 7-5. ログ出力の基準
+
+**必ずログを出すもの：**
+- エラー・例外（常に `ERROR` プレフィックス付きで出力）
+- ネットワーク通信の開始・完了（`[cloud]` タグ）
+- ファイル I/O の完了（大きなファイルの読み書き）
+- アプリ起動時の主要な初期化ステップ（`[app]`, `[monitor]`）
+
+**処理時間に応じて出力するもの：**
+
+| 処理時間 | 対応 |
+|---------|------|
+| < 100ms | ログ不要（通常動作） |
+| 100ms〜500ms | `console.log` / `eprintln!` で記録（`+Xms` 付き） |
+| 500ms〜2000ms | `console.warn` / `eprintln!("... SLOW ...")` で警告 |
+| > 2000ms | `console.error` / `eprintln!("... VERY SLOW ...")` でアラート |
+
+**出さなくていいもの：**
+- 毎フレームの再レンダリング
+- ポーリングの正常完了（heartbeat 書き込みなど）
+- 設定の読み込み（軽量なもの）
+
+### 7-6. Android パフォーマンス計測
+
+Android では WebView の `console.log` が logcat に `chromium:` タグで出力される。
+`[タグ]` プレフィックスがあれば `adb logcat | grep "\[cloud\]"` のように絞り込める。
+
+Rust 側の `eprintln!` は logcat に `RustStdoutStderr` または `sleep-tracker` タグで出力される。
+
+```bash
+# 特定フォルダのログだけ確認する例
+adb logcat | grep "\[cloud\]"
+adb logcat | grep "\[events\]"
+
+# パフォーマンス問題を探す
+adb logcat | grep -E "\+[0-9]{3,}ms"   # 100ms 以上かかった処理
+```
+
+---
+
+## 8. 適用タイミング
 
 - **新規ファイルを作るとき**：必ずヘッダーを付け、フォルダ README を更新する
 - **既存ファイルを編集するとき**：そのファイルのヘッダーが未整備なら合わせて追加する
