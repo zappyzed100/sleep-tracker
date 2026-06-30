@@ -1,3 +1,14 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// WeeklyChart.tsx — 週間睡眠チャート（棒グラフ＋折れ線グラフ）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 週 7 日分の睡眠時間を棒グラフ、入眠・起床時刻を折れ線グラフで表示する。
+//        タップ／クリックで DayDetail を開く。タッチスワイプ（親）との競合を防ぐ
+//        透明オーバーレイ方式でイベントを処理する。
+//
+// 依存 : core（DaySummary, formatDuration）, chart.js
+// 公開 : default export WeeklyChart
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useEffect, useRef } from "react";
 import {
   Chart,
@@ -11,8 +22,7 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
-import { DaySummary } from "./types";
-import { formatDuration } from "./utils";
+import { DaySummary, formatDuration, callCount } from "../core";
 
 Chart.register(
   BarElement, LineElement, PointElement,
@@ -20,6 +30,8 @@ Chart.register(
   CategoryScale, LinearScale,
   Tooltip, Legend,
 );
+
+const TAG = "[chart]";
 
 const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
 const CAT = { CRUST: "#313244", GREEN: "#a6e3a1", YELLOW: "#f9e2af", TEXT: "#cdd6f4", SUBTEXT: "#a6adc8" };
@@ -48,6 +60,9 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
   useEffect(() => {
     if (!canvasRef.current) return;
     if (chartRef.current) chartRef.current.destroy();
+
+    const n = callCount(TAG, "render");
+    const t0 = performance.now();
 
     const labels = week.map((d, i) => {
       const [, m, day] = d.date.split("-");
@@ -186,6 +201,13 @@ export default function WeeklyChart({ week, onDayClick, activeIndex }: Props) {
         },
       },
     });
+
+    const ms = Math.round(performance.now() - t0);
+    if (ms > 100) {
+      console.warn(TAG, `render #${n}: 7 days  (+${ms}ms)`);
+    } else {
+      console.log(TAG, `render #${n}: 7 days`);
+    }
 
     return () => chartRef.current?.destroy();
   }, [week]);

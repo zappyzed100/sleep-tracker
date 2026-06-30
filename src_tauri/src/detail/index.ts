@@ -1,6 +1,7 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// vite-env.d.ts — Vite クライアント型定義の参照
+// index.ts — detail フォルダの公開 API
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 役割 : Vite の import.meta.env などクライアント固有の型を有効にする。
+// 役割 : 外部フォルダが detail/ から import できるコンポーネントを re-export する
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/// <reference types="vite/client" />
+
+export { default as DayDetail } from "./DayDetail";

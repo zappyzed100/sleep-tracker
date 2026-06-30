@@ -1,9 +1,20 @@
+//! monitor.rs — バックグラウンドアイドル監視スレッド
+//!
+//! 役割 : キーボード/マウス/ゲームパッドのアイドル時間を定期ポーリングし、
+//!        閾値超過で IDLE_START、入力再開で IDLE_RESUME を sleep_events.txt に書き込む。
+//!        システムサスペンド/レジュームも検出する。
+//!
+//! 依存 : crate::THRESHOLD_SECS（閾値の共有アトミック）
+//! 公開 : `start(data_dir: PathBuf)`
+
 use chrono::{Duration as CDur, Local};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
+
+const TAG: &str = "[monitor]";
 
 // ── Windows API ───────────────────────────────────────────────────────────────
 
@@ -170,6 +181,7 @@ fn is_currently_out(events_path: &PathBuf) -> bool {
 fn maybe_in_house(events_path: &PathBuf, ts: &str) {
     if is_currently_out(events_path) {
         append_event(events_path, ts, "IN_HOUSE");
+        eprintln!("{} IN_HOUSE: written (was out)", TAG);
     }
 }
 
@@ -187,6 +199,8 @@ fn run(data_dir: PathBuf) {
     let heartbeat_path = data_dir.join("sleep_heartbeat.txt");
     let pause_flag     = data_dir.join("monitor_paused");
 
+    eprintln!("{} start: data_dir={:?}", TAG, data_dir);
+
     const POLL:        Duration = Duration::from_secs(5);
     const HB_INTERVAL: Duration = Duration::from_secs(30);
     // User is considered "awake" once idle drops below 60s.
@@ -195,6 +209,7 @@ fn run(data_dir: PathBuf) {
 
     maybe_in_house(&events_path, &now_str());
     append_event(&events_path, &now_str(), "STARTUP");
+    eprintln!("{} STARTUP: written", TAG);
 
     let mut sleeping              = false;
     let mut threshold             = crate::THRESHOLD_SECS.load(std::sync::atomic::Ordering::Relaxed);
@@ -222,6 +237,7 @@ fn run(data_dir: PathBuf) {
         // If sleep() returned far later than POLL, the system likely suspended.
         let actual_elapsed = now.duration_since(last_tick);
         if actual_elapsed > POLL + Duration::from_secs(60) {
+            eprintln!("{} RESUME: system woke from suspend", TAG);
             // System resumed from suspend
             if sleeping {
                 maybe_in_house(&events_path, &now_str());
@@ -268,10 +284,12 @@ fn run(data_dir: PathBuf) {
             // start_ts = last input time; user was at PC then → cancels any stale out-state
             maybe_in_house(&events_path, &start_ts);
             append_event(&events_path, &start_ts, "IDLE_START");
+            eprintln!("{} IDLE_START: idle={}s", TAG, idle);
             sleeping = true;
         } else if sleeping && idle < WAKE_SECS {
             maybe_in_house(&events_path, &now_str());
             append_event(&events_path, &now_str(), "IDLE_RESUME");
+            eprintln!("{} IDLE_RESUME: was sleeping {}s", TAG, idle);
             sleeping = false;
         }
     }

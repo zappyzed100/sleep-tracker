@@ -1,6 +1,7 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// vite-env.d.ts — Vite クライアント型定義の参照
+// index.ts — settings フォルダの公開 API
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 役割 : Vite の import.meta.env などクライアント固有の型を有効にする。
+// 役割 : 外部フォルダが settings/ から import できるコンポーネントを re-export する
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-/// <reference types="vite/client" />
+
+export { default as Settings } from "./Settings";

@@ -1,5 +1,15 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// CalendarPicker.tsx — 月カレンダー表示の週選択ピッカー
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 月カレンダーを表示して任意の日付（週）を選択できる汎用 UI。
+//        現在選択中の週をハイライト表示する。
+//
+// 依存 : core/utils（weekStart, addDays, isoDate）
+// 公開 : default export CalendarPicker
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState, useEffect, useRef } from "react";
-import { weekStart, addDays, isoDate } from "./utils";
+import { weekStart, addDays, isoDate } from "../core";
 
 const DAYS_JA = ["月", "火", "水", "木", "金", "土", "日"];
 

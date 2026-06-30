@@ -1,3 +1,14 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// utils.ts — 日付操作・週データ構築ユーティリティ
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 日付のパース・週の開始日計算・DaySummary 配列の構築など、
+//        ドメインロジックに依存しない純粋関数を提供する
+//
+// 依存 : core/types
+// 公開 : parseLocalDate, weekStart, addDays, isoDate, toNightHour,
+//        buildWeek, formatDuration
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { Session, DaySummary } from "./types";
 
 export function parseLocalDate(s: string): Date {

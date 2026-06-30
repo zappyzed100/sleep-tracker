@@ -1,7 +1,18 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DayDetail.tsx — 1日の睡眠セッション詳細・編集モーダル
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 選択した日の睡眠セッション一覧の表示、手動追加、削除を行うモーダル。
+//        Rust の add_session / delete_session コマンドを呼び出す。
+//
+// 依存 : core（Session, formatDuration, callCount）
+// 公開 : default export DayDetail
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Session } from "./types";
-import { formatDuration } from "./utils";
+import { Session, formatDuration, callCount } from "../core";
+
+const TAG = "[detail]";
 
 const DAYS_JA = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -130,10 +141,15 @@ export default function DayDetail({ date, sessions, onClose, onRefresh }: Props)
   async function handleDelete(s: Session) {
     setError(null);
     setDeleting(s.start);
+    const n = callCount(TAG, "delete_session");
+    const t0 = performance.now();
     try {
       await invoke("delete_session", { start: s.start, end: s.end });
+      const ms = Math.round(performance.now() - t0);
+      console.log(TAG, `delete_session #${n}: ${s.start} → ${s.end}  (+${ms}ms)`);
       await onRefresh();
     } catch (e) {
+      console.error(TAG, `ERROR delete_session #${n}:`, e);
       setError(String(e));
     } finally {
       setDeleting(null);
@@ -145,11 +161,16 @@ export default function DayDetail({ date, sessions, onClose, onRefresh }: Props)
     const start = `${startDate} ${startHH}:${startMM}:00`;
     const end   = `${endDate} ${endHH}:${endMM}:00`;
     if (start >= end) { setError("起床時刻は入眠時刻より後にしてください"); return; }
+    const n = callCount(TAG, "add_session");
+    const t0 = performance.now();
     try {
       await invoke("add_session", { start, end });
+      const ms = Math.round(performance.now() - t0);
+      console.log(TAG, `add_session #${n}: ${start} → ${end}  (+${ms}ms)`);
       await onRefresh();
       setAddOpen(false);
     } catch (e) {
+      console.error(TAG, `ERROR add_session #${n}:`, e);
       setError(String(e));
     }
   }

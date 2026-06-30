@@ -1,3 +1,11 @@
+//! prediction.rs — 睡眠時間・最適入眠時刻の機械学習予測
+//!
+//! 役割 : 過去の睡眠セッションを特徴量に変換し、ランダムフォレスト回帰で
+//!        予測睡眠時間を計算する。セッション数が少ない場合はヒューリスティックで代替。
+//!
+//! 依存 : crate::Session, smartcore, std::f64::consts::PI
+//! 公開 : `PredictionResult`, `OptimalResult`, `predict`, `find_optimal`
+
 use std::f64::consts::PI;
 use smartcore::ensemble::random_forest_regressor::{
     RandomForestRegressor, RandomForestRegressorParameters,

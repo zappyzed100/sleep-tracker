@@ -1,8 +1,20 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Settings.tsx — アプリ設定画面
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 起動設定・睡眠判定時間・目標起床時刻・クラウド連携・データ管理など
+//        アプリ全体の設定を行う画面コンポーネント。
+//
+// 依存 : core（Session, callCount）, ui/TimePicker
+// 公開 : default export Settings
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
-import { Session } from "./types";
-import TimePicker from "./TimePicker";
+import { Session, callCount } from "../core";
+import { TimePicker } from "../ui";
+
+const TAG = "[settings]";
 
 function ConfirmDeleteModal({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
   return (
@@ -86,12 +98,14 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
       const soe = cfg.screen_on_enabled ?? true;
       setScreenOnEnabled(soe);
       onScreenOnEnabledChange?.(soe);
-    }).catch(console.error);
+    }).catch(e => console.error(TAG, "ERROR get_config:", e));
 
-    invoke<boolean>("get_startup_enabled").then(setStartup).catch(console.error);
+    invoke<boolean>("get_startup_enabled").then(setStartup).catch(e => console.error(TAG, "ERROR get_startup_enabled:", e));
   }, []);
 
   async function handleSaveConfig() {
+    const n = callCount(TAG, "save_config");
+    const t0 = performance.now();
     try {
       await invoke("save_config", {
         idleThresholdMinutes: threshold,
@@ -100,13 +114,15 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
         targetWakeTime: targetWakeEnabled ? targetWake : null,
         screenOnEnabled,
       });
+      const ms = Math.round(performance.now() - t0);
+      console.log(TAG, `save_config #${n}: idle=${threshold}min  (+${ms}ms)`);
       setConfigSaved(true);
       onScreenOnEnabledChange?.(screenOnEnabled);
       setTimeout(() => setConfigSaved(false), 2000);
       // On mobile, settings don't affect sleep event parsing — skip re-fetch
       if (!isMobile) onRefresh?.();
     } catch (e) {
-      console.error(e);
+      console.error(TAG, `ERROR save_config #${n}:`, e);
     }
   }
 
@@ -129,18 +145,23 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
       await invoke("set_startup", { enable: next });
       setStartup(next);
     } catch (e) {
-      console.error(e);
+      console.error(TAG, "ERROR set_startup:", e);
     }
   }
 
   async function handleSyncGist() {
+    const n = callCount(TAG, "sync_gist");
+    const t0 = performance.now();
     setSyncing(true);
     setSyncMsg(null);
     try {
       const msg = await invoke<string>("sync_gist");
+      const ms = Math.round(performance.now() - t0);
+      console.log(TAG, `sync_gist #${n}: ${msg}  (+${ms}ms)`);
       setSyncMsg(msg);
       onRefresh?.();
     } catch (e) {
+      console.error(TAG, `ERROR sync_gist #${n}:`, e);
       setSyncMsg(`エラー: ${e}`);
     } finally {
       setSyncing(false);
@@ -172,9 +193,12 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
   }
 
   async function handleExportCsv() {
+    const n = callCount(TAG, "export_csv");
     setCsvMsg(null);
     try {
       const csv = await invoke<string>("export_csv", { sessions });
+      const kb = (csv.length / 1024).toFixed(1);
+      console.log(TAG, `export_csv #${n}: ${kb}KB`);
       const defaultName = `sleep_data_${new Date().toISOString().slice(0, 10)}.csv`;
       const path = await save({
         filters: [{ name: "CSV", extensions: ["csv"] }],
@@ -184,6 +208,29 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
       await invoke("write_csv_file", { path, content: csv });
       setCsvMsg(`${sessions.length} 件をエクスポートしました → ${path}`);
     } catch (e) {
+      console.error(TAG, `ERROR export_csv #${n}:`, e);
+      setCsvMsg(`エラー: ${e}`);
+    }
+  }
+
+  async function handleImportCsv() {
+    const n = callCount(TAG, "import_csv");
+    setCsvMsg(null);
+    try {
+      const path = await open({
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+        multiple: false,
+      });
+      if (!path) return;
+      const content = await invoke<string>("read_text_file", { path });
+      const t0 = performance.now();
+      const added = await invoke<number>("import_csv", { csv: content });
+      const ms = Math.round(performance.now() - t0);
+      console.log(TAG, `import_csv #${n}: ${added}セッション追加  (+${ms}ms)`);
+      setCsvMsg(`${added} 件インポートしました`);
+      onRefresh?.();
+    } catch (e) {
+      console.error(TAG, `ERROR import_csv #${n}:`, e);
       setCsvMsg(`エラー: ${e}`);
     }
   }
@@ -385,11 +432,15 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
           )}
           {isMobile && (
             <button className="settings-btn" onClick={async () => {
+              const n = callCount(TAG, "fetch_from_cloud");
               setSyncing(true); setSyncMsg(null);
+              const t0 = performance.now();
               try {
                 await invoke("fetch_from_cloud");
                 await invoke("fetch_settings_from_cloud");
                 const cfg = await invoke<AppConfig>("get_config");
+                const ms = Math.round(performance.now() - t0);
+                console.log(TAG, `fetch_from_cloud #${n}: done  (+${ms}ms)`);
                 setThreshold(cfg.idle_threshold_minutes ?? 60);
                 if (cfg.target_wake_time) {
                   setTargetWakeEnabled(true);
@@ -399,7 +450,10 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
                 }
                 setSyncMsg("データと設定を取得しました");
                 onRefresh?.();
-              } catch (e) { setSyncMsg(`エラー: ${e}`); }
+              } catch (e) {
+                console.error(TAG, `ERROR fetch_from_cloud #${n}:`, e);
+                setSyncMsg(`エラー: ${e}`);
+              }
               finally { setSyncing(false); }
             }} disabled={syncing}>
               {syncing ? "取得中..." : "今すぐ取得"}
@@ -424,6 +478,9 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
         <div className="settings-btn-row">
           <button className="settings-btn" onClick={handleExportCsv}>
             CSV エクスポート
+          </button>
+          <button className="settings-btn" onClick={handleImportCsv}>
+            CSV インポート
           </button>
         </div>
         <div className="settings-note">Excel等で分析用。就寝・起床・睡眠時間・種別の4列。</div>

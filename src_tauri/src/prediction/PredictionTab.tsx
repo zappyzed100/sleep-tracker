@@ -1,7 +1,18 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PredictionTab.tsx — 設定タブ内の詳細な睡眠予測パネル
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 入眠時刻を指定して睡眠予測を表示する、設定タブ用の詳細パネル。
+//        「最適睡眠」ボタンで最適な入眠時刻を計算して提示する。
+//
+// 依存 : core（Session, formatDuration, callCount）
+// 公開 : default export PredictionTab
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Session } from "./types";
-import { formatDuration } from "./utils";
+import { Session, formatDuration, callCount } from "../core";
+
+const TAG = "[prediction]";
 
 interface PredictionResult {
   duration_hours: number;
@@ -56,12 +67,20 @@ export default function PredictionTab({ sessions }: Props) {
 
   useEffect(() => {
     if (sessions.length === 0) return;
+    const n = callCount(TAG, "predict");
+    const t0 = performance.now();
     invoke<PredictionResult>("predict_sleep", {
       sessions,
       nowIso: bedTimeToIso(bedTime),
     })
-      .then(setResult)
-      .catch(console.error);
+      .then(r => {
+        setResult(r);
+        const ms = Math.round(performance.now() - t0);
+        if (ms > 100) {
+          console.log(TAG, `predict #${n}: ${formatDuration(r.duration_hours)}  (+${ms}ms)`);
+        }
+      })
+      .catch(e => console.error(TAG, `ERROR predict #${n}:`, e));
   }, [sessions, bedTime]);
 
   function setToNow() {
@@ -82,7 +101,7 @@ export default function PredictionTab({ sessions }: Props) {
         setBedTime(r.best_bed_time);
       }
     } catch (e) {
-      console.error(e);
+      console.error(TAG, "ERROR find_optimal_bedtime:", e);
     } finally {
       setLoadingOptimal(false);
     }

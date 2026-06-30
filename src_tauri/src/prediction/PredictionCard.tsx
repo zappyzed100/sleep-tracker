@@ -1,8 +1,19 @@
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PredictionCard.tsx — ホーム画面の睡眠予測インラインカード
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 役割 : 入眠時刻を指定して予測睡眠時間・起床時刻・起きてからの経過時間を表示する。
+//        「今すぐ」「最適睡眠」ボタンで入眠時刻を自動設定できる。
+//
+// 依存 : core（Session, formatDuration, callCount）, ui/TimePicker
+// 公開 : default export PredictionCard
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Session } from "./types";
-import { formatDuration } from "./utils";
-import TimePicker from "./TimePicker";
+import { Session, formatDuration, callCount } from "../core";
+import { TimePicker } from "../ui";
+
+const TAG = "[prediction]";
 
 interface PredictionResult {
   duration_hours: number;
@@ -57,12 +68,20 @@ export default function PredictionCard({ sessions }: Props) {
 
   useEffect(() => {
     if (sessions.length === 0) return;
+    const n = callCount(TAG, "predict");
+    const t0 = performance.now();
     invoke<PredictionResult>("predict_sleep", {
       sessions,
       nowIso: bedTimeToIso(bedTime),
     })
-      .then(setResult)
-      .catch(console.error);
+      .then(r => {
+        setResult(r);
+        const ms = Math.round(performance.now() - t0);
+        if (ms > 100) {
+          console.log(TAG, `predict #${n}: ${formatDuration(r.duration_hours)}  (+${ms}ms)`);
+        }
+      })
+      .catch(e => console.error(TAG, `ERROR predict #${n}:`, e));
   }, [sessions, bedTime]);
 
   function setToNow() {
@@ -79,7 +98,7 @@ export default function PredictionCard({ sessions }: Props) {
       });
       if (r) setBedTime(r.best_bed_time);
     } catch (e) {
-      console.error(e);
+      console.error(TAG, "ERROR find_optimal_bedtime:", e);
     } finally {
       setLoadingOptimal(false);
     }
