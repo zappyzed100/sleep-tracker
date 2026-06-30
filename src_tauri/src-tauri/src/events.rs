@@ -41,7 +41,7 @@ pub fn is_out_from_content(content: &str) -> bool {
         if let Some(c) = line.trim().find(',') {
             match &line.trim()[c + 1..] {
                 "OUT_START" => out = true,
-                "OUT_END" | "IN_HOUSE" => out = false,
+                "OUT_END" | "IN_HOUSE" | "DEVICE_ON" => out = false,
                 _ => {}
             }
         }
@@ -209,6 +209,7 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
         let (ep, ts, ty) = (evs[i].epoch, evs[i].ts.as_str(), evs[i].ty.as_str());
 
         if ty == "DEVICE_ON" {
+            if is_out { is_out = false; }  // PC activity implies user is home
             if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
             continue;
         }
