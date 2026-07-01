@@ -49,6 +49,18 @@ pub fn is_out_from_content(content: &str) -> bool {
     out
 }
 
+pub fn sort_manual_file(path: &std::path::Path) -> Result<(), String> {
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut lines: Vec<String> = content.lines()
+        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
+    std::fs::write(path, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
 pub fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
     let t0 = std::time::Instant::now();
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -199,70 +211,169 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     evs.sort_by_key(|e| e.epoch);
     let event_count = evs.len();
 
-    // State machine (mirrors parse_sessions.cpp logic)
-    let mut sessions: Vec<Session> = Vec::new();
-    let mut sleeping = false;
-    let mut sleep_start_ep: i64 = 0;
-    let mut sleep_start_ts = String::new();
-    let mut session_type = String::new();
-    let mut is_out = false;
+    // ── State machine: two-pass closed-pair algorithm ────────────────────────────
+    //
+    // 閉じていないペアは一切無視する（IN_HOUSE も使わない）。
+    //   IDLE pair : IDLE_START → 次の IDLE_RESUME
+    //   OUT pair  : OUT_START  → 次の OUT_END
+    //
+    // Pass 1: 閉じたペアと DEVICE_ON を収集する。
+    // Pass 2: 各 IDLE ペア内から OUT 期間と DEVICE_ON で区切った細切れを作り、
+    //         規定時間以上のものを睡眠セッションとして記録する。
 
-    let push = |sessions: &mut Vec<Session>, start_ts: &str, start_ep: i64,
-                end_ts: &str, end_ep: i64, stype: &str| {
-        let dur = end_ep - start_ep;
-        if dur >= min_sleep_secs {
-            sessions.push(Session {
-                start: start_ts.to_string(),
-                end: end_ts.to_string(),
-                duration_hours: dur as f64 / 3600.0,
-                session_type: stype.to_string(),
-            });
-        }
-    };
+    // Pass 1 ─────────────────────────────────────────────────────────────────────
+    // (start_ep, start_ts, end_ep, end_ts)
+    let mut idle_pairs: Vec<(i64, String, i64, String)> = Vec::new();
+    let mut out_pairs:  Vec<(i64, String, i64, String)> = Vec::new();
+    let mut device_ons: Vec<(i64, String)>              = Vec::new();
+    // POWER session tracking: (start_ep, start_ts, end_ep, end_ts, type)
+    let mut power_sessions: Vec<(i64, String, i64, String, String)> = Vec::new();
+    {
+        let mut idle_pend:  Option<(i64, String)> = None;
+        let mut out_pend:   Option<(i64, String)> = None;
+        let mut power_pend: Option<(i64, String)> = None;
+        let mut prev_ep: i64 = 0;
 
-    let n_ev = evs.len();
-    for i in 0..n_ev {
-        let (ep, ts, ty) = (evs[i].epoch, evs[i].ts.as_str(), evs[i].ty.as_str());
-
-        if ty == "DEVICE_ON" {
-            if is_out { is_out = false; }  // PC activity implies user is home
-            if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
-            continue;
-        }
-        if ty == "OUT_START" {
-            is_out = true;
-            if sleeping { push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type); sleeping = false; }
-            continue;
-        }
-        if ty == "OUT_END" || ty == "IN_HOUSE" { is_out = false; continue; }
-
-        if !sleeping {
-            if !is_out && matches!(ty, "IDLE_START" | "SUSPEND" | "SHUTDOWN") {
-                sleeping = true;
-                sleep_start_ep = ep;
-                sleep_start_ts = ts.to_string();
-                session_type = if ty == "IDLE_START" { "IDLE" } else { "POWER" }.to_string();
-            } else if matches!(ty, "STARTUP" | "RESUME") && i > 0 {
-                if !is_out && ep - evs[i-1].epoch > 4 * 3600 {
-                    let prev_ep = evs[i-1].epoch;
-                    let (start_ep, start_ts_s) = if hb_epoch > 0 && hb_epoch > prev_ep && hb_epoch < ep {
-                        let adj = hb_epoch - hb_idle_ms / 1000;
-                        if adj > prev_ep { (adj, epoch_to_ts(adj)) } else { (prev_ep, evs[i-1].ts.clone()) }
-                    } else {
-                        (prev_ep, evs[i-1].ts.clone())
-                    };
-                    push(&mut sessions, &start_ts_s, start_ep, ts, ep, "POWER_LOSS");
+        for ev in &evs {
+            let (ep, ts, ty) = (ev.epoch, ev.ts.as_str(), ev.ty.as_str());
+            match ty {
+                "IDLE_START"  => { idle_pend  = Some((ep, ts.to_string())); }
+                "IDLE_RESUME" => {
+                    if let Some((sep, sts)) = idle_pend.take() {
+                        idle_pairs.push((sep, sts, ep, ts.to_string()));
+                    }
                 }
+                "OUT_START"   => { out_pend   = Some((ep, ts.to_string())); }
+                "OUT_END"     => {
+                    if let Some((oep, ots)) = out_pend.take() {
+                        out_pairs.push((oep, ots, ep, ts.to_string()));
+                    }
+                }
+                "DEVICE_ON"   => { device_ons.push((ep, ts.to_string())); }
+                "SUSPEND" | "SHUTDOWN" => {
+                    if power_pend.is_none() {
+                        power_pend = Some((ep, ts.to_string()));
+                    }
+                }
+                "RESUME" | "STARTUP" => {
+                    if let Some((pep, pts)) = power_pend.take() {
+                        let dur = ep - pep;
+                        if dur >= min_sleep_secs {
+                            power_sessions.push((pep, pts, ep, ts.to_string(), "POWER".to_string()));
+                        }
+                    } else if prev_ep > 0 && ep - prev_ep > 4 * 3600 {
+                        // 大きな空白 → POWER_LOSS
+                        let (start_ep, start_ts_s) = if hb_epoch > 0 && hb_epoch > prev_ep && hb_epoch < ep {
+                            let adj = hb_epoch - hb_idle_ms / 1000;
+                            if adj > prev_ep { (adj, epoch_to_ts(adj)) } else { (prev_ep, epoch_to_ts(prev_ep)) }
+                        } else {
+                            (prev_ep, epoch_to_ts(prev_ep))
+                        };
+                        let dur = ep - start_ep;
+                        if dur >= min_sleep_secs {
+                            power_sessions.push((start_ep, start_ts_s, ep, ts.to_string(), "POWER_LOSS".to_string()));
+                        }
+                    }
+                }
+                _ => {}
             }
-        } else {
-            if matches!(ty, "IDLE_RESUME" | "RESUME" | "STARTUP") {
-                push(&mut sessions, &sleep_start_ts, sleep_start_ep, ts, ep, &session_type);
-                sleeping = false;
-            } else if matches!(ty, "SUSPEND" | "SHUTDOWN") {
-                session_type = "POWER".to_string();
-            }
+            prev_ep = ep;
         }
     }
+
+    // Pass 2 ─────────────────────────────────────────────────────────────────────
+    let mut sessions: Vec<Session> = Vec::new();
+
+    for (idle_start, idle_start_ts, idle_end, idle_end_ts) in &idle_pairs {
+        // OUT gaps that overlap this IDLE window (clip to window boundaries)
+        let mut gaps: Vec<(i64, String, i64, String)> = out_pairs.iter()
+            .filter_map(|(os, os_ts, oe, oe_ts)| {
+                let s = (*os).max(*idle_start);
+                let e = (*oe).min(*idle_end);
+                if e > s {
+                    let sts = if *os >= *idle_start { os_ts.clone() } else { idle_start_ts.clone() };
+                    let ets = if *oe <= *idle_end    { oe_ts.clone()  } else { idle_end_ts.clone()   };
+                    Some((s, sts, e, ets))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        gaps.sort_by_key(|(s, _, _, _)| *s);
+
+        // DEVICE_ON split points within the IDLE window
+        let dins: Vec<(i64, String)> = device_ons.iter()
+            .filter(|(d, _)| *d > *idle_start && *d < *idle_end)
+            .cloned()
+            .collect();
+
+        // Merge gap boundaries and DEVICE_ON into a single sorted timeline.
+        // Same-epoch tie-breaking: GapEnd(0) < DeviceOn(1) < GapStart(2)
+        // so that gaps close before splits, and splits happen before new gaps open.
+        let mut tl: Vec<(i64, u8, String)> = Vec::new();
+        for (gs, gs_ts, ge, ge_ts) in &gaps {
+            tl.push((*gs, 2, gs_ts.clone()));
+            tl.push((*ge, 0, ge_ts.clone()));
+        }
+        for (dep, dts) in &dins {
+            tl.push((*dep, 1, dts.clone()));
+        }
+        tl.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+        let mut cur_ep  = *idle_start;
+        let mut cur_ts  = idle_start_ts.clone();
+        let mut in_gap  = false;
+
+        macro_rules! emit_seg {
+            ($end_ep:expr, $end_ts:expr) => {{
+                let dur = $end_ep - cur_ep;
+                if dur >= min_sleep_secs {
+                    sessions.push(Session {
+                        start: cur_ts.clone(),
+                        end: $end_ts.to_string(),
+                        duration_hours: dur as f64 / 3600.0,
+                        session_type: "IDLE".to_string(),
+                    });
+                }
+            }};
+        }
+
+        for (ep, kind, ts) in &tl {
+            match kind {
+                2 => { // GapStart: close current segment, enter gap
+                    if !in_gap { emit_seg!(*ep, ts.as_str()); }
+                    in_gap = true;
+                }
+                0 => { // GapEnd: leave gap, resume from here
+                    in_gap = false;
+                    cur_ep = *ep;
+                    cur_ts = ts.clone();
+                }
+                1 => { // DeviceOn: split point (only outside a gap)
+                    if !in_gap {
+                        emit_seg!(*ep, ts.as_str());
+                        cur_ep = *ep;
+                        cur_ts = ts.clone();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Close the final segment
+        if !in_gap { emit_seg!(*idle_end, idle_end_ts.as_str()); }
+    }
+
+    // Append POWER sessions and sort chronologically
+    for (pep, pts, eep, ets, ptype) in power_sessions {
+        sessions.push(Session {
+            start: pts,
+            end: ets,
+            duration_hours: (eep - pep) as f64 / 3600.0,
+            session_type: ptype,
+        });
+    }
+    sessions.sort_by(|a, b| a.start.cmp(&b.start));
 
     // Filter out soft-deleted sessions.
     if !deleted_starts.is_empty() {
@@ -271,6 +382,46 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
         let removed = before - sessions.len();
         if removed > 0 {
             eprintln!("{} parse_sessions #{}: {} sessions filtered by SESSION_DELETED", TAG, n, removed);
+        }
+    }
+
+    // Merge manual sessions from sleep_manual.txt (supports MANUAL_DELETED soft-delete)
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
+    if manual_path.exists() {
+        if let Ok(manual_raw) = std::fs::read_to_string(&manual_path) {
+            // First pass: collect soft-deleted start timestamps
+            let mut manual_deleted: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for line in manual_raw.lines() {
+                let line = line.trim().trim_start_matches('\u{FEFF}');
+                if let Some(c) = line.find(',') {
+                    if &line[c+1..] == "MANUAL_DELETED" {
+                        manual_deleted.insert(line[..c].to_string());
+                    }
+                }
+            }
+            // Second pass: add non-deleted sessions
+            for line in manual_raw.lines() {
+                let line = line.trim().trim_start_matches('\u{FEFF}');
+                if line.is_empty() { continue; }
+                if let Some(c) = line.find(',') {
+                    let start = &line[..c];
+                    let end   = &line[c+1..];
+                    if end == "MANUAL_DELETED" { continue; }
+                    if manual_deleted.contains(start) { continue; }
+                    if let (Some(sep), Some(eep)) = (ts_to_epoch(start), ts_to_epoch(end)) {
+                        let dur = eep - sep;
+                        if dur > 0 {
+                            sessions.push(Session {
+                                start: start.to_string(),
+                                end: end.to_string(),
+                                duration_hours: dur as f64 / 3600.0,
+                                session_type: "MANUAL".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            sessions.sort_by(|a, b| a.start.cmp(&b.start));
         }
     }
 
@@ -286,10 +437,13 @@ pub fn get_sessions() -> Result<Vec<Session>, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
-    let events = crate::data_dir().join("sleep_events.txt");
-    let current_mtime = events.metadata()
-        .and_then(|m| m.modified())
-        .unwrap_or(std::time::UNIX_EPOCH);
+    let mtime_of = |name: &str| -> std::time::SystemTime {
+        crate::data_dir().join(name).metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH)
+    };
+    // Cache is valid only when both source files are unchanged.
+    let current_mtime = mtime_of("sleep_events.txt").max(mtime_of("sleep_manual.txt"));
 
     let mut cache = SESSION_CACHE.lock().unwrap();
     if let Some(c) = cache.as_ref() {
@@ -307,33 +461,47 @@ pub fn get_sessions() -> Result<Vec<Session>, String> {
 #[tauri::command]
 pub fn add_session(start: String, end: String) -> Result<(), String> {
     eprintln!("{} add_session: {} → {}", TAG, start, end);
-    let path = crate::data_dir().join("sleep_events.txt");
-    let mut content = if path.exists() {
-        std::fs::read_to_string(&path).map_err(|e| e.to_string())?
-    } else {
-        String::new()
-    };
-    content.push_str(&format!("{},IDLE_START\n{},IDLE_RESUME\n", start, end));
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    sort_events_file(&path)
+    let path = crate::data_dir().join("sleep_manual.txt");
+    let line = format!("{},{}\n", start, end);
+    let mut f = OpenOptions::new().create(true).append(true).open(&path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(line.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_session(start: String, _end: String) -> Result<(), String> {
     eprintln!("{} delete_session: {}", TAG, start);
-    let path = crate::data_dir().join("sleep_events.txt");
-    if !path.exists() {
+
+    // Check if this is a manual session (start exists in sleep_manual.txt as non-deleted entry).
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
+    if manual_path.exists() {
+        let content = std::fs::read_to_string(&manual_path).map_err(|e| e.to_string())?;
+        let is_manual = content.lines().any(|l| {
+            if let Some(c) = l.find(',') { &l[..c] == start.as_str() && &l[c+1..] != "MANUAL_DELETED" }
+            else { false }
+        });
+        if is_manual {
+            // Soft-delete: append MANUAL_DELETED marker so deletion survives Drive sync.
+            let marker = format!("{},MANUAL_DELETED\n", start);
+            let mut f = OpenOptions::new().create(true).append(true).open(&manual_path)
+                .map_err(|e| e.to_string())?;
+            f.write_all(marker.as_bytes()).map_err(|e| e.to_string())?;
+            eprintln!("{} delete_session: MANUAL_DELETED appended to sleep_manual.txt", TAG);
+            return sort_manual_file(&manual_path);
+        }
+    }
+
+    // Auto-detected session: soft-delete via SESSION_DELETED marker so the deletion
+    // survives sync (the original events remain in the file but are filtered at parse time).
+    let events_path = crate::data_dir().join("sleep_events.txt");
+    if !events_path.exists() {
         return Err("sleep_events.txt not found".to_string());
     }
-    // Soft-delete: record SESSION_DELETED at the session's start timestamp.
-    // The original IDLE_START/IDLE_RESUME lines are kept so they survive sync
-    // without re-appearing; parse_sessions_rust filters them out via this marker.
     let marker = format!("{},SESSION_DELETED\n", start);
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+    let mut f = OpenOptions::new().create(true).append(true).open(&events_path)
         .map_err(|e| e.to_string())?;
-    use std::io::Write;
     f.write_all(marker.as_bytes()).map_err(|e| e.to_string())?;
-    sort_events_file(&path)
+    sort_events_file(&events_path)
 }
 
 // Android: write DEVICE_ON (+ IN_HOUSE if out-state) when user opens the app.

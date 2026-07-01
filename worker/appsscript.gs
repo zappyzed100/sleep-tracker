@@ -80,6 +80,25 @@ function doPost(e) {
     }
   }
 
+  // Manual sessions backup: PC/Android → Drive
+  if (e.parameter.action === "backup_manual") {
+    try {
+      const content = e.postData ? e.postData.getDataAsString() : "";
+      const folder = getBackupFolder();
+      const fileName = "sleep_manual_backup.txt";
+      const files = folder.getFilesByName(fileName);
+      if (files.hasNext()) {
+        files.next().setContent(content);
+      } else {
+        folder.createFile(fileName, content, MimeType.PLAIN_TEXT);
+      }
+      return ContentService.createTextOutput("ok");
+    } catch (err) {
+      Logger.log("[backup_manual] ERROR: " + err.message);
+      return ContentService.createTextOutput("error: " + err.message);
+    }
+  }
+
   // Sync settings (idle_threshold_minutes, target_wake_time): PC → Drive
   if (e.parameter.action === "set_settings") {
     try {
@@ -137,6 +156,13 @@ function doGet(e) {
   // Restore: return sleep_events_backup.txt content
   if (e.parameter.action === "restore") {
     const files = getBackupFolder().getFilesByName("sleep_events_backup.txt");
+    const content = files.hasNext() ? files.next().getBlob().getDataAsString() : "";
+    return ContentService.createTextOutput(content).setMimeType(ContentService.MimeType.TEXT);
+  }
+
+  // Restore manual sessions
+  if (e.parameter.action === "restore_manual") {
+    const files = getBackupFolder().getFilesByName("sleep_manual_backup.txt");
     const content = files.hasNext() ? files.next().getBlob().getDataAsString() : "";
     return ContentService.createTextOutput(content).setMimeType(ContentService.MimeType.TEXT);
   }

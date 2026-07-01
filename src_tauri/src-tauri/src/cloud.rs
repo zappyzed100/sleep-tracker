@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::events::{
     SESSION_CACHE, SessionCache, parse_sessions_rust,
-    apply_mobile_event_line, sort_events_file,
+    apply_mobile_event_line, sort_events_file, sort_manual_file,
 };
 use crate::config::load_config_inner;
 
@@ -151,6 +151,41 @@ fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
     Some(text)
 }
 
+// Download sleep_manual.txt content from Drive.
+fn fetch_drive_manual(base_url: &str, secret: &str) -> Option<String> {
+    let url = format!("{}?secret={}&action=restore_manual", base_url.trim_end_matches('/'), secret);
+    let resp = crate::gist_client().ok()?.get(&url).send().ok()?;
+    if !resp.status().is_success() { return None; }
+    let text = resp.text().ok()?;
+    let t = text.trim();
+    if t.is_empty() || t == "Unauthorized" || t.starts_with("not found") { return None; }
+    Some(text)
+}
+
+fn backup_manual_to_drive(content: &str) -> String {
+    let t0 = std::time::Instant::now();
+    let cfg = load_config_inner();
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
+        _ => return "Manual Driveスキップ(未設定)".into(),
+    };
+    let url = format!("{}?secret={}&action=backup_manual", base_url.trim_end_matches('/'), secret);
+    let kb = content.len() as f64 / 1024.0;
+    let resp = match crate::gist_client()
+        .and_then(|c| c.post(&url).header("Content-Type", "text/plain").body(content.to_string()).send().map_err(|e| e.to_string()))
+    {
+        Ok(r) => r,
+        Err(e) => { eprintln!("{} ERROR backup_manual_to_drive: {}", TAG, e); return format!("Manual Drive送信失敗: {}", e); }
+    };
+    let ms = t0.elapsed().as_millis();
+    if resp.status().is_success() {
+        eprintln!("{} backup_manual_to_drive: {:.1}KB sent  (+{}ms)", TAG, kb, ms);
+        "Manual Drive バックアップ完了".into()
+    } else {
+        format!("Manual Drive HTTP {}", resp.status().as_u16())
+    }
+}
+
 // Merge drive_content lines into the local file (sort by timestamp, dedup).
 // Returns true if the local file was updated (new lines added from Drive).
 fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
@@ -213,28 +248,36 @@ pub fn sync_gist() -> Result<String, String> {
     let t0 = std::time::Instant::now();
 
     let events_path = crate::data_dir().join("sleep_events.txt");
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
 
-    // 0. Download Drive data and merge into local (Drive → local, preserves history)
-    {
-        let cfg = load_config_inner();
-        if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
-            if !u.is_empty() && !s.is_empty() {
-                if let Some(drive_content) = fetch_drive_events(&u, &s) {
-                    let kb = drive_content.len() as f64 / 1024.0;
-                    eprintln!("{} sync_gist #{}: {:.1}KB from Drive", TAG, n, kb);
-                    if merge_into_local(&events_path, &drive_content) {
-                        *SESSION_CACHE.lock().unwrap() = None;
-                    }
-                }
+    let cfg = load_config_inner();
+    let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
+        if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
+    } else { None };
+
+    // 0. Drive → local merge (sleep_events.txt and sleep_manual.txt)
+    if let Some((ref u, ref s)) = url_secret {
+        if let Some(drive_content) = fetch_drive_events(u, s) {
+            let kb = drive_content.len() as f64 / 1024.0;
+            eprintln!("{} sync_gist #{}: {:.1}KB events from Drive", TAG, n, kb);
+            if merge_into_local(&events_path, &drive_content) {
+                *SESSION_CACHE.lock().unwrap() = None;
             }
+        }
+        if let Some(drive_manual) = fetch_drive_manual(u, s) {
+            let kb = drive_manual.len() as f64 / 1024.0;
+            eprintln!("{} sync_gist #{}: {:.1}KB manual from Drive", TAG, n, kb);
+            if merge_into_local(&manual_path, &drive_manual) {
+                *SESSION_CACHE.lock().unwrap() = None;
+            }
+            let _ = sort_manual_file(&manual_path);
         }
     }
 
     // 1. Pull mobile events from Google Sheets
     let pull_msg = pull_mobile_events_inner();
 
-    // 2. Always sort+dedup the file (removes duplicate IDLE_START lines caused
-    //    by monitor oscillation when threshold < WAKE_SECS)
+    // 2. Sort+dedup sleep_events.txt
     if events_path.exists() {
         let _ = sort_events_file(&events_path);
     }
@@ -246,8 +289,11 @@ pub fn sync_gist() -> Result<String, String> {
         String::new()
     };
 
-    // 4. Backup merged result to Google Drive (local → Drive)
+    // 4. Upload both files to Drive (local → Drive)
     let drive_msg = backup_to_drive(&content);
+    if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
+        let _ = backup_manual_to_drive(&manual_content);
+    }
 
     let ms = t0.elapsed().as_millis();
     eprintln!("{} sync_gist #{}: done  (+{}ms)", TAG, n, ms);
@@ -307,20 +353,29 @@ pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
     let t0 = std::time::Instant::now();
 
     let events_path = crate::data_dir().join("sleep_events.txt");
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
 
     // 1. Fetch settings (update THRESHOLD_SECS from Drive)
     let _ = crate::config::fetch_settings_from_cloud();
 
-    // 2. Download sleep_events_backup.txt from Drive and merge into local
+    // 2. Drive → local merge (sleep_events.txt and sleep_manual.txt)
     let cfg = load_config_inner();
     if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
         if !u.is_empty() && !s.is_empty() {
             if let Some(drive_content) = fetch_drive_events(&u, &s) {
                 let kb = drive_content.len() as f64 / 1024.0;
-                eprintln!("{} sync_mobile_inner #{}: {:.1}KB from Drive", TAG, n, kb);
+                eprintln!("{} sync_mobile_inner #{}: {:.1}KB events from Drive", TAG, n, kb);
                 if merge_into_local(&events_path, &drive_content) {
                     *SESSION_CACHE.lock().unwrap() = None;
                 }
+            }
+            if let Some(drive_manual) = fetch_drive_manual(&u, &s) {
+                let kb = drive_manual.len() as f64 / 1024.0;
+                eprintln!("{} sync_mobile_inner #{}: {:.1}KB manual from Drive", TAG, n, kb);
+                if merge_into_local(&manual_path, &drive_manual) {
+                    *SESSION_CACHE.lock().unwrap() = None;
+                }
+                let _ = sort_manual_file(&manual_path);
             }
         }
     }
@@ -333,17 +388,21 @@ pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
         let _ = sort_events_file(&events_path);
     }
 
-    // 5. Upload merged result back to Drive as sleep_events_backup.txt
+    // 5. Upload both files to Drive (local → Drive)
     if let Ok(content) = std::fs::read_to_string(&events_path) {
         let drive_msg = backup_to_drive(&content);
-        eprintln!("{} sync_mobile_inner #{}: upload: {}", TAG, n, drive_msg);
+        eprintln!("{} sync_mobile_inner #{}: upload events: {}", TAG, n, drive_msg);
+    }
+    if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
+        let manual_msg = backup_manual_to_drive(&manual_content);
+        eprintln!("{} sync_mobile_inner #{}: upload manual: {}", TAG, n, manual_msg);
     }
 
     // 6. Parse sessions (rebuild cache)
     let sessions = parse_sessions_rust().unwrap_or_default();
-    let mtime = events_path.metadata()
-        .and_then(|m| m.modified())
-        .unwrap_or(std::time::UNIX_EPOCH);
+    let mtime_events = events_path.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    let mtime_manual = manual_path.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    let mtime = mtime_events.max(mtime_manual);
     *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions: sessions.clone(), mtime });
 
     let ms = t0.elapsed().as_millis();
