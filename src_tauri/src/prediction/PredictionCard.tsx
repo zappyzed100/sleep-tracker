@@ -65,6 +65,13 @@ export default function PredictionCard({ sessions }: Props) {
   const [bedTime, setBedTime] = useState(currentHHMM);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [loadingOptimal, setLoadingOptimal] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  // Refresh every minute so "起きてから" stays current without user interaction.
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (sessions.length === 0) return;
@@ -82,7 +89,7 @@ export default function PredictionCard({ sessions }: Props) {
         }
       })
       .catch(e => console.error(TAG, `ERROR predict #${n}:`, e));
-  }, [sessions, bedTime]);
+  }, [sessions, bedTime, tick]);
 
   function setToNow() {
     setBedTime(currentHHMM());
