@@ -150,9 +150,10 @@ class MainActivity : TauriActivity() {
         Log.w("SleepTracker", "[overlay] postVisualStateCallback: skipped (wv=$wv, SDK=${android.os.Build.VERSION.SDK_INT})")
       }
     }
-    // First launch: notifyReady() enforces FIRST_LAUNCH_MIN_MS minimum; 3s absolute fallback.
-    // Deep sleep resume: postVisualStateCallback fires quickly; 2s is the fallback.
-    val timeout = if (isFirstLaunch) 1500L else 2000L
+    // First launch: notifyReady() is the primary signal; 1.5s absolute fallback.
+    // Deep sleep resume: postVisualStateCallback is primary; 30s fallback.
+    // 30s is needed because Android throttles WebView rendering for ~18s after a long background pause.
+    val timeout = if (isFirstLaunch) 1500L else 30_000L
     val runnable = Runnable {
       Log.i("SleepTracker", "[overlay] fallback timeout fired (${timeout}ms)")
       ov.visibility = View.GONE

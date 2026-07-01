@@ -50,7 +50,8 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     }
 
     private fun readConfig(): JSONObject? = try {
-        val f = java.io.File(applicationContext.filesDir, "config.json")
+        // Tauri's app_data_dir() = /data/user/0/<pkg>  (dataDir, not filesDir)
+        val f = java.io.File(applicationContext.dataDir, "config.json")
         if (f.exists()) JSONObject(f.readText()) else null
     } catch (_: Exception) { null }
 }
