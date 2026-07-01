@@ -157,9 +157,12 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
-    let local = if path.exists() {
+    let local_raw = if path.exists() {
         std::fs::read_to_string(path).unwrap_or_default()
     } else { String::new() };
+    // Strip UTF-8 BOM (U+FEFF) that PowerShell/Windows tools sometimes prepend.
+    let local = local_raw.trim_start_matches('\u{FEFF}');
+    let drive_content = drive_content.trim_start_matches('\u{FEFF}');
 
     let local_n = local.lines().filter(|l| !l.trim().is_empty()).count();
     let drive_n = drive_content.lines().filter(|l| !l.trim().is_empty()).count();
@@ -167,30 +170,34 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
 
     let mut all: Vec<String> = local.lines()
         .chain(drive_content.lines())
-        .map(|l| l.trim_end_matches('\r').trim().to_string())
+        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
         .filter(|l| !l.is_empty())
         .collect();
     all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
     all.dedup();
 
-    if all.len() <= local_n {
-        eprintln!("{} merge_into_local #{}: no new lines (after dedup: {})", TAG, n, all.len());
+    // Write if content changed (new lines added OR duplicates removed from local)
+    let merged = all.join("\n") + "\n";
+    if merged == local_raw && all.len() == local_n {
+        eprintln!("{} merge_into_local #{}: no change ({}  lines)", TAG, n, all.len());
         return false;
     }
 
-    // Log the lines being added (up to 10) so we can see STARTUP/IN_HOUSE sources
-    let added: Vec<&str> = all[local_n..].iter().map(|s| s.as_str()).collect();
-    eprintln!("{} merge_into_local #{}: +{} lines from Drive:", TAG, n, added.len());
-    for (i, line) in added.iter().enumerate().take(10) {
-        eprintln!("{} merge_into_local #{}:   [{}] {}", TAG, n, i, line);
-    }
-    if added.len() > 10 {
-        eprintln!("{} merge_into_local #{}: ... ({} more)", TAG, n, added.len() - 10);
+    let delta = all.len() as i64 - local_n as i64;
+    eprintln!("{} merge_into_local #{}: {} → {} lines ({:+})", TAG, n, local_n, all.len(), delta);
+    if delta > 0 {
+        let added_lines: Vec<&str> = all.iter()
+            .filter(|l| !local.lines().any(|ll| ll == l.as_str()))
+            .map(|s| s.as_str()).collect();
+        for (i, line) in added_lines.iter().enumerate().take(10) {
+            eprintln!("{} merge_into_local #{}:   +[{}] {}", TAG, n, i, line);
+        }
+        if added_lines.len() > 10 {
+            eprintln!("{} merge_into_local #{}: ... ({} more)", TAG, n, added_lines.len() - 10);
+        }
     }
 
-    let _ = std::fs::write(path, all.join("\n") + "\n");
-    eprintln!("{} merge_into_local #{}: {} → {} lines (+{} from Drive)",
-        TAG, n, local_n, all.len(), all.len() - local_n);
+    let _ = std::fs::write(path, merged);
     true
 }
 
