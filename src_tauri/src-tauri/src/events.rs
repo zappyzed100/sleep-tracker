@@ -314,6 +314,9 @@ pub fn delete_session(start: String, end: String) -> Result<(), String> {
 // Android: write DEVICE_ON (+ IN_HOUSE if out-state) when user opens the app.
 #[tauri::command]
 pub fn record_device_on() {
+    static N: AtomicU64 = AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
+
     use chrono::Local;
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let path = crate::data_dir().join("sleep_events.txt");
@@ -322,10 +325,16 @@ pub fn record_device_on() {
     } else {
         String::new()
     };
+
+    let lines_before = existing.lines().filter(|l| !l.trim().is_empty()).count();
+    let is_out = is_out_from_content(&existing);
+    eprintln!("{} record_device_on #{}: ts={} is_out={} lines_before={}", TAG, n, ts, is_out, lines_before);
+
     // Clear out-state if user is home (touching the device means they're here)
-    if is_out_from_content(&existing) {
+    if is_out {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
             let _ = writeln!(f, "{},IN_HOUSE", ts);
+            eprintln!("{} record_device_on #{}: wrote IN_HOUSE", TAG, n);
         }
     }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
@@ -333,7 +342,15 @@ pub fn record_device_on() {
     }
     let _ = std::fs::write(crate::data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));
     *SESSION_CACHE.lock().unwrap() = None;
-    eprintln!("{} record_device_on: {}", TAG, ts);
+
+    let lines_after = std::fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines().filter(|l| !l.trim().is_empty()).count();
+    eprintln!("{} record_device_on #{}: done lines_after={} (+{})", TAG, n, lines_after, lines_after.saturating_sub(lines_before));
+
+    if n > 10 {
+        eprintln!("{} record_device_on #{}: WARN called {} times — possible visibilitychange loop", TAG, n, n);
+    }
 }
 
 #[tauri::command]

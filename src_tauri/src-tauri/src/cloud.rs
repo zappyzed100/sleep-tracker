@@ -154,11 +154,17 @@ fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
 // Merge drive_content lines into the local file (sort by timestamp, dedup).
 // Returns true if the local file was updated (new lines added from Drive).
 fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
+
     let local = if path.exists() {
         std::fs::read_to_string(path).unwrap_or_default()
     } else { String::new() };
 
     let local_n = local.lines().filter(|l| !l.trim().is_empty()).count();
+    let drive_n = drive_content.lines().filter(|l| !l.trim().is_empty()).count();
+    eprintln!("{} merge_into_local #{}: local={} lines  drive={} lines", TAG, n, local_n, drive_n);
+
     let mut all: Vec<String> = local.lines()
         .chain(drive_content.lines())
         .map(|l| l.trim_end_matches('\r').trim().to_string())
@@ -167,10 +173,24 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
     all.dedup();
 
-    if all.len() <= local_n { return false; }
+    if all.len() <= local_n {
+        eprintln!("{} merge_into_local #{}: no new lines (after dedup: {})", TAG, n, all.len());
+        return false;
+    }
+
+    // Log the lines being added (up to 10) so we can see STARTUP/IN_HOUSE sources
+    let added: Vec<&str> = all[local_n..].iter().map(|s| s.as_str()).collect();
+    eprintln!("{} merge_into_local #{}: +{} lines from Drive:", TAG, n, added.len());
+    for (i, line) in added.iter().enumerate().take(10) {
+        eprintln!("{} merge_into_local #{}:   [{}] {}", TAG, n, i, line);
+    }
+    if added.len() > 10 {
+        eprintln!("{} merge_into_local #{}: ... ({} more)", TAG, n, added.len() - 10);
+    }
+
     let _ = std::fs::write(path, all.join("\n") + "\n");
-    eprintln!("{} merge_into_local: {} → {} lines (+{} from Drive)",
-        TAG, local_n, all.len(), all.len() - local_n);
+    eprintln!("{} merge_into_local #{}: {} → {} lines (+{} from Drive)",
+        TAG, n, local_n, all.len(), all.len() - local_n);
     true
 }
 

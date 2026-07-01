@@ -90,17 +90,40 @@ export default function App() {
   // sync_mobile merges Drive ↔ local ↔ Sheet, uploads merged result, returns parsed sessions.
   useEffect(() => {
     if (!isMobile) return;
+
+    const effectId = callCount(TAG, "android-effect");
+    console.log(TAG, `android-effect #${effectId}: mounted`);
+
     let lastSync = 0;
+    let lastDeviceOn = 0;
+
+    // record_device_on throttled to once per 60s to prevent visibilitychange loop writes
+    const doRecordDeviceOn = (reason: string) => {
+      const n = callCount(TAG, "record_device_on");
+      const now = Date.now();
+      if (now - lastDeviceOn < 60_000) {
+        console.log(TAG, `record_device_on #${n}: SKIP throttled (reason=${reason}, ${Math.round((now - lastDeviceOn) / 1000)}s ago)`);
+        return;
+      }
+      lastDeviceOn = now;
+      console.log(TAG, `record_device_on #${n}: invoking (reason=${reason})`);
+      invoke("record_device_on")
+        .then(() => console.log(TAG, `record_device_on #${n}: done`))
+        .catch(e => console.error(TAG, `ERROR record_device_on #${n}:`, e));
+    };
+
     const doSync = (force = false) => {
       const now = Date.now();
-      // Throttle: skip if synced within the last 5 minutes (unless forced)
-      if (!force && now - lastSync < 5 * 60 * 1000) return;
+      const elapsedSec = Math.round((now - lastSync) / 1000);
+      if (!force && now - lastSync < 5 * 60 * 1000) {
+        console.log(TAG, `doSync: SKIP throttled (force=${force}, last=${elapsedSec}s ago)`);
+        return;
+      }
       lastSync = now;
-      // Show local data immediately while sync runs in the background
       loadSessions();
       const n = callCount(TAG, "sync_mobile");
       const t0 = performance.now();
-      console.log(TAG, `sync_mobile #${n}: started`);
+      console.log(TAG, `sync_mobile #${n}: started (force=${force}, last=${elapsedSec}s ago)`);
       invoke<Session[]>("sync_mobile")
         .then(data => {
           const ms = Math.round(performance.now() - t0);
@@ -109,18 +132,31 @@ export default function App() {
         })
         .catch(e => console.error(TAG, `ERROR sync_mobile #${n}:`, e));
     };
-    // Write DEVICE_ON immediately on startup
-    invoke("record_device_on").catch(() => {});
+
+    doRecordDeviceOn("startup");
     doSync(true);
-    const id = setInterval(() => doSync(true), 30 * 60 * 1000);
+
+    const id = setInterval(() => {
+      console.log(TAG, "30min-interval: tick");
+      doSync(true);
+    }, 30 * 60 * 1000);
+
+    let visibilitySeq = 0;
     const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        invoke("record_device_on").catch(() => {});  // user is back — write DEVICE_ON
+      visibilitySeq++;
+      const state = document.visibilityState;
+      const n = callCount(TAG, "visibilitychange");
+      console.log(TAG, `visibilitychange #${n} (seq=${visibilitySeq}): ${state}`);
+      if (state === "visible") {
+        doRecordDeviceOn(`visibilitychange#${visibilitySeq}`);
         doSync();
       }
     };
     document.addEventListener("visibilitychange", onVisible);
+
+    console.log(TAG, `android-effect #${effectId}: setup done`);
     return () => {
+      console.log(TAG, `android-effect #${effectId}: cleanup`);
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
