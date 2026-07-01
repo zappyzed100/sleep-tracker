@@ -187,14 +187,14 @@ fn maybe_in_house(events_path: &PathBuf, ts: &str) {
 
 // ── Monitor loop ──────────────────────────────────────────────────────────────
 
-pub fn start(data_dir: PathBuf) {
+pub fn start(data_dir: PathBuf, app: tauri::AppHandle) {
     thread::Builder::new()
         .name("sleep-monitor".into())
-        .spawn(move || run(data_dir))
+        .spawn(move || run(data_dir, app))
         .expect("failed to spawn monitor thread");
 }
 
-fn run(data_dir: PathBuf) {
+fn run(data_dir: PathBuf, app: tauri::AppHandle) {
     let events_path    = data_dir.join("sleep_events.txt");
     let heartbeat_path = data_dir.join("sleep_heartbeat.txt");
     let pause_flag     = data_dir.join("monitor_paused");
@@ -294,6 +294,9 @@ fn run(data_dir: PathBuf) {
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             eprintln!("{} IDLE_RESUME: was sleeping {}s", TAG, idle);
             sleeping = false;
+            // Notify frontend immediately so sessions panel refreshes without polling delay.
+            use tauri::Emitter;
+            let _ = app.emit("sleep-session-recorded", ());
             // Back up to Drive so Android can see the wake time
             let ep = events_path.clone();
             thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });

@@ -336,7 +336,7 @@ pub fn run() {
                 );
 
                 // Start background idle monitor
-                monitor::start(data_dir());
+                monitor::start(data_dir(), app.handle().clone());
             }
 
             // ── Background thread ────────────────────────────────────────────

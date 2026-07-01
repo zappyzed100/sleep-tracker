@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { WeeklyChart, StatsCard } from "./chart";
 import { PredictionCard } from "./prediction";
 import { CalendarPicker } from "./ui";
@@ -184,6 +185,16 @@ export default function App() {
     const id = setInterval(pollMonitor, 30_000);
     return () => clearInterval(id);
   }, [pollMonitor, isMobile]);
+
+  // PC: refresh sessions immediately when monitor writes IDLE_RESUME
+  useEffect(() => {
+    if (isMobile) return;
+    const p = listen("sleep-session-recorded", () => {
+      console.log(TAG, "sleep-session-recorded: refreshing sessions");
+      loadSessions();
+    });
+    return () => { p.then(fn => fn()); };
+  }, [isMobile, loadSessions]);
 
   async function toggleMonitorPause() {
     const shouldPause = monitorStatus === "active";
