@@ -249,11 +249,8 @@ fn show_window(app: &tauri::AppHandle) {
 
 #[cfg(not(mobile))]
 fn append_shutdown_event() {
-    let path = data_dir().join("sleep_events.txt");
-    let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{},SHUTDOWN", ts);
-    }
+    // SHUTDOWN events no longer written — they had no semantic value and
+    // cluttered sleep_events.txt with noise.
 }
 
 #[cfg(not(mobile))]

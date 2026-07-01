@@ -208,8 +208,6 @@ fn run(data_dir: PathBuf, app: tauri::AppHandle) {
     const WAKE_SECS: u64 = 60;
 
     maybe_in_house(&events_path, &now_str());
-    append_event(&events_path, &now_str(), "STARTUP");
-    eprintln!("{} STARTUP: written", TAG);
 
     let mut sleeping              = false;
     let mut threshold             = crate::THRESHOLD_SECS.load(std::sync::atomic::Ordering::Relaxed);
