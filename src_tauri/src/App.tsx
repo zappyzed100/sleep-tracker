@@ -86,32 +86,39 @@ export default function App() {
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
-  // Android: fetch from Drive on mount, every 30 min, and on screen ON / app foreground
+  // Android: full bidirectional sync on mount, every 30 min, and on screen ON / app foreground.
+  // sync_mobile merges Drive ↔ local ↔ Sheet, uploads merged result, returns parsed sessions.
   useEffect(() => {
     if (!isMobile) return;
-    let lastFetch = 0;
-    const doFetch = (force = false) => {
+    let lastSync = 0;
+    const doSync = (force = false) => {
       const now = Date.now();
-      // Throttle: skip if fetched within the last 5 minutes (unless forced)
-      if (!force && now - lastFetch < 5 * 60 * 1000) return;
-      lastFetch = now;
-      // Show local data immediately, update from cloud as low-priority background task
+      // Throttle: skip if synced within the last 5 minutes (unless forced)
+      if (!force && now - lastSync < 5 * 60 * 1000) return;
+      lastSync = now;
+      // Show local data immediately while sync runs in the background
       loadSessions();
-      const n = callCount(TAG, "fetch_from_cloud");
+      const n = callCount(TAG, "sync_mobile");
       const t0 = performance.now();
-      console.log(TAG, `fetch_from_cloud #${n}: started`);
-      invoke<Session[]>("fetch_from_cloud")
+      console.log(TAG, `sync_mobile #${n}: started`);
+      invoke<Session[]>("sync_mobile")
         .then(data => {
           const ms = Math.round(performance.now() - t0);
-          console.log(TAG, `fetch_from_cloud #${n}: ${data.length} sessions  (+${ms}ms)`);
+          console.log(TAG, `sync_mobile #${n}: ${data.length} sessions  (+${ms}ms)`);
           startTransition(() => { setSessions(data); setError(null); });
         })
-        .catch(e => console.error(TAG, `ERROR fetch_from_cloud #${n}:`, e));
-      invoke("fetch_settings_from_cloud").catch(() => {});
+        .catch(e => console.error(TAG, `ERROR sync_mobile #${n}:`, e));
     };
-    doFetch(true);
-    const id = setInterval(() => doFetch(true), 30 * 60 * 1000);
-    const onVisible = () => { if (document.visibilityState === "visible") doFetch(); };
+    // Write DEVICE_ON immediately on startup
+    invoke("record_device_on").catch(() => {});
+    doSync(true);
+    const id = setInterval(() => doSync(true), 30 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        invoke("record_device_on").catch(() => {});  // user is back — write DEVICE_ON
+        doSync();
+      }
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);

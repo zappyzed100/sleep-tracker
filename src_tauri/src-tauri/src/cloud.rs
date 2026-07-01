@@ -10,7 +10,7 @@
 //! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`, `send_screen_on`,
 //!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::events::{
     SESSION_CACHE, SessionCache, parse_sessions_rust,
@@ -21,6 +21,8 @@ use crate::config::load_config_inner;
 const TAG: &str = "[cloud]";
 
 static CONSECUTIVE_ERRORS: AtomicU64 = AtomicU64::new(0);
+// Prevents concurrent sync_mobile_inner calls (startup vs manual button press).
+static SYNC_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 pub fn pull_mobile_events_inner() -> String {
     static N: AtomicU64 = AtomicU64::new(0);
@@ -248,13 +250,29 @@ pub fn ensure_events_from_drive() {
     }
 }
 
-// Android "今すぐ同期": merge sleep_events_backup.txt + Sheet events into local,
-// upload merged result back to Drive, then return parsed sessions.
-#[tauri::command]
-pub fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
+// PC monitor: back up sleep_events.txt to Drive after IDLE_START / IDLE_RESUME.
+// Runs in a spawned thread; no-op if cloud not configured.
+pub fn auto_backup_after_event(events_path: &std::path::Path) {
+    if let Ok(content) = std::fs::read_to_string(events_path) {
+        let msg = backup_to_drive(&content);
+        eprintln!("{} auto_backup: {}", TAG, msg);
+    }
+}
+
+// Core sync logic shared by Android startup, focus events, and the "今すぐ同期" button.
+// Merge Drive → local → pull Sheet → sort → upload → parse sessions.
+// Returns cached sessions immediately if another sync is already in progress.
+pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
     static N: AtomicU64 = AtomicU64::new(0);
+
+    if SYNC_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        eprintln!("{} sync_mobile_inner: already running — returning cache", TAG);
+        return SESSION_CACHE.lock().unwrap()
+            .as_ref().map(|c| c.sessions.clone()).unwrap_or_default();
+    }
+
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
-    eprintln!("{} sync_mobile #{}: started", TAG, n);
+    eprintln!("{} sync_mobile_inner #{}: started", TAG, n);
     let t0 = std::time::Instant::now();
 
     let events_path = crate::data_dir().join("sleep_events.txt");
@@ -268,7 +286,7 @@ pub fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
         if !u.is_empty() && !s.is_empty() {
             if let Some(drive_content) = fetch_drive_events(&u, &s) {
                 let kb = drive_content.len() as f64 / 1024.0;
-                eprintln!("{} sync_mobile #{}: {:.1}KB from Drive", TAG, n, kb);
+                eprintln!("{} sync_mobile_inner #{}: {:.1}KB from Drive", TAG, n, kb);
                 if merge_into_local(&events_path, &drive_content) {
                     *SESSION_CACHE.lock().unwrap() = None;
                 }
@@ -287,19 +305,27 @@ pub fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
     // 5. Upload merged result back to Drive as sleep_events_backup.txt
     if let Ok(content) = std::fs::read_to_string(&events_path) {
         let drive_msg = backup_to_drive(&content);
-        eprintln!("{} sync_mobile #{}: upload: {}", TAG, n, drive_msg);
+        eprintln!("{} sync_mobile_inner #{}: upload: {}", TAG, n, drive_msg);
     }
 
     // 6. Parse sessions (rebuild cache)
-    let sessions = parse_sessions_rust()?;
+    let sessions = parse_sessions_rust().unwrap_or_default();
     let mtime = events_path.metadata()
         .and_then(|m| m.modified())
         .unwrap_or(std::time::UNIX_EPOCH);
     *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions: sessions.clone(), mtime });
 
     let ms = t0.elapsed().as_millis();
-    eprintln!("{} sync_mobile #{}: {} sessions  (+{}ms)", TAG, n, sessions.len(), ms);
-    Ok(sessions)
+    eprintln!("{} sync_mobile_inner #{}: {} sessions  (+{}ms)", TAG, n, sessions.len(), ms);
+
+    SYNC_IN_PROGRESS.store(false, Ordering::SeqCst);
+    sessions
+}
+
+// Android "今すぐ同期" Tauri command — thin wrapper around sync_mobile_inner.
+#[tauri::command]
+pub fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
+    Ok(sync_mobile_inner())
 }
 
 #[tauri::command]

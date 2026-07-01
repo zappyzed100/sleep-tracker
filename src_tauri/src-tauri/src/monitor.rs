@@ -286,11 +286,17 @@ fn run(data_dir: PathBuf) {
             append_event(&events_path, &start_ts, "IDLE_START");
             eprintln!("{} IDLE_START: idle={}s", TAG, idle);
             sleeping = true;
+            // Back up to Drive so Android can see the new session immediately
+            let ep = events_path.clone();
+            thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });
         } else if sleeping && idle < WAKE_SECS {
             maybe_in_house(&events_path, &now_str());
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             eprintln!("{} IDLE_RESUME: was sleeping {}s", TAG, idle);
             sleeping = false;
+            // Back up to Drive so Android can see the wake time
+            let ep = events_path.clone();
+            thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });
         }
     }
 }

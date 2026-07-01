@@ -311,6 +311,31 @@ pub fn delete_session(start: String, end: String) -> Result<(), String> {
     sort_events_file(&path)
 }
 
+// Android: write DEVICE_ON (+ IN_HOUSE if out-state) when user opens the app.
+#[tauri::command]
+pub fn record_device_on() {
+    use chrono::Local;
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let path = crate::data_dir().join("sleep_events.txt");
+    let existing = if path.exists() {
+        std::fs::read_to_string(&path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    // Clear out-state if user is home (touching the device means they're here)
+    if is_out_from_content(&existing) {
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{},IN_HOUSE", ts);
+        }
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{},DEVICE_ON", ts);
+    }
+    let _ = std::fs::write(crate::data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));
+    *SESSION_CACHE.lock().unwrap() = None;
+    eprintln!("{} record_device_on: {}", TAG, ts);
+}
+
 #[tauri::command]
 pub fn get_events_content() -> Result<String, String> {
     let path = crate::data_dir().join("sleep_events.txt");

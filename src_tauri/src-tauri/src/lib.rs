@@ -339,31 +339,40 @@ pub fn run() {
                 monitor::start(data_dir());
             }
 
-            // ── Shared background thread (both platforms) ────────────────────
-            // Restore from Drive if sleep_events.txt missing → pull mobile events
-            // → pre-warm session cache → auto-pull every 5 min (desktop only)
+            // ── Background thread ────────────────────────────────────────────
+            // Android : full bidirectional sync (Drive ↔ local ↔ Sheet) on startup.
+            // Desktop : merge Drive → local, pull Sheet events, pre-warm cache,
+            //           then poll Sheet every 5 min.
             eprintln!("{} background_thread: started", TAG);
             let t_bg = std::time::Instant::now();
             std::thread::spawn(move || {
-                cloud::ensure_events_from_drive();
-                let events_path = data_dir().join("sleep_events.txt");
-                if events_path.exists() {
-                    let _ = events::sort_events_file(&events_path);
+                // Android: full sync on startup (merge Drive + Sheet, upload merged)
+                #[cfg(mobile)]
+                {
+                    cloud::sync_mobile_inner(); // also updates SESSION_CACHE internally
+                    eprintln!("{} background_thread: initial sync done  (+{}ms)", TAG, t_bg.elapsed().as_millis());
+                    return;
                 }
-                cloud::pull_mobile_events_inner();
-                let _ = events::parse_sessions_rust().map(|sessions| {
-                    let ev_path = data_dir().join("sleep_events.txt");
-                    let mtime  = ev_path.metadata().and_then(|m| m.modified())
-                                       .unwrap_or(std::time::UNIX_EPOCH);
-                    *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
-                });
-                eprintln!("{} background_thread: initial sync done  (+{}ms)", TAG, t_bg.elapsed().as_millis());
-                // Desktop: keep auto-pulling. Android: the frontend's SCREEN_ON
-                // timer and manual sync button handle freshness.
+                // Desktop: one-way startup sync + 5-min Sheet poll loop
                 #[cfg(not(mobile))]
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(300));
+                {
+                    cloud::ensure_events_from_drive();
+                    let events_path = data_dir().join("sleep_events.txt");
+                    if events_path.exists() {
+                        let _ = events::sort_events_file(&events_path);
+                    }
                     cloud::pull_mobile_events_inner();
+                    let _ = events::parse_sessions_rust().map(|sessions| {
+                        let ev_path = data_dir().join("sleep_events.txt");
+                        let mtime  = ev_path.metadata().and_then(|m| m.modified())
+                                           .unwrap_or(std::time::UNIX_EPOCH);
+                        *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
+                    });
+                    eprintln!("{} background_thread: initial sync done  (+{}ms)", TAG, t_bg.elapsed().as_millis());
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(300));
+                        cloud::pull_mobile_events_inner();
+                    }
                 }
             });
 
@@ -382,6 +391,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // events
+            events::record_device_on,
             events::get_sessions,
             events::add_session,
             events::delete_session,
