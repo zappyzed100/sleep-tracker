@@ -173,8 +173,12 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
         .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
         .filter(|l| !l.is_empty())
         .collect();
-    all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
+    // Sort by full content so dedup removes ALL duplicates (same-timestamp
+    // alternating pairs like IN_HOUSE/STARTUP would survive timestamp-only sort).
+    all.sort();
     all.dedup();
+    // Re-sort by timestamp for chronological order.
+    all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
 
     // Write if content changed (new lines added OR duplicates removed from local)
     let merged = all.join("\n") + "\n";

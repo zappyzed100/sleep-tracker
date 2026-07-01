@@ -52,11 +52,16 @@ pub fn is_out_from_content(content: &str) -> bool {
 pub fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
     let t0 = std::time::Instant::now();
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut lines: Vec<&str> = content.lines()
-        .filter(|l| !l.trim().is_empty())
+    let mut lines: Vec<String> = content.lines()
+        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
+        .filter(|l| !l.is_empty())
         .collect();
-    lines.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
+    // Sort by full content first so dedup removes ALL duplicates (including
+    // same-timestamp pairs that would otherwise interleave and survive dedup).
+    lines.sort();
     lines.dedup();
+    // Re-sort by timestamp for chronological order.
+    lines.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
     std::fs::write(path, lines.join("\n") + "\n").map_err(|e| e.to_string())?;
     let ms = t0.elapsed().as_millis();
     if ms > 100 {
