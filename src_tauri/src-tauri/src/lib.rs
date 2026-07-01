@@ -37,7 +37,7 @@ static APP_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 #[cfg(mobile)]
 use tauri::{Manager, WindowEvent};
@@ -345,6 +345,7 @@ pub fn run() {
             //           then poll Sheet every 5 min.
             eprintln!("{} background_thread: started", TAG);
             let t_bg = std::time::Instant::now();
+            let bg_handle = app.handle().clone();
             std::thread::spawn(move || {
                 // Android: full sync on startup (merge Drive + Sheet, upload merged)
                 #[cfg(mobile)]
@@ -353,7 +354,8 @@ pub fn run() {
                     eprintln!("{} background_thread: initial sync done  (+{}ms)", TAG, t_bg.elapsed().as_millis());
                     return;
                 }
-                // Desktop: one-way startup sync + 5-min Sheet poll loop
+                // Desktop: one-way startup sync, then emit minute-tick every 60s
+                // and pull Sheet events every 5 ticks (5 min).
                 #[cfg(not(mobile))]
                 {
                     cloud::ensure_events_from_drive();
@@ -369,9 +371,15 @@ pub fn run() {
                         *SESSION_CACHE.lock().unwrap() = Some(SessionCache { sessions, mtime });
                     });
                     eprintln!("{} background_thread: initial sync done  (+{}ms)", TAG, t_bg.elapsed().as_millis());
+                    let mut iter = 0u64;
                     loop {
-                        std::thread::sleep(std::time::Duration::from_secs(300));
-                        cloud::pull_mobile_events_inner();
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                        // Notify frontend so "起きてから" updates even when window is hidden.
+                        let _ = bg_handle.emit("prediction-tick", ());
+                        iter += 1;
+                        if iter % 5 == 0 {
+                            cloud::pull_mobile_events_inner();
+                        }
                     }
                 }
             });

@@ -10,6 +10,7 @@
 
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Session, formatDuration, callCount } from "../core";
 import { TimePicker } from "../ui";
 
@@ -65,12 +66,20 @@ export default function PredictionCard({ sessions }: Props) {
   const [bedTime, setBedTime] = useState(currentHHMM);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [loadingOptimal, setLoadingOptimal] = useState(false);
-  const [tick, setTick] = useState(0);
+  // Track when the last prediction was fetched so we can add elapsed time to awake_hours.
+  const [resultAt, setResultAt] = useState(0);
+  const [displayNow, setDisplayNow] = useState(() => Date.now());
 
-  // Refresh every minute so "起きてから" stays current without user interaction.
+  // JS timer: fires even when window is visible-but-unfocused.
   useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 60_000);
+    const id = setInterval(() => setDisplayNow(Date.now()), 60_000);
     return () => clearInterval(id);
+  }, []);
+
+  // Rust event: fires even when window is hidden to tray (bypasses Chromium throttling).
+  useEffect(() => {
+    const p = listen("prediction-tick", () => setDisplayNow(Date.now()));
+    return () => { p.then(fn => fn()); };
   }, []);
 
   useEffect(() => {
@@ -83,13 +92,15 @@ export default function PredictionCard({ sessions }: Props) {
     })
       .then(r => {
         setResult(r);
+        setResultAt(Date.now());
+        setDisplayNow(Date.now());
         const ms = Math.round(performance.now() - t0);
         if (ms > 100) {
           console.log(TAG, `predict #${n}: ${formatDuration(r.duration_hours)}  (+${ms}ms)`);
         }
       })
       .catch(e => console.error(TAG, `ERROR predict #${n}:`, e));
-  }, [sessions, bedTime, tick]);
+  }, [sessions, bedTime]);
 
   function setToNow() {
     setBedTime(currentHHMM());
@@ -112,6 +123,8 @@ export default function PredictionCard({ sessions }: Props) {
   }
 
   const wakeTime = result ? addHoursToHHMM(bedTime, result.duration_hours) : "--:--";
+  // Add elapsed time since last prediction fetch so the counter ticks without re-calling Rust.
+  const awakeHours = result ? result.awake_hours + (displayNow - resultAt) / 3_600_000 : 0;
 
   return (
     <div className="pred-home-section">
@@ -145,8 +158,8 @@ export default function PredictionCard({ sessions }: Props) {
 
             <div className="strip-col">
               <div className="small-label">起きてから</div>
-              <div className="big-value" style={{ color: awakeColor(result.awake_hours) }}>
-                {formatDuration(result.awake_hours)}
+              <div className="big-value" style={{ color: awakeColor(awakeHours) }}>
+                {formatDuration(awakeHours)}
               </div>
             </div>
 
