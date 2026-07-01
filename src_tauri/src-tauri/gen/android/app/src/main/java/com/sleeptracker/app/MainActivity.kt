@@ -118,12 +118,14 @@ class MainActivity : TauriActivity() {
   override fun onPause() {
     super.onPause()
     pauseTime = SystemClock.elapsedRealtime()
+    Log.i("SleepTracker", "[lifecycle] onPause")
   }
 
   override fun onResume() {
     super.onResume()
     val isFirstLaunch = pauseTime == Long.MAX_VALUE
-    val elapsed = SystemClock.elapsedRealtime() - pauseTime
+    val elapsed = if (isFirstLaunch) -1L else SystemClock.elapsedRealtime() - pauseTime
+    Log.i("SleepTracker", "[lifecycle] onResume: isFirstLaunch=$isFirstLaunch elapsed=${elapsed}ms")
     if (isFirstLaunch || elapsed > 10_000L) showResumeOverlay(isFirstLaunch)
   }
 
@@ -139,9 +141,13 @@ class MainActivity : TauriActivity() {
       if (wv != null && android.os.Build.VERSION.SDK_INT >= 23) {
         wv.postVisualStateCallback(0L, object : WebView.VisualStateCallback() {
           override fun onComplete(requestId: Long) {
+            val elapsed = SystemClock.elapsedRealtime() - overlayShownAt
+            Log.i("SleepTracker", "[overlay] postVisualStateCallback.onComplete: elapsed=${elapsed}ms")
             runOnUiThread { ov.visibility = View.GONE }
           }
         })
+      } else {
+        Log.w("SleepTracker", "[overlay] postVisualStateCallback: skipped (wv=$wv, SDK=${android.os.Build.VERSION.SDK_INT})")
       }
     }
     // First launch: notifyReady() enforces FIRST_LAUNCH_MIN_MS minimum; 3s absolute fallback.

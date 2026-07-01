@@ -1,6 +1,7 @@
 package com.sleeptracker.app
 
 import android.content.Context
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
@@ -14,11 +15,19 @@ import java.net.URL
 class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        Log.i("SleepTracker", "[worker] DriveSignalWorker: started")
         try {
-            val config = readConfig() ?: return@withContext Result.success()
+            val config = readConfig()
+            if (config == null) {
+                Log.w("SleepTracker", "[worker] DriveSignalWorker: config not found — skip")
+                return@withContext Result.success()
+            }
             val baseUrl = config.optString("mobile_url").trim()
             val secret  = config.optString("mobile_secret").trim()
-            if (baseUrl.isEmpty() || secret.isEmpty()) return@withContext Result.success()
+            if (baseUrl.isEmpty() || secret.isEmpty()) {
+                Log.w("SleepTracker", "[worker] DriveSignalWorker: mobile_url or secret empty — skip")
+                return@withContext Result.success()
+            }
 
             val ts   = System.currentTimeMillis()
             val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret&tag=SCREEN_ON&ts=$ts")
@@ -30,10 +39,12 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 readTimeout    = 15_000
             }
             conn.connect()
-            conn.responseCode   // trigger request
+            val code = conn.responseCode
             conn.disconnect()
+            Log.i("SleepTracker", "[worker] DriveSignalWorker: done (HTTP $code)")
             Result.success()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("SleepTracker", "[worker] DriveSignalWorker: ERROR ${e.message}")
             Result.success()    // best-effort; never retry
         }
     }
