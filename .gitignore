@@ -23,3 +23,13 @@ src_cpp/*.pdb
 
 # Local config
 config.json
+
+# Claude Code project memory
+.claude/
+
+# src_tauri runtime files
+src_tauri/data/device_heartbeat.txt
+src_tauri/data/monitor.pid
+
+# Android signing key (secret — never commit)
+src_tauri/src-tauri/gen/android/*.keystore
