@@ -174,10 +174,21 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
 
     let t0 = std::time::Instant::now();
 
+    // Collect soft-deleted session start timestamps before running the state machine.
+    let mut deleted_starts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}');
+        if let Some(c) = line.find(',') {
+            if &line[c+1..] == "SESSION_DELETED" {
+                deleted_starts.insert(line[..c].to_string());
+            }
+        }
+    }
+
     struct Ev { epoch: i64, ts: String, ty: String }
     let mut evs: Vec<Ev> = Vec::new();
     for line in raw.lines() {
-        let line = line.trim_end_matches('\r').trim();
+        let line = line.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}');
         if line.is_empty() { continue; }
         if let Some(c) = line.find(',') {
             if let Some(ep) = ts_to_epoch(&line[..c]) {
@@ -253,6 +264,16 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
         }
     }
 
+    // Filter out soft-deleted sessions.
+    if !deleted_starts.is_empty() {
+        let before = sessions.len();
+        sessions.retain(|s| !deleted_starts.contains(&s.start));
+        let removed = before - sessions.len();
+        if removed > 0 {
+            eprintln!("{} parse_sessions #{}: {} sessions filtered by SESSION_DELETED", TAG, n, removed);
+        }
+    }
+
     let ms = t0.elapsed().as_millis();
     eprintln!("{} parse_sessions #{}: cache MISS — {} events → {} sessions ({:.1}KB)  (+{}ms)",
         TAG, n, event_count, sessions.len(), kb, ms);
@@ -298,21 +319,20 @@ pub fn add_session(start: String, end: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn delete_session(start: String, end: String) -> Result<(), String> {
-    eprintln!("{} delete_session: {} → {}", TAG, start, end);
+pub fn delete_session(start: String, _end: String) -> Result<(), String> {
+    eprintln!("{} delete_session: {}", TAG, start);
     let path = crate::data_dir().join("sleep_events.txt");
     if !path.exists() {
         return Err("sleep_events.txt not found".to_string());
     }
-    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let start_line = format!("{},IDLE_START", start);
-    let end_line   = format!("{},IDLE_RESUME", end);
-    let filtered: String = content
-        .lines()
-        .filter(|l| l.trim() != start_line.as_str() && l.trim() != end_line.as_str())
-        .flat_map(|l| [l, "\n"])
-        .collect();
-    std::fs::write(&path, &filtered).map_err(|e| e.to_string())?;
+    // Soft-delete: record SESSION_DELETED at the session's start timestamp.
+    // The original IDLE_START/IDLE_RESUME lines are kept so they survive sync
+    // without re-appearing; parse_sessions_rust filters them out via this marker.
+    let marker = format!("{},SESSION_DELETED\n", start);
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        .map_err(|e| e.to_string())?;
+    use std::io::Write;
+    f.write_all(marker.as_bytes()).map_err(|e| e.to_string())?;
     sort_events_file(&path)
 }
 
