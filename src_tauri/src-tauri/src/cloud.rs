@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::events::{
     SESSION_CACHE, SessionCache, parse_sessions_rust,
     apply_mobile_event_line, sort_events_file, sort_manual_file,
+    EVENTS_FILE_LOCK,
 };
 use crate::config::load_config_inner;
 
@@ -192,6 +193,10 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
+    // EVENTS_FILE_LOCK を取得して、sort_events_file / apply_mobile_event_line との
+    // 競合によるデータ消失を防ぐ（merge中の並行append/sortをブロックする）
+    let _lock = EVENTS_FILE_LOCK.lock().unwrap();
+
     let local_raw = if path.exists() {
         std::fs::read_to_string(path).unwrap_or_default()
     } else { String::new() };
@@ -199,14 +204,23 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     let local = local_raw.trim_start_matches('\u{FEFF}');
     let drive_content = drive_content.trim_start_matches('\u{FEFF}');
 
-    let local_n = local.lines().filter(|l| !l.trim().is_empty()).count();
+    // 処理済みのローカル行（BOM除去・trim・空行フィルタ済み）を先に作成
+    let local_processed: Vec<String> = local.lines()
+        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let local_n = local_processed.len();
     let drive_n = drive_content.lines().filter(|l| !l.trim().is_empty()).count();
     eprintln!("{} merge_into_local #{}: local={} lines  drive={} lines", TAG, n, local_n, drive_n);
 
-    let mut all: Vec<String> = local.lines()
-        .chain(drive_content.lines())
+    let drive_processed: Vec<String> = drive_content.lines()
         .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
         .filter(|l| !l.is_empty())
+        .collect();
+
+    let mut all: Vec<String> = local_processed.iter()
+        .chain(drive_processed.iter())
+        .cloned()
         .collect();
     // Sort by full content so dedup removes ALL duplicates (same-timestamp
     // alternating pairs like IN_HOUSE/STARTUP would survive timestamp-only sort).
@@ -216,12 +230,6 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
 
     // Write if content changed (new lines added OR duplicates removed from local)
-    // BOM・改行コード・前後空白の差異による無駄な書き込みを防ぐため、
-    // local_raw ではなく処理済みのローカル行を基準に比較する
-    let local_processed: Vec<String> = local.lines()
-        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
     let local_normalized = local_processed.join("\n") + "\n";
     let merged = all.join("\n") + "\n";
     if merged == local_normalized && all.len() == local_n {
@@ -232,8 +240,9 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     let delta = all.len() as i64 - local_n as i64;
     eprintln!("{} merge_into_local #{}: {} → {} lines ({:+})", TAG, n, local_n, all.len(), delta);
     if delta > 0 {
+        // local_processed（trim済み）と比較して正確に追加行を特定
         let added_lines: Vec<&str> = all.iter()
-            .filter(|l| !local.lines().any(|ll| ll == l.as_str()))
+            .filter(|l| !local_processed.iter().any(|lp| lp == l.as_str()))
             .map(|s| s.as_str()).collect();
         for (i, line) in added_lines.iter().enumerate().take(10) {
             eprintln!("{} merge_into_local #{}:   +[{}] {}", TAG, n, i, line);
