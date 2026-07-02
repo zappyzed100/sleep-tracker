@@ -59,8 +59,21 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     }
 
     private fun readConfig(): JSONObject? = try {
-        // Tauri's app_data_dir() = /data/user/0/<pkg>  (dataDir, not filesDir)
-        val f = java.io.File(applicationContext.dataDir, "config.json")
-        if (f.exists()) JSONObject(f.readText()) else null
-    } catch (_: Exception) { null }
+        // Tauri's app_data_dir() = filesDir (not dataDir)
+        // Try filesDir first, then fall back to dataDir for older builds.
+        val filesPath = java.io.File(applicationContext.filesDir, "config.json")
+        val dataPath  = java.io.File(applicationContext.dataDir, "config.json")
+        val f = when {
+            filesPath.exists() -> { Log.i("SleepTracker", "[worker] config found: filesDir/${filesPath.name}"); filesPath }
+            dataPath.exists()  -> { Log.i("SleepTracker", "[worker] config found: dataDir/${dataPath.name}"); dataPath }
+            else -> {
+                Log.w("SleepTracker", "[worker] config not found: filesDir=${filesPath.absolutePath} dataDir=${dataPath.absolutePath}")
+                return null
+            }
+        }
+        JSONObject(f.readText())
+    } catch (e: Exception) {
+        Log.e("SleepTracker", "[worker] readConfig ERROR: ${e.message}")
+        null
+    }
 }

@@ -3478,7 +3478,7 @@ dependencies = [
 
 [[package]]
 name = "src_tauri"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "chrono",
  "mslnk",
