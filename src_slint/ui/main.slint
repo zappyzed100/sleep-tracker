@@ -5,6 +5,55 @@
 
 import { SpinBox } from "std-widgets.slint";
 
+export struct DaySummaryVM {
+    date: string,          // ISO日付（クリック時にmain.rsへ渡す）
+    day-label: string,     // "月\n7/1"
+    duration-label: string, // "7h30m"（データなしは空文字）
+    bar-frac: float,       // 0.0〜1.0（その週の最大値に対する比率）
+    has-data: bool,
+    active: bool,           // 選択中の日
+}
+
+component WeeklyChart {
+    in property <[DaySummaryVM]> week;
+    callback day-clicked(string);
+
+    height: 260px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        for day[i] in root.week: VerticalLayout {
+            spacing: 6px;
+            Text {
+                text: day.duration-label;
+                color: #cdd6f4;
+                font-size: 12px;
+                horizontal-alignment: center;
+                height: 16px;
+            }
+            col := TouchArea {
+                clicked => { root.day-clicked(day.date); }
+                Rectangle {
+                    Rectangle {
+                        y: parent.height * (1.0 - max(day.bar-frac, 0.02));
+                        height: parent.height * max(day.bar-frac, 0.02);
+                        width: 100%;
+                        background: day.has-data ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.45)) : #313244;
+                        border-radius: 4px;
+                        animate y, height { duration: 150ms; easing: ease-out; }
+                    }
+                }
+            }
+            Text {
+                text: day.day-label;
+                color: #cdd6f4;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
 component StatCol {
     in property <string> value;
     in property <string> label;
@@ -145,10 +194,18 @@ export component MainWindow inherits Window {
     in property <string> predicted-method: "";
     in property <bool> has-prediction: false;
 
+    // 週間チャート用のプロパティ
+    in property <[DaySummaryVM]> week: [];
+    in property <string> week-range-label: "";
+
     callback sync-clicked();
     callback bedtime-edited(int, int);
     callback set-bedtime-now();
     callback set-bedtime-optimal();
+    callback day-clicked(string);
+    callback prev-week();
+    callback next-week();
+    callback this-week();
 
     VerticalLayout {
         padding: 20px;
@@ -226,6 +283,58 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle { vertical-stretch: 1; }
+        // ── 週ナビゲーション ──
+        HorizontalLayout {
+            spacing: 12px;
+            height: 32px;
+            prevBtn := TouchArea {
+                width: 32px;
+                clicked => { root.prev-week(); }
+                Rectangle {
+                    background: prevBtn.has-hover ? #313244 : transparent;
+                    border-radius: 6px;
+                    Text { text: "◀"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            Text {
+                text: root.week-range-label;
+                color: #cdd6f4;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+            nextBtn := TouchArea {
+                width: 32px;
+                clicked => { root.next-week(); }
+                Rectangle {
+                    background: nextBtn.has-hover ? #313244 : transparent;
+                    border-radius: 6px;
+                    Text { text: "▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            todayBtn := TouchArea {
+                width: 60px;
+                clicked => { root.this-week(); }
+                Rectangle {
+                    background: todayBtn.has-hover ? #45475a : #313244;
+                    border-radius: 6px;
+                    Text { text: "今週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        // ── 週間チャート ──
+        Rectangle {
+            background: #181825;
+            border-radius: 10px;
+            vertical-stretch: 1;
+            WeeklyChart {
+                x: 20px; y: 16px;
+                width: parent.width - 40px;
+                height: parent.height - 32px;
+                week: root.week;
+                day-clicked(d) => { root.day-clicked(d); }
+            }
+        }
     }
 }

@@ -4,7 +4,8 @@
 //!        パスユーティリティ（data_dir, config_path）を定義する。
 //!        各モジュール（config, events, cloud, prediction, monitor, platform）を
 //!        宣言し、起動時の初期化（Drive同期・monitorスレッド起動）と
-//!        ホーム画面の統計ストリップへのデータバインディングを行う。
+//!        ホーム画面（統計ストリップ・睡眠予測カード・週間チャート）への
+//!        データバインディングを行う。
 //!
 //! 公開 : `THRESHOLD_SECS`, `data_dir`, `config_path`, `http_client`
 
@@ -19,13 +20,15 @@ mod utils;
 
 pub use events::Session;
 
-use std::sync::{Arc, Mutex};
+use chrono::{Datelike, NaiveDate};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 slint::include_modules!();
+
+const DAYS_JA: [&str; 7] = ["月", "火", "水", "木", "金", "土", "日"];
 
 // Shared threshold: updated instantly by save_config, read by monitor thread.
 pub static THRESHOLD_SECS: AtomicU64 = AtomicU64::new(3600);
@@ -80,16 +83,6 @@ pub fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
     Ok(HTTP_CLIENT.get().unwrap())
 }
 
-// ── 統計ストリップ用の状態 ────────────────────────────────────────────────────
-//
-// StatsCard.tsx 相当。awake_hours はUIスレッドのTimerで10秒ごとに経過時間を
-// 加算して表示するだけにし、毎回 predict() を呼び直さない（軽量化）。
-
-struct StatsBaseline {
-    awake_hours: f64,
-    computed_at: Instant,
-}
-
 fn awake_color(h: f64) -> slint::Color {
     if h > 16.0 { slint::Color::from_rgb_u8(0xf3, 0x8b, 0xa8) }      // --red
     else if h > 12.0 { slint::Color::from_rgb_u8(0xf9, 0xe2, 0xaf) } // --yellow
@@ -106,8 +99,43 @@ fn now_iso() -> String {
     Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+fn bed_time_to_iso(h: i32, m: i32) -> String {
+    use chrono::Local;
+    format!("{} {:02}:{:02}:00", Local::now().format("%Y-%m-%d"), h, m)
+}
+
+// ── アプリ共有状態 ────────────────────────────────────────────────────────────
+//
+// バックグラウンドスレッド（Drive同期・監視スレッド）から
+// slint::invoke_from_event_loop 経由でUIスレッドに戻すため Arc<Mutex<>> で保持する
+// （Rc<RefCell<>> は Send でないため thread::spawn の境界を越えられない）。
+
+struct StatsBaseline {
+    awake_hours: f64,
+    computed_at: Instant,
+}
+
+struct AppState {
+    baseline: Option<StatsBaseline>,
+    week_base: NaiveDate,
+    selected_date: Option<String>,
+}
+
+type SharedState = Arc<Mutex<AppState>>;
+
+fn new_shared_state() -> SharedState {
+    use chrono::Local;
+    Arc::new(Mutex::new(AppState {
+        baseline: None,
+        week_base: Local::now().date_naive(),
+        selected_date: None,
+    }))
+}
+
+// ── 統計ストリップ（StatsCard.tsx 相当）────────────────────────────────────────
 // StatsCard.tsx の期間タブ「先月」(30日) 相当をデフォルトとして使用。
-fn compute_and_apply(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBaseline>>>) {
+
+fn compute_stats(window: &MainWindow, state: &SharedState) {
     let sessions = events::get_sessions().unwrap_or_default();
 
     let now = now_iso();
@@ -133,15 +161,15 @@ fn compute_and_apply(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBasel
     window.set_last_sleep(last.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
 
     let pred = prediction::predict(&sessions, &now);
-    *baseline.lock().unwrap() = Some(StatsBaseline { awake_hours: pred.awake_hours, computed_at: Instant::now() });
+    state.lock().unwrap().baseline = Some(StatsBaseline { awake_hours: pred.awake_hours, computed_at: Instant::now() });
 
-    apply_tick(window, baseline);
+    apply_tick(window, state);
 }
 
 // 現在時刻・起きてから経過時間だけを軽量に更新する（10秒ごと）。
-fn apply_tick(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBaseline>>>) {
+fn apply_tick(window: &MainWindow, state: &SharedState) {
     window.set_current_time(now_hhmm().into());
-    if let Some(b) = baseline.lock().unwrap().as_ref() {
+    if let Some(b) = state.lock().unwrap().baseline.as_ref() {
         let elapsed_h = b.computed_at.elapsed().as_secs_f64() / 3600.0;
         let awake = b.awake_hours + elapsed_h;
         window.set_awake_since(utils::format_duration(awake).into());
@@ -149,12 +177,7 @@ fn apply_tick(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBaseline>>>)
     }
 }
 
-// ── 睡眠予測カード ────────────────────────────────────────────────────────────
-
-fn bed_time_to_iso(h: i32, m: i32) -> String {
-    use chrono::Local;
-    format!("{} {:02}:{:02}:00", Local::now().format("%Y-%m-%d"), h, m)
-}
+// ── 睡眠予測カード（PredictionCard.tsx 相当）───────────────────────────────────
 
 fn recompute_prediction(window: &MainWindow) {
     let sessions = events::get_sessions().unwrap_or_default();
@@ -177,9 +200,41 @@ fn recompute_prediction(window: &MainWindow) {
     window.set_has_prediction(true);
 }
 
-fn refresh_all(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBaseline>>>) {
-    compute_and_apply(window, baseline);
+// ── 週間チャート（WeeklyChart.tsx 相当）────────────────────────────────────────
+
+fn update_chart(window: &MainWindow, state: &SharedState) {
+    let (week_base, selected) = {
+        let s = state.lock().unwrap();
+        (s.week_base, s.selected_date.clone())
+    };
+    let sessions = events::get_sessions().unwrap_or_default();
+    let days = utils::build_week(&sessions, week_base);
+    let max_hours = days.iter().map(|d| d.total_hours).fold(0.0_f64, f64::max).max(6.0);
+
+    let vm: Vec<DaySummaryVM> = days.iter().enumerate().map(|(i, d)| {
+        let date_str = d.date.format("%Y-%m-%d").to_string();
+        let is_active = selected.as_deref() == Some(date_str.as_str());
+        DaySummaryVM {
+            date: date_str.into(),
+            day_label: format!("{}\n{}/{}", DAYS_JA[i], d.date.month(), d.date.day()).into(),
+            duration_label: if d.total_hours > 0.0 { utils::format_duration(d.total_hours).into() } else { "".into() },
+            bar_frac: (d.total_hours / max_hours) as f32,
+            has_data: d.total_hours > 0.0,
+            active: is_active,
+        }
+    }).collect();
+    window.set_week(slint::ModelRc::new(slint::VecModel::from(vm)));
+
+    let fmt = |d: NaiveDate| format!("{}/{:02}/{:02} ({})", d.year(), d.month(), d.day(), DAYS_JA[d.weekday().num_days_from_monday() as usize]);
+    let end = week_base + chrono::Duration::days(6 - week_base.weekday().num_days_from_monday() as i64);
+    let start = week_base - chrono::Duration::days(week_base.weekday().num_days_from_monday() as i64);
+    window.set_week_range_label(format!("{} 〜 {}", fmt(start), fmt(end)).into());
+}
+
+fn refresh_all(window: &MainWindow, state: &SharedState) {
+    compute_stats(window, state);
     recompute_prediction(window);
+    update_chart(window, state);
 }
 
 fn main() {
@@ -200,8 +255,8 @@ fn main() {
         window.set_bed_minute(now.format("%M").to_string().parse().unwrap_or(0));
     }
 
-    let baseline: Arc<Mutex<Option<StatsBaseline>>> = Arc::new(Mutex::new(None));
-    refresh_all(&window, &baseline);
+    let state = new_shared_state();
+    refresh_all(&window, &state);
 
     // 入眠時刻の手動変更 → 予測を再計算
     {
@@ -248,14 +303,62 @@ fn main() {
         });
     }
 
+    // 週ナビゲーション: 前週/次週/今週
+    {
+        let weak = window.as_weak();
+        let state_nav = state.clone();
+        window.on_prev_week(move || {
+            if let Some(w) = weak.upgrade() {
+                state_nav.lock().unwrap().week_base -= chrono::Duration::days(7);
+                update_chart(&w, &state_nav);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state_nav = state.clone();
+        window.on_next_week(move || {
+            if let Some(w) = weak.upgrade() {
+                state_nav.lock().unwrap().week_base += chrono::Duration::days(7);
+                update_chart(&w, &state_nav);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state_nav = state.clone();
+        window.on_this_week(move || {
+            if let Some(w) = weak.upgrade() {
+                use chrono::Local;
+                state_nav.lock().unwrap().week_base = Local::now().date_naive();
+                update_chart(&w, &state_nav);
+            }
+        });
+    }
+
+    // 日クリック: 選択状態をトグルしてハイライトを更新（詳細モーダルは今後実装）
+    {
+        let weak = window.as_weak();
+        let state_click = state.clone();
+        window.on_day_clicked(move |date| {
+            if let Some(w) = weak.upgrade() {
+                let mut s = state_click.lock().unwrap();
+                s.selected_date = if s.selected_date.as_deref() == Some(date.as_str()) { None } else { Some(date.to_string()) };
+                drop(s);
+                update_chart(&w, &state_click);
+                eprintln!("[app] day_clicked: {}", date);
+            }
+        });
+    }
+
     // 10秒ごとに現在時刻・起きてから経過時間を更新
     let timer = slint::Timer::default();
     {
         let weak = window.as_weak();
-        let baseline_for_timer = baseline.clone();
+        let state_timer = state.clone();
         timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || {
             if let Some(w) = weak.upgrade() {
-                apply_tick(&w, &baseline_for_timer);
+                apply_tick(&w, &state_timer);
             }
         });
     }
@@ -263,18 +366,18 @@ fn main() {
     // 同期ボタン: 別スレッドでsync_gistを実行し、完了後にUIスレッドで再読み込み
     {
         let weak = window.as_weak();
-        let baseline_for_sync = baseline.clone();
+        let state_sync = state.clone();
         window.on_sync_clicked(move || {
             let weak = weak.clone();
-            let baseline_for_sync = baseline_for_sync.clone();
+            let state_sync = state_sync.clone();
             std::thread::spawn(move || {
                 let msg = cloud::sync_gist();
                 eprintln!("[app] sync_gist: {:?}", msg);
                 let weak = weak.clone();
-                let baseline_for_sync = baseline_for_sync.clone();
+                let state_sync = state_sync.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        refresh_all(&w, &baseline_for_sync);
+                        refresh_all(&w, &state_sync);
                     }
                 });
             });
@@ -284,15 +387,15 @@ fn main() {
     // Drive → ローカルへの起動時同期（別スレッド、完了後にUI再読み込み）
     {
         let weak = window.as_weak();
-        let baseline_for_startup = baseline.clone();
+        let state_startup = state.clone();
         std::thread::spawn(move || {
             cloud::ensure_events_from_drive();
             let _ = cloud::pull_mobile_events_inner();
             let weak = weak.clone();
-            let baseline_for_startup = baseline_for_startup.clone();
+            let state_startup = state_startup.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    refresh_all(&w, &baseline_for_startup);
+                    refresh_all(&w, &state_startup);
                 }
             });
         });
@@ -302,13 +405,13 @@ fn main() {
     #[cfg(windows)]
     {
         let weak = window.as_weak();
-        let baseline_for_monitor = baseline.clone();
+        let state_monitor = state.clone();
         monitor::start(data_dir(), move || {
             let weak = weak.clone();
-            let baseline_for_monitor = baseline_for_monitor.clone();
+            let state_monitor = state_monitor.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    refresh_all(&w, &baseline_for_monitor);
+                    refresh_all(&w, &state_monitor);
                 }
             });
         });
