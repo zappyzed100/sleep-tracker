@@ -32,7 +32,6 @@ function fmtDateRange(base: Date): string {
 }
 
 type Tab = "home" | "settings";
-type MonitorStatus = "active" | "paused" | "inactive";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("home");
@@ -42,7 +41,6 @@ export default function App() {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showCal, setShowCal] = useState(false);
   const calBtnRef = useRef<HTMLButtonElement>(null);
-  const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
   // AppBridge is injected synchronously before JS runs on Android — check at init time.
   const [isMobile, setIsMobile] = useState(() => typeof (window as any).AppBridge !== 'undefined');
   const [screenOnEnabled, setScreenOnEnabled] = useState(true);
@@ -171,21 +169,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [isMobile, screenOnEnabled]);
 
-  // Desktop: poll monitor status
-  const pollMonitor = useCallback(async () => {
-    try {
-      const s = await invoke<string>("get_monitor_status");
-      setMonitorStatus(s as MonitorStatus);
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    if (isMobile) return;
-    pollMonitor();
-    const id = setInterval(pollMonitor, 30_000);
-    return () => clearInterval(id);
-  }, [pollMonitor, isMobile]);
-
   // PC: refresh sessions immediately when monitor writes IDLE_RESUME
   useEffect(() => {
     if (isMobile) return;
@@ -195,16 +178,6 @@ export default function App() {
     });
     return () => { p.then(fn => fn()); };
   }, [isMobile, loadSessions]);
-
-  async function toggleMonitorPause() {
-    const shouldPause = monitorStatus === "active";
-    try {
-      await invoke("set_monitor_paused", { paused: shouldPause });
-      setMonitorStatus(shouldPause ? "paused" : "active");
-    } catch (e) {
-      setError(`モニター操作失敗: ${e}`);
-    }
-  }
 
   // Wheel: week navigation (desktop)
   useEffect(() => {
@@ -258,21 +231,6 @@ export default function App() {
           <button className={tab === "home" ? "tab active" : "tab"} onClick={() => setTab("home")}>ホーム</button>
           <button className={tab === "settings" ? "tab active" : "tab"} onClick={() => setTab("settings")}>設定</button>
         </div>
-
-        {/* Desktop: monitor status */}
-        {!isMobile && (
-          <div className="monitor-inline">
-            <span className={`monitor-dot monitor-dot-${monitorStatus}`} />
-            <span className="monitor-label">
-              {monitorStatus === "active" && "検知中"}
-              {monitorStatus === "paused" && "検知中断中"}
-              {monitorStatus === "inactive" && "停止中"}
-            </span>
-            <button className="monitor-toggle-btn" onClick={toggleMonitorPause}>
-              {monitorStatus === "active" ? "中断する" : "再開する"}
-            </button>
-          </div>
-        )}
 
       </div>
 

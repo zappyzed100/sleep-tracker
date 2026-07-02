@@ -215,28 +215,6 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
     }
   }
 
-  async function handleImportCsv() {
-    const n = callCount(TAG, "import_csv");
-    setCsvMsg(null);
-    try {
-      const path = await open({
-        filters: [{ name: "CSV", extensions: ["csv"] }],
-        multiple: false,
-      });
-      if (!path) return;
-      const content = await invoke<string>("read_text_file", { path });
-      const t0 = performance.now();
-      const added = await invoke<number>("import_csv", { csv: content });
-      const ms = Math.round(performance.now() - t0);
-      console.log(TAG, `import_csv #${n}: ${added}セッション追加  (+${ms}ms)`);
-      setCsvMsg(`${added} 件インポートしました`);
-      onRefresh?.();
-    } catch (e) {
-      console.error(TAG, `ERROR import_csv #${n}:`, e);
-      setCsvMsg(`エラー: ${e}`);
-    }
-  }
-
   async function handleBackup() {
     setCsvMsg(null);
     try {
@@ -480,11 +458,6 @@ export default function Settings({ sessions, onRefresh, isMobile = false, onScre
           <button className="settings-btn" onClick={handleExportCsv}>
             CSV エクスポート
           </button>
-          {!isMobile && (
-            <button className="settings-btn" onClick={handleImportCsv}>
-              CSV インポート
-            </button>
-          )}
         </div>
         <div className="settings-note">Excel等で分析用。就寝・起床・睡眠時間・種別の4列。</div>
         <div className="settings-btn-row" style={{ marginTop: 8 }}>
