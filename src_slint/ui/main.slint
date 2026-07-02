@@ -1,7 +1,9 @@
 // main.slint — アプリのルートウィンドウ
 //
-// 役割 : ホーム画面（統計ストリップ）を表示する。Catppuccin Mocha風の配色。
-//        Tauri版 App.css の配色変数（--base/--mantle/--text/--subtext/--blue等）を踏襲。
+// 役割 : ホーム画面（睡眠予測カード・統計ストリップ）を表示する。
+//        Catppuccin Mocha風の配色。Tauri版 App.css の配色変数を踏襲。
+
+import { SpinBox } from "std-widgets.slint";
 
 component StatCol {
     in property <string> value;
@@ -32,6 +34,93 @@ component Divider {
     }
 }
 
+component PredictionCard {
+    in property <int> bed-hour;
+    in property <int> bed-minute;
+    in property <string> predicted-duration: "—";
+    in property <string> predicted-wake-time: "--:--";
+    in property <string> predicted-method: "";
+    in property <bool> has-data: false;
+
+    callback bedtime-edited(int, int);
+    callback now-clicked();
+    callback optimal-clicked();
+
+    Rectangle {
+        background: #181825;
+        border-radius: 10px;
+        height: 90px;
+
+        HorizontalLayout {
+            padding: 20px;
+            spacing: 20px;
+            alignment: start;
+
+            Text {
+                text: "睡眠\n予測";
+                color: #a6adc8;
+                font-size: 12px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+                width: 160px;
+                SpinBox {
+                    minimum: 0;
+                    maximum: 23;
+                    value: root.bed-hour;
+                    edited(v) => { root.bedtime-edited(v, root.bed-minute); }
+                }
+                Text { text: ":"; color: #cdd6f4; font-size: 20px; vertical-alignment: center; }
+                SpinBox {
+                    minimum: 0;
+                    maximum: 59;
+                    value: root.bed-minute;
+                    edited(v) => { root.bedtime-edited(root.bed-hour, v); }
+                }
+            }
+
+            nowBtn := TouchArea {
+                width: 70px;
+                clicked => { root.now-clicked(); }
+                Rectangle {
+                    background: nowBtn.has-hover ? #45475a : #313244;
+                    border-radius: 6px;
+                    Text { text: "今すぐ"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                }
+            }
+            optBtn := TouchArea {
+                width: 70px;
+                clicked => { root.optimal-clicked(); }
+                Rectangle {
+                    background: optBtn.has-hover ? #45475a : #313244;
+                    border-radius: 6px;
+                    Text { text: "最適睡眠"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                }
+            }
+
+            if root.has-data: Divider { }
+
+            if root.has-data: StatCol { value: root.predicted-duration; label: "予測睡眠時間"; value-color: #89b4fa; }
+
+            if root.has-data: VerticalLayout {
+                alignment: center;
+                Text { text: root.predicted-wake-time; color: #cdd6f4; font-size: 18px; font-weight: 700; }
+                Text { text: root.predicted-method; color: #a6adc8; font-size: 11px; }
+            }
+
+            if !root.has-data: Text {
+                text: "データなし";
+                color: #a6adc8;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "睡眠トラッカー";
     width: 1200px;
@@ -48,7 +137,18 @@ export component MainWindow inherits Window {
     in property <string> awake-since: "—";
     in property <color> awake-color: #a6e3a1;
 
+    // 睡眠予測カード用のプロパティ
+    in-out property <int> bed-hour: 22;
+    in-out property <int> bed-minute: 0;
+    in property <string> predicted-duration: "—";
+    in property <string> predicted-wake-time: "--:--";
+    in property <string> predicted-method: "";
+    in property <bool> has-prediction: false;
+
     callback sync-clicked();
+    callback bedtime-edited(int, int);
+    callback set-bedtime-now();
+    callback set-bedtime-optimal();
 
     VerticalLayout {
         padding: 20px;
@@ -84,6 +184,23 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+        }
+
+        // ── 睡眠予測カード ──
+        PredictionCard {
+            bed-hour: root.bed-hour;
+            bed-minute: root.bed-minute;
+            predicted-duration: root.predicted-duration;
+            predicted-wake-time: root.predicted-wake-time;
+            predicted-method: root.predicted-method;
+            has-data: root.has-prediction;
+            bedtime-edited(h, m) => {
+                root.bed-hour = h;
+                root.bed-minute = m;
+                root.bedtime-edited(h, m);
+            }
+            now-clicked => { root.set-bedtime-now(); }
+            optimal-clicked => { root.set-bedtime-optimal(); }
         }
 
         // ── 統計ストリップ ──

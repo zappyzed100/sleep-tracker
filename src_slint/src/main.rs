@@ -149,6 +149,39 @@ fn apply_tick(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBaseline>>>)
     }
 }
 
+// ── 睡眠予測カード ────────────────────────────────────────────────────────────
+
+fn bed_time_to_iso(h: i32, m: i32) -> String {
+    use chrono::Local;
+    format!("{} {:02}:{:02}:00", Local::now().format("%Y-%m-%d"), h, m)
+}
+
+fn recompute_prediction(window: &MainWindow) {
+    let sessions = events::get_sessions().unwrap_or_default();
+    if sessions.is_empty() {
+        window.set_has_prediction(false);
+        return;
+    }
+    let h = window.get_bed_hour();
+    let m = window.get_bed_minute();
+    let now_at_bedtime = bed_time_to_iso(h, m);
+    let pred = prediction::predict(&sessions, &now_at_bedtime);
+
+    let wake_total_min = h * 60 + m + (pred.duration_hours * 60.0) as i32;
+    let wake_h = (wake_total_min / 60).rem_euclid(24);
+    let wake_m = wake_total_min.rem_euclid(60);
+
+    window.set_predicted_duration(utils::format_duration(pred.duration_hours).into());
+    window.set_predicted_wake_time(format!("{:02}:{:02}", wake_h, wake_m).into());
+    window.set_predicted_method(pred.method.into());
+    window.set_has_prediction(true);
+}
+
+fn refresh_all(window: &MainWindow, baseline: &Arc<Mutex<Option<StatsBaseline>>>) {
+    compute_and_apply(window, baseline);
+    recompute_prediction(window);
+}
+
 fn main() {
     // 起動時初期化: config.jsonからTHRESHOLD_SECSを読み込み
     let cfg = config::load_config_inner();
@@ -159,8 +192,61 @@ fn main() {
     let window = MainWindow::new().expect("ウィンドウの作成に失敗しました");
     window.set_greeting("Rust + Slint 起動成功".into());
 
+    // 睡眠予測カードの初期入眠時刻 = 現在時刻（PredictionCard.tsx の currentHHMM 相当）
+    {
+        use chrono::Local;
+        let now = Local::now();
+        window.set_bed_hour(now.format("%H").to_string().parse().unwrap_or(22));
+        window.set_bed_minute(now.format("%M").to_string().parse().unwrap_or(0));
+    }
+
     let baseline: Arc<Mutex<Option<StatsBaseline>>> = Arc::new(Mutex::new(None));
-    compute_and_apply(&window, &baseline);
+    refresh_all(&window, &baseline);
+
+    // 入眠時刻の手動変更 → 予測を再計算
+    {
+        let weak = window.as_weak();
+        window.on_bedtime_edited(move |_h, _m| {
+            if let Some(w) = weak.upgrade() {
+                recompute_prediction(&w);
+            }
+        });
+    }
+
+    // 「今すぐ」: 入眠時刻を現在時刻にセットして再計算
+    {
+        let weak = window.as_weak();
+        window.on_set_bedtime_now(move || {
+            if let Some(w) = weak.upgrade() {
+                use chrono::Local;
+                let now = Local::now();
+                w.set_bed_hour(now.format("%H").to_string().parse().unwrap_or(22));
+                w.set_bed_minute(now.format("%M").to_string().parse().unwrap_or(0));
+                recompute_prediction(&w);
+            }
+        });
+    }
+
+    // 「最適睡眠」: find_optimalの結果を入眠時刻にセットして再計算
+    {
+        let weak = window.as_weak();
+        window.on_set_bedtime_optimal(move || {
+            if let Some(w) = weak.upgrade() {
+                let sessions = events::get_sessions().unwrap_or_default();
+                if sessions.is_empty() { return; }
+                let cfg = config::load_config_inner();
+                let target = cfg.target_wake_time;
+                if let Some(opt) = prediction::find_optimal(&sessions, &now_iso(), target.as_deref()) {
+                    let parts: Vec<&str> = opt.best_bed_time.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        w.set_bed_hour(parts[0].parse().unwrap_or(22));
+                        w.set_bed_minute(parts[1].parse().unwrap_or(0));
+                        recompute_prediction(&w);
+                    }
+                }
+            }
+        });
+    }
 
     // 10秒ごとに現在時刻・起きてから経過時間を更新
     let timer = slint::Timer::default();
@@ -188,7 +274,7 @@ fn main() {
                 let baseline_for_sync = baseline_for_sync.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        compute_and_apply(&w, &baseline_for_sync);
+                        refresh_all(&w, &baseline_for_sync);
                     }
                 });
             });
@@ -206,7 +292,7 @@ fn main() {
             let baseline_for_startup = baseline_for_startup.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    compute_and_apply(&w, &baseline_for_startup);
+                    refresh_all(&w, &baseline_for_startup);
                 }
             });
         });
@@ -222,7 +308,7 @@ fn main() {
             let baseline_for_monitor = baseline_for_monitor.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    compute_and_apply(&w, &baseline_for_monitor);
+                    refresh_all(&w, &baseline_for_monitor);
                 }
             });
         });
