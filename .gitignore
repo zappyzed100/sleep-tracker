@@ -7,16 +7,16 @@ __pycache__/
 sleep_tracker.db
 
 # Dynamic runtime files (Gist にバックアップ、ローカルのみ)
-src_cpp/sleep_heartbeat.txt
-src_cpp/sleep_events.txt
-src_cpp/monitor.pid
-src_python/*.lnk
+legacy/src_cpp/sleep_heartbeat.txt
+legacy/src_cpp/sleep_events.txt
+legacy/src_cpp/monitor.pid
+legacy/src_python/*.lnk
 
 # C++ Build outputs & intermediate files
-src_cpp/sleep_monitor.exe
-src_cpp/*.obj
-src_cpp/*.ilk
-src_cpp/*.pdb
+legacy/src_cpp/sleep_monitor.exe
+legacy/src_cpp/*.obj
+legacy/src_cpp/*.ilk
+legacy/src_cpp/*.pdb
 
 # VS Code config (if any)
 .vscode/

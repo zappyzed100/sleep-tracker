@@ -44,7 +44,7 @@ use tauri::{Manager, WindowEvent};
 
 // ── Path utilities ────────────────────────────────────────────────────────────
 
-// On desktop: walk up from exe to find repo root (contains src_cpp/).
+// On desktop: walk up from exe to find repo root (contains src_tauri/).
 // On Android: not used; data_dir() uses APP_DIR instead.
 #[cfg(not(mobile))]
 fn repo_root() -> &'static PathBuf {
@@ -53,7 +53,7 @@ fn repo_root() -> &'static PathBuf {
         let exe = std::env::current_exe().unwrap_or_default();
         let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
         for _ in 0..8 {
-            if dir.join("src_cpp").exists() { return dir; }
+            if dir.join("src_tauri").exists() { return dir; }
             match dir.parent() {
                 Some(p) => dir = p.to_path_buf(),
                 None => break,

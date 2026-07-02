@@ -333,6 +333,7 @@ sleep-tracker/
 │       └── sleep_heartbeat.txt # ハートビート（30 秒ごと更新）
 ├── worker/
 │   └── appsscript.gs       # Google Apps Script（モバイル受信・Drive バックアップ）
+├── legacy/                 # 旧 C++/Python 実装（Tauri 版に置き換え済み、メンテナンス対象外）
 └── config.json             # Apps Script URL・シークレット・閾値（git 管理外）
 ```
 
