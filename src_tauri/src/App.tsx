@@ -45,6 +45,8 @@ export default function App() {
   const [monitorStatus, setMonitorStatus] = useState<MonitorStatus>("inactive");
   // AppBridge is injected synchronously before JS runs on Android — check at init time.
   const [isMobile, setIsMobile] = useState(() => typeof (window as any).AppBridge !== 'undefined');
+  // バックグラウンド復帰時の黒画面対策: ローディングオーバーレイ
+  const [resuming, setResuming] = useState(false);
   const [screenOnEnabled, setScreenOnEnabled] = useState(true);
   const [appVersion, setAppVersion] = useState("");
   const touchStartX = useRef<number | null>(null);
@@ -149,8 +151,16 @@ export default function App() {
       const n = callCount(TAG, "visibilitychange");
       console.log(TAG, `visibilitychange #${n} (seq=${visibilitySeq}): ${state}`);
       if (state === "visible") {
-        doRecordDeviceOn(`visibilitychange#${visibilitySeq}`);
-        doSync();
+        // 黒画面対策: まずローディング画面を即時表示し、UIペイント後に重い処理を開始
+        setResuming(true);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            doRecordDeviceOn(`visibilitychange#${visibilitySeq}`);
+            doSync();
+            // 同期完了後にローディング画面を解除
+            setTimeout(() => setResuming(false), 500);
+          });
+        });
       }
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -249,6 +259,18 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* バックグラウンド復帰時のローディングオーバーレイ */}
+      {resuming && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 9999,
+          background: "#1e1e2e", display: "flex",
+          alignItems: "center", justifyContent: "center",
+          flexDirection: "column", gap: 16,
+        }}>
+          <div style={{ fontSize: 40 }}>🌙</div>
+          <div style={{ color: "#cdd6f4", fontSize: 16 }}>復帰中...</div>
+        </div>
+      )}
       {/* Android status bar spacer */}
       {isMobile && <div className="safe-area-spacer" />}
 

@@ -257,12 +257,13 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn sync_gist() -> Result<String, String> {
+pub async fn sync_gist() -> Result<String, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
     eprintln!("{} sync_gist #{}: started", TAG, n);
     let t0 = std::time::Instant::now();
 
+    tauri::async_runtime::spawn_blocking(move || {
     let events_path = crate::data_dir().join("sleep_events.txt");
     let manual_path = crate::data_dir().join("sleep_manual.txt");
 
@@ -314,6 +315,7 @@ pub fn sync_gist() -> Result<String, String> {
     let ms = t0.elapsed().as_millis();
     eprintln!("{} sync_gist #{}: done  (+{}ms)", TAG, n, ms);
     Ok(format!("同期完了 — モバイル: {} / {}", pull_msg, drive_msg))
+    }).await.map_err(|e| format!("同期スレッドエラー: {}", e))?
 }
 
 pub fn ensure_events_from_drive() {
@@ -449,19 +451,23 @@ pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
     sessions
 }
 
-// Android "今すぐ同期" Tauri command — thin wrapper around sync_mobile_inner.
+// Android "今すぐ同期" Tauri command — runs sync_mobile_inner on a thread pool
+// to avoid blocking the UI thread (which causes the app to freeze for several seconds).
 #[tauri::command]
-pub fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
-    Ok(sync_mobile_inner())
+pub async fn sync_mobile() -> Result<Vec<crate::events::Session>, String> {
+    tauri::async_runtime::spawn_blocking(|| sync_mobile_inner())
+        .await
+        .map_err(|e| format!("同期スレッドエラー: {}", e))
 }
 
 #[tauri::command]
-pub fn fetch_from_cloud() -> Result<Vec<crate::events::Session>, String> {
+pub async fn fetch_from_cloud() -> Result<Vec<crate::events::Session>, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
     eprintln!("{} fetch_from_cloud #{}: started", TAG, n);
     let t0 = std::time::Instant::now();
 
+    tauri::async_runtime::spawn_blocking(move || {
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
         (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
@@ -504,13 +510,15 @@ pub fn fetch_from_cloud() -> Result<Vec<crate::events::Session>, String> {
     let ms = t0.elapsed().as_millis();
     eprintln!("{} fetch_from_cloud #{}: {:.1}KB received  (+{}ms)", TAG, n, kb, ms);
     Ok(sessions)
+    }).await.map_err(|e| format!("取得スレッドエラー: {}", e))?
 }
 
 #[tauri::command]
-pub fn send_screen_on() -> Result<String, String> {
+pub async fn send_screen_on() -> Result<String, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
+    tauri::async_runtime::spawn_blocking(move || {
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
         (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
@@ -531,10 +539,12 @@ pub fn send_screen_on() -> Result<String, String> {
     } else {
         Err(format!("HTTP {}", resp.status().as_u16()))
     }
+    }).await.map_err(|e| format!("送信スレッドエラー: {}", e))?
 }
 
 #[tauri::command]
-pub fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Result<String, String> {
+pub async fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
     if mobile_url.is_empty() || mobile_secret.is_empty() {
         return Err("URL とシークレットを入力してください".to_string());
     }
@@ -552,4 +562,5 @@ pub fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Resu
     } else {
         Err(format!("HTTP {} — レスポンス: {}", status.as_u16(), body.trim()))
     }
+    }).await.map_err(|e| format!("接続テストスレッドエラー: {}", e))?
 }

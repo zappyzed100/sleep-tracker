@@ -92,11 +92,19 @@ pub(crate) fn config_path() -> PathBuf {
 
 // ── HTTP client ───────────────────────────────────────────────────────────────
 
-pub(crate) fn gist_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| e.to_string())
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+
+pub(crate) fn gist_client() -> Result<&'static reqwest::blocking::Client, String> {
+    if HTTP_CLIENT.get().is_none() {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .pool_idle_timeout(std::time::Duration::from_secs(60))
+            .tcp_keepalive(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let _ = HTTP_CLIENT.set(client);
+    }
+    Ok(HTTP_CLIENT.get().unwrap())
 }
 
 // ── File utils ────────────────────────────────────────────────────────────────
