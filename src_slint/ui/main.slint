@@ -1,4 +1,36 @@
-// main.slint — アプリのルートウィンドウ（動作確認用の最小構成）
+// main.slint — アプリのルートウィンドウ
+//
+// 役割 : ホーム画面（統計ストリップ）を表示する。Catppuccin Mocha風の配色。
+//        Tauri版 App.css の配色変数（--base/--mantle/--text/--subtext/--blue等）を踏襲。
+
+component StatCol {
+    in property <string> value;
+    in property <string> label;
+    in property <color> value-color: #cdd6f4;
+
+    VerticalLayout {
+        spacing: 4px;
+        Text {
+            text: root.value;
+            color: root.value-color;
+            font-size: 26px;
+            font-weight: 700;
+        }
+        Text {
+            text: root.label;
+            color: #a6adc8;
+            font-size: 13px;
+        }
+    }
+}
+
+component Divider {
+    Rectangle {
+        width: 1px;
+        height: 40px;
+        background: #313244;
+    }
+}
 
 export component MainWindow inherits Window {
     title: "睡眠トラッカー";
@@ -8,13 +40,75 @@ export component MainWindow inherits Window {
 
     in property <string> greeting: "起動確認中...";
 
+    // 統計ストリップ用のプロパティ（main.rsから設定される）
+    in property <string> days-recorded: "—";
+    in property <string> avg-sleep: "—";
+    in property <string> last-sleep: "—";
+    in property <string> current-time: "—";
+    in property <string> awake-since: "—";
+    in property <color> awake-color: #a6e3a1;
+
+    callback sync-clicked();
+
     VerticalLayout {
-        alignment: center;
-        Text {
-            text: root.greeting;
-            color: #cdd6f4;
-            font-size: 24px;
-            horizontal-alignment: center;
+        padding: 20px;
+        spacing: 16px;
+
+        // ── トップバー ──
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "睡眠トラッカー";
+                color: #cdd6f4;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.greeting;
+                color: #a6adc8;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+            syncBtn := TouchArea {
+                width: 80px;
+                clicked => { root.sync-clicked(); }
+                Rectangle {
+                    background: syncBtn.has-hover ? #45475a : #313244;
+                    border-radius: 6px;
+                    Text {
+                        text: "同期";
+                        color: #cdd6f4;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
         }
+
+        // ── 統計ストリップ ──
+        Rectangle {
+            background: #181825;
+            border-radius: 10px;
+            height: 90px;
+
+            HorizontalLayout {
+                padding: 20px;
+                spacing: 24px;
+                alignment: start;
+
+                StatCol { value: root.days-recorded; label: "記録日数"; }
+                Divider { }
+                StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
+                Divider { }
+                StatCol { value: root.last-sleep; label: "最後の睡眠"; }
+                Divider { }
+                StatCol { value: root.current-time; label: "現在時刻"; }
+                Divider { }
+                StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
     }
 }
