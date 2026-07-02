@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">"SleepTracker"</string>
+    <string name="main_activity_title">"SleepTracker"</string>
+</resources>

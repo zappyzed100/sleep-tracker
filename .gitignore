@@ -31,5 +31,5 @@ config.json
 src_tauri/data/device_heartbeat.txt
 src_tauri/data/monitor.pid
 
-# Android signing key (secret — never commit)
-src_tauri/src-tauri/gen/android/*.keystore
+# Android signing key (secret — never commit, any path incl. legacy/ backups)
+**/*.keystore
