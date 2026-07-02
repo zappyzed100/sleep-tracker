@@ -1,0 +1,20 @@
+// main.slint — アプリのルートウィンドウ（動作確認用の最小構成）
+
+export component MainWindow inherits Window {
+    title: "睡眠トラッカー";
+    width: 1200px;
+    height: 750px;
+    background: #1e1e2e;
+
+    in property <string> greeting: "起動確認中...";
+
+    VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.greeting;
+            color: #cdd6f4;
+            font-size: 24px;
+            horizontal-alignment: center;
+        }
+    }
+}

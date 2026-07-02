@@ -1,0 +1,22 @@
+[package]
+name = "sleep_tracker"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+slint = "1.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+mslnk = "0.1"
+
+[build-dependencies]
+slint-build = "1.13"
+
+[package.metadata.android]
+package = "com.sleeptracker.app"
