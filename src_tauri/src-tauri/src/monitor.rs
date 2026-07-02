@@ -149,6 +149,7 @@ fn ago_str(secs_ago: u64) -> String {
 // ── File helpers ──────────────────────────────────────────────────────────────
 
 fn append_event(path: &PathBuf, ts: &str, kind: &str) {
+    let _lock = crate::events::EVENTS_FILE_LOCK.lock().unwrap();
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{},{}", ts, kind);
     }

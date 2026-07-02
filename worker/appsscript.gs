@@ -12,7 +12,11 @@ const SECRET = PropertiesService.getScriptProperties().getProperty("SECRET");
 
 function getBackupFolder() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  return DriveApp.getFileById(ss.getId()).getParents().next();
+  const parents = DriveApp.getFileById(ss.getId()).getParents();
+  if (!parents.hasNext()) {
+    throw new Error("スプレッドシートの親フォルダが見つかりません");
+  }
+  return parents.next();
 }
 
 // エディタ上で直接「実行」して Drive アクセスを検証する
@@ -30,9 +34,9 @@ function testBackup() {
     const fileName = "sleep_events_backup.txt";
     const files = folder.getFilesByName(fileName);
     if (files.hasNext()) {
-      Logger.log("既存ファイルを上書き: " + files.next().getId());
-      files.next ? null : null; // reset iterator (already consumed)
-      folder.getFilesByName(fileName).next().setContent("testBackup: " + new Date());
+      const existingFile = files.next();
+      Logger.log("既存ファイルを上書き: " + existingFile.getId());
+      existingFile.setContent("testBackup: " + new Date());
     } else {
       const f = folder.createFile(fileName, "testBackup: " + new Date(), MimeType.PLAIN_TEXT);
       Logger.log("新規作成: " + f.getId());

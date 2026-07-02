@@ -34,6 +34,11 @@ pub struct SessionCache {
 
 pub static SESSION_CACHE: std::sync::Mutex<Option<SessionCache>> = std::sync::Mutex::new(None);
 
+// sleep_events.txt への読み書きを保護するミューテックス。
+// sort_events_file（全行読み込み→ソート→全行書き込み）と append_event（1行追加）の
+// 競合によるデータ消失を防ぐ。
+pub static EVENTS_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // Returns true if the last OUT_START in the file has no matching OUT_END / IN_HOUSE.
 pub fn is_out_from_content(content: &str) -> bool {
     let mut out = false;
@@ -62,6 +67,7 @@ pub fn sort_manual_file(path: &std::path::Path) -> Result<(), String> {
 }
 
 pub fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
+    let _lock = EVENTS_FILE_LOCK.lock().unwrap();
     let t0 = std::time::Instant::now();
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut lines: Vec<String> = content.lines()
@@ -84,6 +90,7 @@ pub fn sort_events_file(path: &std::path::Path) -> Result<(), String> {
 
 // Parse and apply one "TAG,TIMESTAMP" line from mobile_event.txt.
 pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
+    let _lock = EVENTS_FILE_LOCK.lock().unwrap();
     let mut parts = line.splitn(2, ',');
     let tag      = parts.next().ok_or("フォーマット不正")?.trim();
     let time_raw = parts.next().ok_or("フォーマット不正")?.trim();
@@ -120,13 +127,13 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
 
     // Tablet activity while marked as out → insert IN_HOUSE to cancel the out-state.
     // is_out_from_content returns false once IN_HOUSE is in the file, so only one is inserted.
-    if event_type == "DEVICE_ON" && is_out_from_content(&existing) {
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&events_path) {
+    let need_in_house = event_type == "DEVICE_ON" && is_out_from_content(&existing);
+
+    // IN_HOUSE と DEVICE_ON を1回のファイルオープンで書き込む（競合防止）
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&events_path) {
+        if need_in_house {
             let _ = writeln!(f, "{},IN_HOUSE", ts);
         }
-    }
-
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&events_path) {
         let _ = writeln!(f, "{}", new_line);
     } else {
         return Err("書き込み失敗".into());
@@ -529,6 +536,7 @@ pub fn record_device_on() {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
+    let _lock = EVENTS_FILE_LOCK.lock().unwrap();
     use chrono::Local;
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let path = crate::data_dir().join("sleep_events.txt");
@@ -542,14 +550,12 @@ pub fn record_device_on() {
     let is_out = is_out_from_content(&existing);
     eprintln!("{} record_device_on #{}: ts={} is_out={} lines_before={}", TAG, n, ts, is_out, lines_before);
 
-    // Clear out-state if user is home (touching the device means they're here)
-    if is_out {
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+    // IN_HOUSE と DEVICE_ON を1回のファイルオープンで書き込む（競合防止）
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        if is_out {
             let _ = writeln!(f, "{},IN_HOUSE", ts);
             eprintln!("{} record_device_on #{}: wrote IN_HOUSE", TAG, n);
         }
-    }
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{},DEVICE_ON", ts);
     }
     let _ = std::fs::write(crate::data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));

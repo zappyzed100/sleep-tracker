@@ -216,8 +216,15 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
     all.sort_by(|a, b| a.get(..19).unwrap_or("").cmp(b.get(..19).unwrap_or("")));
 
     // Write if content changed (new lines added OR duplicates removed from local)
+    // BOM・改行コード・前後空白の差異による無駄な書き込みを防ぐため、
+    // local_raw ではなく処理済みのローカル行を基準に比較する
+    let local_processed: Vec<String> = local.lines()
+        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}').to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let local_normalized = local_processed.join("\n") + "\n";
     let merged = all.join("\n") + "\n";
-    if merged == local_raw && all.len() == local_n {
+    if merged == local_normalized && all.len() == local_n {
         eprintln!("{} merge_into_local #{}: no change ({}  lines)", TAG, n, all.len());
         return false;
     }
@@ -327,8 +334,22 @@ pub fn ensure_events_from_drive() {
     }
 }
 
-// Back up sleep_events.txt to Drive after writes. Spawned in a thread; no-op if not configured.
+// Back up sleep_events.txt to Drive after writes.
+// Drive→ローカルマージ → push することで、他デバイスがDriveに書き込んだイベントの上書き消失を防ぐ。
+// Spawned in a thread; no-op if not configured.
 pub fn auto_backup_after_event(events_path: &std::path::Path) {
+    // 1. Driveからマージ（他デバイスのイベントを取り込む）
+    let cfg = load_config_inner();
+    if let (Some(u), Some(s)) = (cfg.mobile_url.clone(), cfg.mobile_secret.clone()) {
+        if !u.is_empty() && !s.is_empty() {
+            if let Some(drive_content) = fetch_drive_events(&u, &s) {
+                if merge_into_local(events_path, &drive_content) {
+                    *SESSION_CACHE.lock().unwrap() = None;
+                }
+            }
+        }
+    }
+    // 2. マージ済みのローカルファイルをDriveにpush
     if let Ok(content) = std::fs::read_to_string(events_path) {
         let msg = backup_to_drive(&content);
         eprintln!("{} auto_backup: {}", TAG, msg);
@@ -460,10 +481,10 @@ pub fn fetch_from_cloud() -> Result<Vec<crate::events::Session>, String> {
         }
         return Ok(vec![]);
     }
-    // Write locally so parse_sessions_rust() can read it
+    // Driveから取得した内容をローカルにマージ（上書きではなく統合）
     let kb = content.len() as f64 / 1024.0;
     let path = crate::data_dir().join("sleep_events.txt");
-    std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+    merge_into_local(&path, &content);
     // Invalidate and rebuild cache
     *SESSION_CACHE.lock().unwrap() = None;
     let sessions = parse_sessions_rust()?;
