@@ -237,6 +237,60 @@ fn refresh_all(window: &MainWindow, state: &SharedState) {
     update_chart(window, state);
 }
 
+// ── 日別詳細モーダル（DayDetail.tsx 相当）──────────────────────────────────────
+
+fn date_label_ja(d: NaiveDate) -> String {
+    const DOW_SUN_FIRST: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+    format!("{}年{}月{}日（{}）", d.year(), d.month(), d.day(), DOW_SUN_FIRST[d.weekday().num_days_from_sunday() as usize])
+}
+
+fn fmt_ts_short(ts: &str) -> String {
+    // "2026-07-01 23:00:00" → "7/1 23:00"
+    let (date, time) = ts.split_once(' ').unwrap_or((ts, ""));
+    let parts: Vec<&str> = date.splitn(3, '-').collect();
+    if parts.len() == 3 {
+        format!("{}/{} {}", parts[1].trim_start_matches('0'), parts[2].trim_start_matches('0'), time.get(..5).unwrap_or(time))
+    } else {
+        ts.to_string()
+    }
+}
+
+fn open_day_detail(window: &MainWindow, state: &SharedState, date: &str) {
+    state.lock().unwrap().selected_date = Some(date.to_string());
+
+    let sessions = events::get_sessions().unwrap_or_default();
+    let day_sessions: Vec<&Session> = sessions.iter().filter(|s| s.start.starts_with(date)).collect();
+    let total: f64 = day_sessions.iter().map(|s| s.duration_hours).sum();
+
+    let vm: Vec<SessionVM> = day_sessions.iter().map(|s| SessionVM {
+        start: s.start.clone().into(),
+        end: s.end.clone().into(),
+        time_range: format!("{} → {}", fmt_ts_short(&s.start), fmt_ts_short(&s.end)).into(),
+        duration_label: utils::format_duration(s.duration_hours).into(),
+        deleting: false,
+    }).collect();
+
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap_or_else(|_| chrono::Local::now().date_naive());
+    window.set_detail_date_label(date_label_ja(d).into());
+    window.set_detail_total_label(utils::format_duration(total).into());
+    window.set_detail_sessions(slint::ModelRc::new(slint::VecModel::from(vm)));
+    window.set_detail_add_open(false);
+    window.set_detail_error("".into());
+    window.set_detail_add_start_h(23);
+    window.set_detail_add_start_m(0);
+    window.set_detail_add_end_h(7);
+    window.set_detail_add_end_m(0);
+    window.set_show_detail(true);
+
+    update_chart(window, state);
+}
+
+fn close_day_detail(window: &MainWindow, state: &SharedState) {
+    state.lock().unwrap().selected_date = None;
+    window.set_show_detail(false);
+    update_chart(window, state);
+}
+
 fn main() {
     // 起動時初期化: config.jsonからTHRESHOLD_SECSを読み込み
     let cfg = config::load_config_inner();
@@ -336,17 +390,80 @@ fn main() {
         });
     }
 
-    // 日クリック: 選択状態をトグルしてハイライトを更新（詳細モーダルは今後実装）
+    // 日クリック: 詳細モーダルを開く
     {
         let weak = window.as_weak();
         let state_click = state.clone();
         window.on_day_clicked(move |date| {
             if let Some(w) = weak.upgrade() {
-                let mut s = state_click.lock().unwrap();
-                s.selected_date = if s.selected_date.as_deref() == Some(date.as_str()) { None } else { Some(date.to_string()) };
-                drop(s);
-                update_chart(&w, &state_click);
-                eprintln!("[app] day_clicked: {}", date);
+                open_day_detail(&w, &state_click, &date);
+            }
+        });
+    }
+
+    // モーダルを閉じる
+    {
+        let weak = window.as_weak();
+        let state_close = state.clone();
+        window.on_close_detail(move || {
+            if let Some(w) = weak.upgrade() {
+                close_day_detail(&w, &state_close);
+            }
+        });
+    }
+
+    // 追加フォームの開閉トグル
+    {
+        let weak = window.as_weak();
+        window.on_toggle_add_session(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_detail_add_open(!w.get_detail_add_open());
+                w.set_detail_error("".into());
+            }
+        });
+    }
+
+    // セッション削除
+    {
+        let weak = window.as_weak();
+        let state_del = state.clone();
+        window.on_delete_session(move |start, end| {
+            if let Some(w) = weak.upgrade() {
+                match events::delete_session(start.to_string(), end.to_string()) {
+                    Ok(()) => {
+                        refresh_all(&w, &state_del);
+                        let date = state_del.lock().unwrap().selected_date.clone();
+                        if let Some(d) = date { open_day_detail(&w, &state_del, &d); }
+                    }
+                    Err(e) => w.set_detail_error(format!("削除失敗: {}", e).into()),
+                }
+            }
+        });
+    }
+
+    // 手動追加
+    {
+        let weak = window.as_weak();
+        let state_add = state.clone();
+        window.on_add_session(move || {
+            if let Some(w) = weak.upgrade() {
+                let date = state_add.lock().unwrap().selected_date.clone();
+                let Some(date) = date else { return };
+                let Ok(d) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else { return };
+                let next = d + chrono::Duration::days(1);
+                let start = format!("{} {:02}:{:02}:00", d.format("%Y-%m-%d"), w.get_detail_add_start_h(), w.get_detail_add_start_m());
+                let end = format!("{} {:02}:{:02}:00", next.format("%Y-%m-%d"), w.get_detail_add_end_h(), w.get_detail_add_end_m());
+                if start >= end {
+                    w.set_detail_error("起床時刻は入眠時刻より後にしてください".into());
+                    return;
+                }
+                match events::add_session(start, end) {
+                    Ok(()) => {
+                        refresh_all(&w, &state_add);
+                        open_day_detail(&w, &state_add, &date);
+                    }
+                    Err(e) => w.set_detail_error(format!("追加失敗: {}", e).into()),
+                }
             }
         });
     }

@@ -5,6 +5,194 @@
 
 import { SpinBox } from "std-widgets.slint";
 
+export struct SessionVM {
+    start: string,
+    end: string,
+    time-range: string,     // "7/1 23:00 → 7/2 07:00"
+    duration-label: string,
+    deleting: bool,
+}
+
+component DayDetailModal {
+    in property <string> date-label;
+    in property <string> total-label;
+    in property <[SessionVM]> sessions;
+    in property <bool> add-open;
+    in-out property <int> add-start-h: 23;
+    in-out property <int> add-start-m: 0;
+    in-out property <int> add-end-h: 7;
+    in-out property <int> add-end-m: 0;
+    in property <string> error-text: "";
+
+    callback close();
+    callback delete-session(string, string);
+    callback toggle-add();
+    callback add-session();
+
+    backdrop := TouchArea {
+        clicked => { root.close(); }
+        Rectangle { background: rgba(0, 0, 0, 0.55); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        height: 560px;
+        background: #1e1e2e;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #313244;
+
+        cardBlock := TouchArea {
+            width: 100%;
+            height: 100%;
+            // カード内クリックで閉じないようにイベントを吸収する
+        }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                Text {
+                    text: "🌙 " + root.date-label + " の睡眠";
+                    color: #cdd6f4;
+                    font-size: 17px;
+                    font-weight: 700;
+                    horizontal-stretch: 1;
+                }
+                closeBtn := TouchArea {
+                    width: 28px;
+                    height: 28px;
+                    clicked => { root.close(); }
+                    Rectangle {
+                        background: closeBtn.has-hover ? #313244 : transparent;
+                        border-radius: 6px;
+                        Text { text: "✕"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 8px;
+
+                    if root.sessions.length > 0: Text {
+                        text: "合計 " + root.total-label;
+                        color: #89b4fa;
+                        font-size: 15px;
+                        font-weight: 700;
+                    }
+
+                    if root.sessions.length == 0: Text {
+                        text: "この日の記録なし";
+                        color: #a6adc8;
+                        font-size: 14px;
+                    }
+
+                    for s in root.sessions: Rectangle {
+                        background: #181825;
+                        border-radius: 8px;
+                        height: 40px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
+                            Text {
+                                text: s.time-range;
+                                color: #cdd6f4;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: s.duration-label;
+                                color: #a6adc8;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                            delBtn := TouchArea {
+                                width: 50px;
+                                clicked => { root.delete-session(s.start, s.end); }
+                                Rectangle {
+                                    background: delBtn.has-hover ? #f38ba8 : rgba(243, 139, 168, 0.25);
+                                    border-radius: 6px;
+                                    Text {
+                                        text: s.deleting ? "…" : "削除";
+                                        color: delBtn.has-hover ? #1e1e2e : #f38ba8;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    addToggleBtn := TouchArea {
+                        height: 32px;
+                        clicked => { root.toggle-add(); }
+                        Rectangle {
+                            background: addToggleBtn.has-hover ? #313244 : transparent;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: #313244;
+                            Text {
+                                text: root.add-open ? "▲ キャンセル" : "＋ 睡眠を手動追加";
+                                color: #cdd6f4;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    if root.add-open: VerticalLayout {
+                        spacing: 10px;
+
+                        Text { text: "🌙 入眠"; color: #f9e2af; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            SpinBox { minimum: 0; maximum: 23; value: root.add-start-h; edited(v) => { root.add-start-h = v; } }
+                            Text { text: "時"; color: #cdd6f4; vertical-alignment: center; }
+                            SpinBox { minimum: 0; maximum: 59; value: root.add-start-m; edited(v) => { root.add-start-m = v; } }
+                            Text { text: "分"; color: #cdd6f4; vertical-alignment: center; }
+                        }
+
+                        Text { text: "☀️ 起床"; color: #a6e3a1; font-size: 13px; }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            SpinBox { minimum: 0; maximum: 23; value: root.add-end-h; edited(v) => { root.add-end-h = v; } }
+                            Text { text: "時"; color: #cdd6f4; vertical-alignment: center; }
+                            SpinBox { minimum: 0; maximum: 59; value: root.add-end-m; edited(v) => { root.add-end-m = v; } }
+                            Text { text: "分"; color: #cdd6f4; vertical-alignment: center; }
+                        }
+
+                        addBtn := TouchArea {
+                            height: 36px;
+                            clicked => { root.add-session(); }
+                            Rectangle {
+                                background: addBtn.has-hover ? #74c7ec : #89b4fa;
+                                border-radius: 6px;
+                                Text { text: "追加する"; color: #1e1e2e; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                    }
+
+                    if root.error-text != "": Text {
+                        text: root.error-text;
+                        color: #f38ba8;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export struct DaySummaryVM {
     date: string,          // ISO日付（クリック時にmain.rsへ渡す）
     day-label: string,     // "月\n7/1"
@@ -198,6 +386,18 @@ export component MainWindow inherits Window {
     in property <[DaySummaryVM]> week: [];
     in property <string> week-range-label: "";
 
+    // 日別詳細モーダル用のプロパティ
+    in property <bool> show-detail: false;
+    in property <string> detail-date-label: "";
+    in property <string> detail-total-label: "";
+    in property <[SessionVM]> detail-sessions: [];
+    in property <bool> detail-add-open: false;
+    in-out property <int> detail-add-start-h: 23;
+    in-out property <int> detail-add-start-m: 0;
+    in-out property <int> detail-add-end-h: 7;
+    in-out property <int> detail-add-end-m: 0;
+    in property <string> detail-error: "";
+
     callback sync-clicked();
     callback bedtime-edited(int, int);
     callback set-bedtime-now();
@@ -206,6 +406,10 @@ export component MainWindow inherits Window {
     callback prev-week();
     callback next-week();
     callback this-week();
+    callback close-detail();
+    callback delete-session(string, string);
+    callback toggle-add-session();
+    callback add-session();
 
     VerticalLayout {
         padding: 20px;
@@ -336,5 +540,23 @@ export component MainWindow inherits Window {
                 day-clicked(d) => { root.day-clicked(d); }
             }
         }
+    }
+
+    if root.show-detail: DayDetailModal {
+        width: 100%;
+        height: 100%;
+        date-label: root.detail-date-label;
+        total-label: root.detail-total-label;
+        sessions: root.detail-sessions;
+        add-open: root.detail-add-open;
+        add-start-h: root.detail-add-start-h;
+        add-start-m: root.detail-add-start-m;
+        add-end-h: root.detail-add-end-h;
+        add-end-m: root.detail-add-end-m;
+        error-text: root.detail-error;
+        close => { root.close-detail(); }
+        delete-session(s, e) => { root.delete-session(s, e); }
+        toggle-add => { root.toggle-add-session(); }
+        add-session => { root.add-session(); }
     }
 }
