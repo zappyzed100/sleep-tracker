@@ -16,6 +16,8 @@ rfd = "0.15"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
 mslnk = "0.1"
+tray-icon = "0.20"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]
 slint-build = "1.13"

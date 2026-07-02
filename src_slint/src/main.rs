@@ -18,6 +18,8 @@ mod platform;
 mod utils;
 mod home;
 mod settings_ui;
+#[cfg(windows)]
+mod tray;
 
 pub use events::Session;
 
@@ -324,6 +326,10 @@ fn main() {
             });
         });
     }
+
+    // システムトレイ（Windowsデスクトップのみ）: 閉じるボタンでトレイに常駐
+    #[cfg(windows)]
+    tray::setup(&window);
 
     window.run().expect("ウィンドウの実行に失敗しました");
 }
