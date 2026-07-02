@@ -152,7 +152,7 @@ fn ago_str(secs_ago: u64) -> String {
 // ── File helpers ──────────────────────────────────────────────────────────────
 
 fn append_event(path: &PathBuf, ts: &str, kind: &str) {
-    let _lock = crate::events::EVENTS_FILE_LOCK.lock().unwrap();
+    let _lock = crate::core::events::EVENTS_FILE_LOCK.lock().unwrap();
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{},{}", ts, kind);
     }
@@ -286,10 +286,10 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
         if last_pull.elapsed() >= PULL_INTERVAL {
             last_pull = Instant::now();
             thread::spawn(|| {
-                let msg = crate::cloud::pull_mobile_events_inner();
+                let msg = crate::core::cloud::pull_mobile_events_inner();
                 eprintln!("{} periodic pull: {}", TAG, msg);
                 if msg.starts_with("追加") || msg.contains("件処理") {
-                    *crate::events::SESSION_CACHE.lock().unwrap() = None;
+                    *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
                 }
             });
         }
@@ -304,7 +304,7 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
             sleeping = true;
             // Back up to Drive so Android can see the new session immediately
             let ep = events_path.clone();
-            thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });
+            thread::spawn(move || { crate::core::cloud::auto_backup_after_event(&ep); });
         } else if sleeping && idle < WAKE_SECS {
             maybe_in_house(&events_path, &now_str());
             append_event(&events_path, &now_str(), "IDLE_RESUME");
@@ -313,10 +313,10 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
             // Driveからモバイルイベント(DEVICE_ON等)を即座にpull → キャッシュ無効化 → push
             let ep = events_path.clone();
             thread::spawn(move || {
-                let msg = crate::cloud::pull_mobile_events_inner();
+                let msg = crate::core::cloud::pull_mobile_events_inner();
                 eprintln!("{} IDLE_RESUME pull: {}", TAG, msg);
-                *crate::events::SESSION_CACHE.lock().unwrap() = None;
-                crate::cloud::auto_backup_after_event(&ep);
+                *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
+                crate::core::cloud::auto_backup_after_event(&ep);
             });
             // Notify UI immediately so sessions panel refreshes without polling delay.
             on_session_recorded();

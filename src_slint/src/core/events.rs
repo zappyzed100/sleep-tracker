@@ -484,7 +484,7 @@ pub fn add_session(start: String, end: String) -> Result<(), String> {
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
     *SESSION_CACHE.lock().unwrap() = None;
     let p = path.clone();
-    std::thread::spawn(move || { crate::cloud::auto_backup_manual(&p); });
+    std::thread::spawn(move || { super::cloud::auto_backup_manual(&p); });
     Ok(())
 }
 
@@ -509,7 +509,7 @@ pub fn delete_session(start: String, _end: String) -> Result<(), String> {
             sort_manual_file(&manual_path)?;
             *SESSION_CACHE.lock().unwrap() = None;
             let p = manual_path.clone();
-            std::thread::spawn(move || { crate::cloud::auto_backup_manual(&p); });
+            std::thread::spawn(move || { super::cloud::auto_backup_manual(&p); });
             return Ok(());
         }
     }
@@ -527,7 +527,7 @@ pub fn delete_session(start: String, _end: String) -> Result<(), String> {
     sort_events_file(&events_path)?;
     *SESSION_CACHE.lock().unwrap() = None;
     let ep = events_path.clone();
-    std::thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });
+    std::thread::spawn(move || { super::cloud::auto_backup_after_event(&ep); });
     Ok(())
 }
 

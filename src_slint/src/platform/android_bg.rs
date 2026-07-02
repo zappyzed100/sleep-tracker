@@ -10,8 +10,9 @@
 //! 依存 : crate::{events, cloud, home}
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`
 
-use crate::home::{self, SharedState};
-use crate::{cloud, events, MainWindow};
+use crate::ui::home::{self, SharedState};
+use crate::core::{cloud, events};
+use crate::MainWindow;
 use slint::ComponentHandle;
 
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);

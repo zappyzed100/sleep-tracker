@@ -8,7 +8,9 @@
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
 //!        `create_shortcut`, `export_csv`, `clear_all_data`, `sync_now`
 
-use crate::{cloud, config, events, platform, MainWindow};
+use crate::core::{cloud, config, events};
+use crate::platform::windows as platform;
+use crate::MainWindow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // 全データ削除の誤操作防止用（2回クリックで実行）。設定画面はウィンドウ1つのみなので
@@ -83,12 +85,12 @@ pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: Strin
 }
 
 // 別スレッドでsync_gistを実行し、完了後にUIスレッドで再読み込みする。
-pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::home::SharedState) {
+pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     std::thread::spawn(move || {
         let msg = cloud::sync_gist();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                crate::home::refresh_all(&w, &state);
+                crate::ui::home::refresh_all(&w, &state);
                 match msg {
                     Ok(m) => w.set_settings_message(m.into()),
                     Err(e) => w.set_settings_message(format!("同期失敗: {}", e).into()),
@@ -149,7 +151,7 @@ pub fn backup(window: &MainWindow) {
 static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(not(target_os = "android"))]
-pub fn restore(window: &MainWindow, state: &crate::home::SharedState) {
+pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_settings_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
         return;
@@ -167,18 +169,18 @@ pub fn restore(window: &MainWindow, state: &crate::home::SharedState) {
     match events::restore_events(content) {
         Ok(()) => {
             window.set_settings_message("バックアップから復元しました".into());
-            crate::home::refresh_all(window, state);
+            crate::ui::home::refresh_all(window, state);
         }
         Err(e) => window.set_settings_message(format!("復元失敗: {}", e).into()),
     }
 }
 
 #[cfg(target_os = "android")]
-pub fn restore(window: &MainWindow, _state: &crate::home::SharedState) {
+pub fn restore(window: &MainWindow, _state: &crate::ui::home::SharedState) {
     window.set_settings_message("復元はAndroid版では未対応です".into());
 }
 
-pub fn clear_all_data(window: &MainWindow, state: &crate::home::SharedState) {
+pub fn clear_all_data(window: &MainWindow, state: &crate::ui::home::SharedState) {
     if !CLEAR_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_settings_message("もう一度クリックすると全データを削除します".into());
         return;
@@ -187,7 +189,7 @@ pub fn clear_all_data(window: &MainWindow, state: &crate::home::SharedState) {
     match events::clear_all_data() {
         Ok(()) => {
             window.set_settings_message("全データを削除しました".into());
-            crate::home::refresh_all(window, state);
+            crate::ui::home::refresh_all(window, state);
         }
         Err(e) => window.set_settings_message(format!("削除失敗: {}", e).into()),
     }

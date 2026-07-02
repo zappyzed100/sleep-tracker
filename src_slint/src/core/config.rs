@@ -6,7 +6,7 @@
 //!        Tauri版 src-tauri/src/config.rs の移植（#[tauri::command] を除去しただけ）。
 //!
 //! 依存 : crate::data_dir, crate::config_path, crate::http_client,
-//!        crate::THRESHOLD_SECS, crate::events::SESSION_CACHE
+//!        crate::THRESHOLD_SECS, super::events::SESSION_CACHE
 //! 公開 : `AppConfig`, `get_config`, `save_config`, `fetch_settings_from_cloud`
 
 use std::sync::atomic::Ordering;
@@ -60,7 +60,7 @@ pub fn save_config(
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(crate::config_path(), json).map_err(|e| e.to_string())?;
     crate::THRESHOLD_SECS.store(idle_threshold_minutes as u64 * 60, Ordering::Relaxed);
-    *crate::events::SESSION_CACHE.lock().unwrap() = None;
+    *super::events::SESSION_CACHE.lock().unwrap() = None;
 
     let ms = t0.elapsed().as_millis();
     eprintln!("{} save_config: idle={}min  (+{}ms)", TAG, idle_threshold_minutes, ms);
@@ -118,7 +118,7 @@ pub fn fetch_settings_from_cloud() -> Result<(), String> {
     if let Some(v) = sync.idle_threshold_minutes {
         local.idle_threshold_minutes = Some(v);
         crate::THRESHOLD_SECS.store(v as u64 * 60, Ordering::Relaxed);
-        *crate::events::SESSION_CACHE.lock().unwrap() = None;
+        *super::events::SESSION_CACHE.lock().unwrap() = None;
     }
     if let Some(v) = sync.target_wake_time { local.target_wake_time = Some(v); }
     let json = serde_json::to_string_pretty(&local).map_err(|e| e.to_string())?;

@@ -14,7 +14,7 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 fn load_icon() -> tray_icon::Icon {
-    let bytes = include_bytes!("../assets/tray-icon.png");
+    let bytes = include_bytes!("../../assets/tray-icon.png");
     let img = image::load_from_memory(bytes).expect("tray-icon.png のデコードに失敗しました").into_rgba8();
     let (w, h) = img.dimensions();
     tray_icon::Icon::from_rgba(img.into_raw(), w, h).expect("トレイアイコンの作成に失敗しました")

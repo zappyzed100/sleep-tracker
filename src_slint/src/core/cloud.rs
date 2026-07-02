@@ -16,12 +16,12 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::events::{
+use super::events::{
     SESSION_CACHE, SessionCache, parse_sessions_rust,
     apply_mobile_event_line, sort_events_file, sort_manual_file,
     EVENTS_FILE_LOCK,
 };
-use crate::config::load_config_inner;
+use super::config::load_config_inner;
 
 const TAG: &str = "[cloud]";
 
@@ -379,7 +379,7 @@ pub fn auto_backup_manual(manual_path: &std::path::Path) {
 // Core sync logic shared by Android startup, focus events, and the "今すぐ同期" button.
 // Merge Drive → local → pull Sheet → sort → upload → parse sessions.
 // Returns cached sessions immediately if another sync is already in progress.
-pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
+pub fn sync_mobile_inner() -> Vec<super::events::Session> {
     static N: AtomicU64 = AtomicU64::new(0);
 
     if SYNC_IN_PROGRESS.swap(true, Ordering::SeqCst) {
@@ -396,7 +396,7 @@ pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
     let manual_path = crate::data_dir().join("sleep_manual.txt");
 
     // 1. Fetch settings (update THRESHOLD_SECS from Drive)
-    let _ = crate::config::fetch_settings_from_cloud();
+    let _ = super::config::fetch_settings_from_cloud();
 
     // 2. Drive → local merge (sleep_events.txt and sleep_manual.txt)
     let cfg = load_config_inner();
@@ -452,7 +452,7 @@ pub fn sync_mobile_inner() -> Vec<crate::events::Session> {
     sessions
 }
 
-pub fn fetch_from_cloud() -> Result<Vec<crate::events::Session>, String> {
+pub fn fetch_from_cloud() -> Result<Vec<super::events::Session>, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
     eprintln!("{} fetch_from_cloud #{}: started", TAG, n);

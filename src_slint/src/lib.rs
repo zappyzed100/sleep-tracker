@@ -1,33 +1,22 @@
 //! lib.rs — sleep_tracker (Rust + Slint) 共有ロジック・エントリポイント
 //!
-//! 役割 : デスクトップ（src/main.rs）・Android（src/android.rs）の両方から呼ばれる
-//!        共通ロジック。Slintウィンドウの起動、共有static（THRESHOLD_SECS, HTTP_CLIENT）、
-//!        パスユーティリティ（data_dir, config_path）を定義する。
-//!        各モジュール（config, events, cloud, prediction, monitor, platform,
-//!        home, settings_ui, tray）を宣言し、起動時の初期化と全コールバックの配線を行う。
-//!        表示更新ロジック本体は home.rs / settings_ui.rs に委譲する。
+//! 役割 : デスクトップ（src/main.rs）・Android（src/platform/android.rs）の両方から
+//!        呼ばれる共通ロジック。Slintウィンドウの起動、共有static
+//!        （THRESHOLD_SECS, HTTP_CLIENT）、パスユーティリティ（data_dir, config_path）
+//!        を定義する。core/（ビジネスロジック）・platform/（OS固有機能）・
+//!        ui/（画面ロジック）を宣言し、起動時の初期化と全コールバックの配線を行う。
 //!
-//! 公開 : `run`, `THRESHOLD_SECS`, `data_dir`, `config_path`, `http_client`
-//!        `init_android_app_dir`（Android専用）
+//! 公開 : `run`, `THRESHOLD_SECS`, `data_dir`, `config_path`, `http_client`,
+//!        `Session`, `init_android_app_dir`（Android専用）
 
-mod config;
-mod events;
-mod cloud;
-mod prediction;
-#[cfg(windows)]
-mod monitor;
+mod core;
 mod platform;
-mod utils;
-mod home;
-mod settings_ui;
-#[cfg(windows)]
-mod tray;
-#[cfg(target_os = "android")]
-mod android;
-#[cfg(target_os = "android")]
-mod android_bg;
+mod ui;
 
-pub use events::Session;
+use core::{cloud, config, events, prediction};
+use ui::{home, settings_ui};
+
+pub use core::Session;
 
 use chrono::NaiveDate;
 use std::path::PathBuf;
@@ -359,7 +348,7 @@ pub fn run() {
     {
         let weak = window.as_weak();
         let s = state.clone();
-        monitor::start(data_dir(), move || {
+        platform::monitor::start(data_dir(), move || {
             let weak = weak.clone();
             let s = s.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -370,11 +359,11 @@ pub fn run() {
 
     // システムトレイ（Windowsデスクトップのみ）: 閉じるボタンでトレイに常駐
     #[cfg(windows)]
-    tray::setup(&window);
+    platform::tray::setup(&window);
 
     // フォアグラウンド定期同期・起動時DEVICE_ON記録（Androidのみ）
     #[cfg(target_os = "android")]
-    android_bg::setup(&window, &state);
+    platform::android_bg::setup(&window, &state);
 
     // window.run() は「最後のウィンドウが隠れたら」イベントループごと終了してしまうため、
     // トレイに閉じるだけのWindowsデスクトップでは使えない

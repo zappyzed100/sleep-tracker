@@ -9,7 +9,8 @@
 //!        `compute_stats`, `apply_tick`, `recompute_prediction`, `update_chart`,
 //!        `open_day_detail`, `close_day_detail`, `now_iso`
 
-use crate::{events, prediction, utils, DaySummaryVM, MainWindow, Session, SessionVM};
+use crate::core::{events, prediction, utils, Session};
+use crate::{DaySummaryVM, MainWindow, SessionVM};
 use chrono::{Datelike, NaiveDate};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
