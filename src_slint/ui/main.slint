@@ -3,7 +3,7 @@
 // 役割 : ホーム画面（睡眠予測カード・統計ストリップ）を表示する。
 //        Catppuccin Mocha風の配色。Tauri版 App.css の配色変数を踏襲。
 
-import { SpinBox } from "std-widgets.slint";
+import { SpinBox, LineEdit } from "std-widgets.slint";
 
 export struct SessionVM {
     start: string,
@@ -358,6 +358,174 @@ component PredictionCard {
     }
 }
 
+component SectionTitle {
+    in property <string> text;
+    Text { text: root.text; color: #f9e2af; font-size: 14px; font-weight: 700; }
+}
+
+component SettingsBtn {
+    in property <string> text;
+    in property <bool> danger: false;
+    callback clicked();
+    ta := TouchArea {
+        height: 34px;
+        clicked => { root.clicked(); }
+        Rectangle {
+            background: root.danger
+                ? (ta.has-hover ? #f38ba8 : rgba(243, 139, 168, 0.2))
+                : (ta.has-hover ? #45475a : #313244);
+            border-radius: 6px;
+            Text {
+                text: root.text;
+                color: root.danger ? (ta.has-hover ? #1e1e2e : #f38ba8) : #cdd6f4;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+component SettingsPanel {
+    in-out property <bool> startup-enabled: false;
+    in-out property <int> idle-threshold-minutes: 60;
+    in-out property <bool> target-wake-enabled: false;
+    in-out property <int> target-wake-h: 7;
+    in-out property <int> target-wake-m: 0;
+    in-out property <string> mobile-url: "";
+    in-out property <string> mobile-secret: "";
+    in property <string> connection-status: "";
+    in property <bool> connection-ok: false;
+    in property <string> settings-message: "";
+
+    callback toggle-startup(bool);
+    callback create-shortcut();
+    callback threshold-changed(int);
+    callback toggle-target-wake(bool);
+    callback target-wake-changed(int, int);
+    callback save-settings();
+    callback test-connection();
+    callback sync-now();
+    callback export-csv();
+    callback clear-all-data();
+
+    Flickable {
+        VerticalLayout {
+            padding: 20px;
+            spacing: 20px;
+            alignment: start;
+
+            // ── 起動設定 ──
+            SectionTitle { text: "起動設定"; }
+            HorizontalLayout {
+                spacing: 12px;
+                startCk := TouchArea {
+                    width: 200px;
+                    height: 30px;
+                    clicked => { root.toggle-startup(!root.startup-enabled); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 18px; height: 18px;
+                            border-width: 1px;
+                            border-color: #89b4fa;
+                            border-radius: 4px;
+                            background: root.startup-enabled ? #89b4fa : transparent;
+                            Text { text: root.startup-enabled ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Text { text: "PC起動時に自動起動"; color: #cdd6f4; font-size: 13px; vertical-alignment: center; }
+                    }
+                }
+                SettingsBtn { text: "デスクトップショートカット作成"; clicked => { root.create-shortcut(); } }
+            }
+
+            // ── 睡眠判定時間 ──
+            SectionTitle { text: "睡眠判定時間"; }
+            HorizontalLayout {
+                spacing: 8px;
+                SpinBox {
+                    width: 120px;
+                    minimum: 5; maximum: 300;
+                    value: root.idle-threshold-minutes;
+                    edited(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
+                }
+                Text { text: "分以上操作がなければ睡眠と判定"; color: #a6adc8; font-size: 12px; vertical-alignment: center; }
+            }
+
+            // ── 目標起床時刻 ──
+            SectionTitle { text: "目標起床時刻"; }
+            HorizontalLayout {
+                spacing: 12px;
+                wakeCk := TouchArea {
+                    width: 200px;
+                    height: 30px;
+                    clicked => { root.toggle-target-wake(!root.target-wake-enabled); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Rectangle {
+                            width: 18px; height: 18px;
+                            border-width: 1px;
+                            border-color: #89b4fa;
+                            border-radius: 4px;
+                            background: root.target-wake-enabled ? #89b4fa : transparent;
+                            Text { text: root.target-wake-enabled ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Text { text: "目標起床時刻を指定する"; color: #cdd6f4; font-size: 13px; vertical-alignment: center; }
+                    }
+                }
+                if root.target-wake-enabled: HorizontalLayout {
+                    spacing: 4px;
+                    SpinBox { minimum: 0; maximum: 23; value: root.target-wake-h; edited(v) => { root.target-wake-h = v; root.target-wake-changed(v, root.target-wake-m); } }
+                    Text { text: ":"; color: #cdd6f4; vertical-alignment: center; }
+                    SpinBox { minimum: 0; maximum: 59; value: root.target-wake-m; edited(v) => { root.target-wake-m = v; root.target-wake-changed(root.target-wake-h, v); } }
+                }
+            }
+
+            // ── クラウド連携 ──
+            SectionTitle { text: "クラウド連携"; }
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "Apps Script URL"; color: #a6adc8; font-size: 12px; }
+                urlEdit := LineEdit {
+                    text: root.mobile-url;
+                    edited(t) => { root.mobile-url = t; }
+                }
+                Text { text: "シークレット"; color: #a6adc8; font-size: 12px; }
+                secretEdit := LineEdit {
+                    text: root.mobile-secret;
+                    input-type: password;
+                    edited(t) => { root.mobile-secret = t; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    SettingsBtn { text: "保存"; clicked => { root.save-settings(); } }
+                    SettingsBtn { text: "接続テスト"; clicked => { root.test-connection(); } }
+                    SettingsBtn { text: "今すぐ同期"; clicked => { root.sync-now(); } }
+                }
+                if root.connection-status != "": Text {
+                    text: root.connection-status;
+                    color: root.connection-ok ? #a6e3a1 : #f38ba8;
+                    font-size: 12px;
+                }
+            }
+
+            // ── データ管理 ──
+            SectionTitle { text: "データ管理"; }
+            HorizontalLayout {
+                spacing: 8px;
+                SettingsBtn { text: "CSVエクスポート"; clicked => { root.export-csv(); } }
+                SettingsBtn { text: "全データ削除"; danger: true; clicked => { root.clear-all-data(); } }
+            }
+
+            if root.settings-message != "": Text {
+                text: root.settings-message;
+                color: #a6adc8;
+                font-size: 12px;
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "睡眠トラッカー";
     width: 1200px;
@@ -398,6 +566,32 @@ export component MainWindow inherits Window {
     in-out property <int> detail-add-end-m: 0;
     in property <string> detail-error: "";
 
+    // タブ切り替え
+    in-out property <string> tab: "home";
+
+    // 設定画面用のプロパティ
+    in-out property <bool> startup-enabled: false;
+    in-out property <int> idle-threshold-minutes: 60;
+    in-out property <bool> target-wake-enabled: false;
+    in-out property <int> target-wake-h: 7;
+    in-out property <int> target-wake-m: 0;
+    in-out property <string> mobile-url: "";
+    in-out property <string> mobile-secret: "";
+    in property <string> connection-status: "";
+    in property <bool> connection-ok: false;
+    in property <string> settings-message: "";
+
+    callback toggle-startup(bool);
+    callback create-shortcut();
+    callback threshold-changed(int);
+    callback toggle-target-wake(bool);
+    callback target-wake-changed(int, int);
+    callback save-settings();
+    callback test-connection();
+    callback sync-now();
+    callback export-csv();
+    callback clear-all-data();
+
     callback sync-clicked();
     callback bedtime-edited(int, int);
     callback set-bedtime-now();
@@ -424,6 +618,24 @@ export component MainWindow inherits Window {
                 font-size: 22px;
                 font-weight: 700;
             }
+            homeTabBtn := TouchArea {
+                width: 60px;
+                clicked => { root.tab = "home"; }
+                Rectangle {
+                    background: root.tab == "home" ? #313244 : transparent;
+                    border-radius: 6px;
+                    Text { text: "ホーム"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                }
+            }
+            settingsTabBtn := TouchArea {
+                width: 60px;
+                clicked => { root.tab = "settings"; }
+                Rectangle {
+                    background: root.tab == "settings" ? #313244 : transparent;
+                    border-radius: 6px;
+                    Text { text: "設定"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                }
+            }
             Rectangle { horizontal-stretch: 1; }
             Text {
                 text: root.greeting;
@@ -447,97 +659,125 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ── 睡眠予測カード ──
-        PredictionCard {
-            bed-hour: root.bed-hour;
-            bed-minute: root.bed-minute;
-            predicted-duration: root.predicted-duration;
-            predicted-wake-time: root.predicted-wake-time;
-            predicted-method: root.predicted-method;
-            has-data: root.has-prediction;
-            bedtime-edited(h, m) => {
-                root.bed-hour = h;
-                root.bed-minute = m;
-                root.bedtime-edited(h, m);
-            }
-            now-clicked => { root.set-bedtime-now(); }
-            optimal-clicked => { root.set-bedtime-optimal(); }
-        }
-
-        // ── 統計ストリップ ──
-        Rectangle {
-            background: #181825;
-            border-radius: 10px;
-            height: 90px;
-
-            HorizontalLayout {
-                padding: 20px;
-                spacing: 24px;
-                alignment: start;
-
-                StatCol { value: root.days-recorded; label: "記録日数"; }
-                Divider { }
-                StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
-                Divider { }
-                StatCol { value: root.last-sleep; label: "最後の睡眠"; }
-                Divider { }
-                StatCol { value: root.current-time; label: "現在時刻"; }
-                Divider { }
-                StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
-            }
-        }
-
-        // ── 週ナビゲーション ──
-        HorizontalLayout {
-            spacing: 12px;
-            height: 32px;
-            prevBtn := TouchArea {
-                width: 32px;
-                clicked => { root.prev-week(); }
-                Rectangle {
-                    background: prevBtn.has-hover ? #313244 : transparent;
-                    border-radius: 6px;
-                    Text { text: "◀"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
-                }
-            }
-            Text {
-                text: root.week-range-label;
-                color: #cdd6f4;
-                font-size: 14px;
-                vertical-alignment: center;
-            }
-            nextBtn := TouchArea {
-                width: 32px;
-                clicked => { root.next-week(); }
-                Rectangle {
-                    background: nextBtn.has-hover ? #313244 : transparent;
-                    border-radius: 6px;
-                    Text { text: "▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
-                }
-            }
-            todayBtn := TouchArea {
-                width: 60px;
-                clicked => { root.this-week(); }
-                Rectangle {
-                    background: todayBtn.has-hover ? #45475a : #313244;
-                    border-radius: 6px;
-                    Text { text: "今週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
-                }
-            }
-            Rectangle { horizontal-stretch: 1; }
-        }
-
-        // ── 週間チャート ──
-        Rectangle {
-            background: #181825;
-            border-radius: 10px;
+        if root.tab == "settings": SettingsPanel {
             vertical-stretch: 1;
-            WeeklyChart {
-                x: 20px; y: 16px;
-                width: parent.width - 40px;
-                height: parent.height - 32px;
-                week: root.week;
-                day-clicked(d) => { root.day-clicked(d); }
+            startup-enabled: root.startup-enabled;
+            idle-threshold-minutes: root.idle-threshold-minutes;
+            target-wake-enabled: root.target-wake-enabled;
+            target-wake-h: root.target-wake-h;
+            target-wake-m: root.target-wake-m;
+            mobile-url <=> root.mobile-url;
+            mobile-secret <=> root.mobile-secret;
+            connection-status: root.connection-status;
+            connection-ok: root.connection-ok;
+            settings-message: root.settings-message;
+            toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
+            create-shortcut => { root.create-shortcut(); }
+            threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
+            toggle-target-wake(v) => { root.target-wake-enabled = v; root.toggle-target-wake(v); }
+            target-wake-changed(h, m) => { root.target-wake-h = h; root.target-wake-m = m; root.target-wake-changed(h, m); }
+            save-settings => { root.save-settings(); }
+            test-connection => { root.test-connection(); }
+            sync-now => { root.sync-now(); }
+            export-csv => { root.export-csv(); }
+            clear-all-data => { root.clear-all-data(); }
+        }
+
+        if root.tab == "home": VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 16px;
+
+            PredictionCard {
+                bed-hour: root.bed-hour;
+                bed-minute: root.bed-minute;
+                predicted-duration: root.predicted-duration;
+                predicted-wake-time: root.predicted-wake-time;
+                predicted-method: root.predicted-method;
+                has-data: root.has-prediction;
+                bedtime-edited(h, m) => {
+                    root.bed-hour = h;
+                    root.bed-minute = m;
+                    root.bedtime-edited(h, m);
+                }
+                now-clicked => { root.set-bedtime-now(); }
+                optimal-clicked => { root.set-bedtime-optimal(); }
+            }
+
+            // ── 統計ストリップ ──
+            Rectangle {
+                background: #181825;
+                border-radius: 10px;
+                height: 90px;
+
+                HorizontalLayout {
+                    padding: 20px;
+                    spacing: 24px;
+                    alignment: start;
+
+                    StatCol { value: root.days-recorded; label: "記録日数"; }
+                    Divider { }
+                    StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
+                    Divider { }
+                    StatCol { value: root.last-sleep; label: "最後の睡眠"; }
+                    Divider { }
+                    StatCol { value: root.current-time; label: "現在時刻"; }
+                    Divider { }
+                    StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
+                }
+            }
+
+            // ── 週ナビゲーション ──
+            HorizontalLayout {
+                spacing: 12px;
+                height: 32px;
+                prevBtn := TouchArea {
+                    width: 32px;
+                    clicked => { root.prev-week(); }
+                    Rectangle {
+                        background: prevBtn.has-hover ? #313244 : transparent;
+                        border-radius: 6px;
+                        Text { text: "◀"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                Text {
+                    text: root.week-range-label;
+                    color: #cdd6f4;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                nextBtn := TouchArea {
+                    width: 32px;
+                    clicked => { root.next-week(); }
+                    Rectangle {
+                        background: nextBtn.has-hover ? #313244 : transparent;
+                        border-radius: 6px;
+                        Text { text: "▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                todayBtn := TouchArea {
+                    width: 60px;
+                    clicked => { root.this-week(); }
+                    Rectangle {
+                        background: todayBtn.has-hover ? #45475a : #313244;
+                        border-radius: 6px;
+                        Text { text: "今週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            // ── 週間チャート ──
+            Rectangle {
+                background: #181825;
+                border-radius: 10px;
+                vertical-stretch: 1;
+                WeeklyChart {
+                    x: 20px; y: 16px;
+                    width: parent.width - 40px;
+                    height: parent.height - 32px;
+                    week: root.week;
+                    day-clicked(d) => { root.day-clicked(d); }
+                }
             }
         }
     }
