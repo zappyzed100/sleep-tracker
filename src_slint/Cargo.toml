@@ -3,11 +3,17 @@ name = "sleep_tracker"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
+authors = ["sleep-tracker"]
+description = "睡眠トラッカー"
 
 [lib]
 name = "sleep_tracker"
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
+
+[[bin]]
+name = "sleep_tracker"
+path = "src/main.rs"
 
 [dependencies]
 slint = "1.13"

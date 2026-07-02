@@ -24,6 +24,8 @@ mod settings_ui;
 mod tray;
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(target_os = "android")]
+mod android_bg;
 
 pub use events::Session;
 
@@ -369,6 +371,10 @@ pub fn run() {
     // システムトレイ（Windowsデスクトップのみ）: 閉じるボタンでトレイに常駐
     #[cfg(windows)]
     tray::setup(&window);
+
+    // フォアグラウンド定期同期・起動時DEVICE_ON記録（Androidのみ）
+    #[cfg(target_os = "android")]
+    android_bg::setup(&window, &state);
 
     window.run().expect("ウィンドウの実行に失敗しました");
 }
