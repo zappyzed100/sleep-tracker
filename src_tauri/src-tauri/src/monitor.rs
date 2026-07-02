@@ -203,6 +203,7 @@ fn run(data_dir: PathBuf, app: tauri::AppHandle) {
 
     const POLL:        Duration = Duration::from_secs(5);
     const HB_INTERVAL: Duration = Duration::from_secs(30);
+    const PULL_INTERVAL: Duration = Duration::from_secs(60); // Drive/Sheet からモバイルイベントを定期pull
     // User is considered "awake" once idle drops below 60s.
     // Must be < any realistic threshold to prevent start/resume oscillation.
     const WAKE_SECS: u64 = 60;
@@ -213,6 +214,7 @@ fn run(data_dir: PathBuf, app: tauri::AppHandle) {
     let mut threshold             = crate::THRESHOLD_SECS.load(std::sync::atomic::Ordering::Relaxed);
     let mut last_hb               = Instant::now();
     let mut last_tick             = Instant::now();
+    let mut last_pull             = Instant::now();
     let mut gamepad_last_active   = Instant::now();
 
     // If already idle at startup beyond the threshold, enter sleeping state
@@ -276,6 +278,18 @@ fn run(data_dir: PathBuf, app: tauri::AppHandle) {
             continue;
         }
 
+        // ── Periodic Drive/Sheet pull (モバイルイベントをPC側に取り込む) ────────
+        if last_pull.elapsed() >= PULL_INTERVAL {
+            last_pull = Instant::now();
+            thread::spawn(|| {
+                let msg = crate::cloud::pull_mobile_events_inner();
+                eprintln!("{} periodic pull: {}", TAG, msg);
+                if msg.starts_with("追加") || msg.contains("件処理") {
+                    *crate::events::SESSION_CACHE.lock().unwrap() = None;
+                }
+            });
+        }
+
         // ── State machine ─────────────────────────────────────────────────────
         if !sleeping && idle >= threshold {
             let start_ts = ago_str(idle);
@@ -292,12 +306,17 @@ fn run(data_dir: PathBuf, app: tauri::AppHandle) {
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             eprintln!("{} IDLE_RESUME: was sleeping {}s", TAG, idle);
             sleeping = false;
+            // Driveからモバイルイベント(DEVICE_ON等)を即座にpull → キャッシュ無効化 → push
+            let ep = events_path.clone();
+            thread::spawn(move || {
+                let msg = crate::cloud::pull_mobile_events_inner();
+                eprintln!("{} IDLE_RESUME pull: {}", TAG, msg);
+                *crate::events::SESSION_CACHE.lock().unwrap() = None;
+                crate::cloud::auto_backup_after_event(&ep);
+            });
             // Notify frontend immediately so sessions panel refreshes without polling delay.
             use tauri::Emitter;
             let _ = app.emit("sleep-session-recorded", ());
-            // Back up to Drive so Android can see the wake time
-            let ep = events_path.clone();
-            thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });
         }
     }
 }

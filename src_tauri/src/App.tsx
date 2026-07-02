@@ -62,13 +62,13 @@ export default function App() {
         // PC: fetch settings (idle threshold, target wake time) from Drive on startup
         invoke("fetch_settings_from_cloud")
           .then(() => loadSessions())
-          .catch(() => {});
+          .catch(() => { });
       }
-    }).catch(() => {});
-    getVersion().then(setAppVersion).catch(() => {});
+    }).catch(() => { });
+    getVersion().then(setAppVersion).catch(() => { });
     invoke<{ screen_on_enabled: boolean | null }>("get_config")
       .then(cfg => setScreenOnEnabled(cfg.screen_on_enabled ?? true))
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   const loadSessions = useCallback(async () => {
@@ -116,7 +116,7 @@ export default function App() {
     const doSync = (force = false) => {
       const now = Date.now();
       const elapsedSec = Math.round((now - lastSync) / 1000);
-      if (!force && now - lastSync < 5 * 60 * 1000) {
+      if (!force && now - lastSync < 60 * 1000) {
         console.log(TAG, `doSync: SKIP throttled (force=${force}, last=${elapsedSec}s ago)`);
         return;
       }
@@ -166,7 +166,7 @@ export default function App() {
   // Android: send SCREEN_ON every 5 min (if enabled) — skip immediate send on mount
   useEffect(() => {
     if (!isMobile || !screenOnEnabled) return;
-    const send = () => invoke("send_screen_on").catch(() => {});
+    const send = () => invoke("send_screen_on").catch(() => { });
     const id = setInterval(send, 15 * 60 * 1000);
     return () => clearInterval(id);
   }, [isMobile, screenOnEnabled]);
