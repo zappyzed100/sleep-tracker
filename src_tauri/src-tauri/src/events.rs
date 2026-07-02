@@ -89,10 +89,10 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
     let time_raw = parts.next().ok_or("フォーマット不正")?.trim();
 
     let event_type = match tag {
-        "LEAVE_HOME" | "LEAVE"   => "OUT_START",
-        "ARRIVE_HOME" | "ARRIVE" => "OUT_END",
-        "SCREEN_ON"              => "DEVICE_ON",
-        other                    => return Err(format!("不明タグ: {}", other)),
+        "LEAVE_HOME" | "LEAVE"                       => "OUT_START",
+        "ARRIVE_HOME" | "ARRIVE"                     => "OUT_END",
+        "SCREEN_ON" | "APP_OPEN" | "APP_FOREGROUND"  => "DEVICE_ON",
+        other                                         => return Err(format!("不明タグ: {}", other)),
     };
 
     let ts = if let Ok(ms) = time_raw.parse::<i64>() {
@@ -278,6 +278,16 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
                 _ => {}
             }
             prev_ep = ep;
+        }
+
+        // ── Close unclosed IDLE_START with the first subsequent DEVICE_ON ──────────
+        // 起床時にPCを操作する前にAndroidを触った場合、IDLE_RESUME が記録されず
+        // DEVICE_ON しか終了イベントが存在しない。この未閉じペアを DEVICE_ON で閉じる。
+        if let Some((start_ep, start_ts)) = idle_pend {
+            if let Some(&(dep, ref dts)) = device_ons.iter().find(|(d, _)| *d > start_ep) {
+                eprintln!("{} parse_sessions: unclosed IDLE_START closed by DEVICE_ON ({} → {})", TAG, start_ts, dts);
+                idle_pairs.push((start_ep, start_ts, dep, dts.clone()));
+            }
         }
     }
 
@@ -465,7 +475,10 @@ pub fn add_session(start: String, end: String) -> Result<(), String> {
     let line = format!("{},{}\n", start, end);
     let mut f = OpenOptions::new().create(true).append(true).open(&path)
         .map_err(|e| e.to_string())?;
-    f.write_all(line.as_bytes()).map_err(|e| e.to_string())
+    f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    let p = path.clone();
+    std::thread::spawn(move || { crate::cloud::auto_backup_manual(&p); });
+    Ok(())
 }
 
 #[tauri::command]
@@ -487,7 +500,10 @@ pub fn delete_session(start: String, _end: String) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             f.write_all(marker.as_bytes()).map_err(|e| e.to_string())?;
             eprintln!("{} delete_session: MANUAL_DELETED appended to sleep_manual.txt", TAG);
-            return sort_manual_file(&manual_path);
+            sort_manual_file(&manual_path)?;
+            let p = manual_path.clone();
+            std::thread::spawn(move || { crate::cloud::auto_backup_manual(&p); });
+            return Ok(());
         }
     }
 
@@ -501,7 +517,10 @@ pub fn delete_session(start: String, _end: String) -> Result<(), String> {
     let mut f = OpenOptions::new().create(true).append(true).open(&events_path)
         .map_err(|e| e.to_string())?;
     f.write_all(marker.as_bytes()).map_err(|e| e.to_string())?;
-    sort_events_file(&events_path)
+    sort_events_file(&events_path)?;
+    let ep = events_path.clone();
+    std::thread::spawn(move || { crate::cloud::auto_backup_after_event(&ep); });
+    Ok(())
 }
 
 // Android: write DEVICE_ON (+ IN_HOUSE if out-state) when user opens the app.

@@ -1,0 +1,19 @@
+appId: com.sleeptracker.app
+---
+# 起動オーバーレイ消失を待ってから各ボタンをテスト
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 8000
+- tapOn: "設定"
+- extendedWaitUntil:
+    visible:
+      text: "睡眠判定時間"
+    timeout: 5000
+- tapOn: "ホーム"
+- extendedWaitUntil:
+    visible:
+      text: "今週"
+    timeout: 5000
+- tapOn: "今週"
+- waitForAnimationToEnd
+- assertVisible: "今週"

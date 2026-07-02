@@ -29,8 +29,17 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 return@withContext Result.success()
             }
 
-            val ts   = System.currentTimeMillis()
-            val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret&tag=SCREEN_ON&ts=$ts")
+            val ts = System.currentTimeMillis()
+            // Distinguish startup run (WorkManager fires immediately after first schedule)
+            // from genuine background heartbeats. Within 5 min of app open → APP_OPEN.
+            val openTimeMs = applicationContext
+                .getSharedPreferences("sleep_tracker", android.content.Context.MODE_PRIVATE)
+                .getLong("app_open_time_ms", 0L)
+            val elapsedMs = if (openTimeMs > 0L) ts - openTimeMs else Long.MAX_VALUE
+            val tag = if (elapsedMs < 5 * 60 * 1000L) "APP_OPEN" else "SCREEN_ON"
+            Log.i("SleepTracker", "[worker] DriveSignalWorker: tag=$tag elapsed=${elapsedMs}ms")
+
+            val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret&tag=$tag&ts=$ts")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod  = "POST"
                 doOutput       = true
@@ -41,7 +50,7 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             conn.connect()
             val code = conn.responseCode
             conn.disconnect()
-            Log.i("SleepTracker", "[worker] DriveSignalWorker: done (HTTP $code)")
+            Log.i("SleepTracker", "[worker] DriveSignalWorker: done (HTTP $code tag=$tag)")
             Result.success()
         } catch (e: Exception) {
             Log.e("SleepTracker", "[worker] DriveSignalWorker: ERROR ${e.message}")

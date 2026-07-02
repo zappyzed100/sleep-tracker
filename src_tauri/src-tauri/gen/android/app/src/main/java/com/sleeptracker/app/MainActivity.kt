@@ -23,6 +23,11 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 class MainActivity : TauriActivity() {
+  companion object {
+    // Shared across Activity instances so the new Activity after recreate() can read it.
+    @Volatile var recreateInitiatedAt: Long = 0L
+  }
+
   @Volatile private var currentTab: String = "home"
   private var appWebView: WebView? = null
 
@@ -31,7 +36,6 @@ class MainActivity : TauriActivity() {
   private var hideRunnable: Runnable? = null
   private var pauseTime: Long = Long.MAX_VALUE
   private var overlayShownAt: Long = 0L
-  private val FIRST_LAUNCH_MIN_MS = 0L
 
   private fun dp(value: Int): Int =
     TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
@@ -46,14 +50,14 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun notifyReady() {
       val elapsed = SystemClock.elapsedRealtime() - overlayShownAt
-      val isFirst = pauseTime == Long.MAX_VALUE
-      val delay = if (isFirst) maxOf(0L, FIRST_LAUNCH_MIN_MS - elapsed) else 0L
-      Log.i("SleepTracker", "[overlay] notifyReady called: elapsed=${elapsed}ms, isFirst=$isFirst, delay=${delay}ms")
-      uiHandler.postDelayed({
-        Log.i("SleepTracker", "[overlay] hiding overlay now")
+      val sinceRecreate = if (recreateInitiatedAt > 0L)
+        SystemClock.elapsedRealtime() - recreateInitiatedAt else -1L
+      Log.i("SleepTracker", "[overlay] notifyReady: elapsed=${elapsed}ms sinceRecreate=${sinceRecreate}ms")
+      uiHandler.post {
         hideRunnable?.let { uiHandler.removeCallbacks(it) }
         overlay?.visibility = View.GONE
-      }, delay)
+        Log.i("SleepTracker", "[overlay] hidden by notifyReady")
+      }
     }
   }
 
@@ -63,6 +67,8 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Dark window background so the gap between recreate() and overlay appearing isn't black.
+    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0xFF1E1E2E.toInt()))
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
 
@@ -96,6 +102,10 @@ class MainActivity : TauriActivity() {
       }
     })
 
+    // Record startup time so DriveSignalWorker can distinguish startup run from background runs.
+    applicationContext.getSharedPreferences("sleep_tracker", android.content.Context.MODE_PRIVATE)
+      .edit().putLong("app_open_time_ms", System.currentTimeMillis()).apply()
+
     // Initialize WorkManager on a background thread — first call creates Room DB (disk I/O)
     // and blocks the main thread for several seconds if called here directly.
     val appCtx = applicationContext
@@ -128,9 +138,15 @@ class MainActivity : TauriActivity() {
     Log.i("SleepTracker", "[lifecycle] onResume: isFirstLaunch=$isFirstLaunch elapsed=${elapsed}ms")
     if (!isFirstLaunch && elapsed >= 5 * 60 * 1000L) {
       // WebView takes 18-20s to unfreeze after long background. Cold start is ~500ms.
-      Log.i("SleepTracker", "[lifecycle] long background → recreate()")
+      recreateInitiatedAt = SystemClock.elapsedRealtime()
+      Log.i("SleepTracker", "[lifecycle] long background → recreate() at ${recreateInitiatedAt}ms")
       recreate()
       return
+    }
+    // Log timing from recreate() for measurement (new Activity after recreate has isFirstLaunch=true)
+    if (isFirstLaunch && recreateInitiatedAt > 0L) {
+      val sinceRecreate = SystemClock.elapsedRealtime() - recreateInitiatedAt
+      Log.i("SleepTracker", "[lifecycle] onResume after recreate: +${sinceRecreate}ms since recreate()")
     }
     if (isFirstLaunch || elapsed > 10_000L) showResumeOverlay(isFirstLaunch)
   }
@@ -139,7 +155,21 @@ class MainActivity : TauriActivity() {
     val ov = overlay ?: return
     ov.visibility = View.VISIBLE
     overlayShownAt = SystemClock.elapsedRealtime()
-    Log.i("SleepTracker", "[overlay] shown: isFirstLaunch=$isFirstLaunch")
+
+    // After recreate() the new Activity looks like "first launch" but the WebView needs
+    // a full cold start (~10s on this device). Keep overlay up until notifyReady() fires.
+    val isFromRecreate = isFirstLaunch &&
+        recreateInitiatedAt > 0L &&
+        (overlayShownAt - recreateInitiatedAt) < 5_000L
+    // Timeout: recreate cold-start → 30s (notifyReady() is primary, fires ~10s);
+    //          normal first launch → 5s fallback; deep-sleep resume → 30s (postVisualStateCallback).
+    val timeout = when {
+      isFromRecreate -> 30_000L
+      isFirstLaunch  ->  5_000L
+      else           -> 30_000L
+    }
+    Log.i("SleepTracker", "[overlay] shown: isFirstLaunch=$isFirstLaunch isFromRecreate=$isFromRecreate timeout=${timeout}ms")
+
     hideRunnable?.let { uiHandler.removeCallbacks(it) }
     if (!isFirstLaunch) {
       // Deep sleep resume: hide when WebView repaints its first frame
@@ -156,12 +186,9 @@ class MainActivity : TauriActivity() {
         Log.w("SleepTracker", "[overlay] postVisualStateCallback: skipped (wv=$wv, SDK=${android.os.Build.VERSION.SDK_INT})")
       }
     }
-    // First launch: notifyReady() is the primary signal; 1.5s absolute fallback.
-    // Deep sleep resume: postVisualStateCallback is primary; 30s fallback.
-    // 30s is needed because Android throttles WebView rendering for ~18s after a long background pause.
-    val timeout = if (isFirstLaunch) 1500L else 30_000L
     val runnable = Runnable {
-      Log.i("SleepTracker", "[overlay] fallback timeout fired (${timeout}ms)")
+      val elapsed = SystemClock.elapsedRealtime() - overlayShownAt
+      Log.i("SleepTracker", "[overlay] fallback timeout fired: elapsed=${elapsed}ms timeout=${timeout}ms")
       ov.visibility = View.GONE
     }
     hideRunnable = runnable

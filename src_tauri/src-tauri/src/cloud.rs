@@ -327,12 +327,19 @@ pub fn ensure_events_from_drive() {
     }
 }
 
-// PC monitor: back up sleep_events.txt to Drive after IDLE_START / IDLE_RESUME.
-// Runs in a spawned thread; no-op if cloud not configured.
+// Back up sleep_events.txt to Drive after writes. Spawned in a thread; no-op if not configured.
 pub fn auto_backup_after_event(events_path: &std::path::Path) {
     if let Ok(content) = std::fs::read_to_string(events_path) {
         let msg = backup_to_drive(&content);
         eprintln!("{} auto_backup: {}", TAG, msg);
+    }
+}
+
+// Back up sleep_manual.txt to Drive after writes. Spawned in a thread; no-op if not configured.
+pub fn auto_backup_manual(manual_path: &std::path::Path) {
+    if let Ok(content) = std::fs::read_to_string(manual_path) {
+        let msg = backup_manual_to_drive(&content);
+        eprintln!("{} auto_backup_manual: {}", TAG, msg);
     }
 }
 
@@ -480,7 +487,7 @@ pub fn send_screen_on() -> Result<String, String> {
         _ => return Err("クラウド接続が未設定です".into()),
     };
     let ts = chrono::Local::now().timestamp_millis();
-    let url = format!("{}?secret={}&tag=SCREEN_ON&ts={}", base_url.trim_end_matches('/'), secret, ts);
+    let url = format!("{}?secret={}&tag=APP_FOREGROUND&ts={}", base_url.trim_end_matches('/'), secret, ts);
     let client = crate::gist_client()?;
     let resp = client
         .post(&url)
