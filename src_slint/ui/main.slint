@@ -407,6 +407,8 @@ component SettingsPanel {
     callback test-connection();
     callback sync-now();
     callback export-csv();
+    callback backup();
+    callback restore();
     callback clear-all-data();
 
     Flickable {
@@ -514,6 +516,8 @@ component SettingsPanel {
             HorizontalLayout {
                 spacing: 8px;
                 SettingsBtn { text: "CSVエクスポート"; clicked => { root.export-csv(); } }
+                SettingsBtn { text: "バックアップ"; clicked => { root.backup(); } }
+                SettingsBtn { text: "復元"; clicked => { root.restore(); } }
                 SettingsBtn { text: "全データ削除"; danger: true; clicked => { root.clear-all-data(); } }
             }
 
@@ -590,6 +594,8 @@ export component MainWindow inherits Window {
     callback test-connection();
     callback sync-now();
     callback export-csv();
+    callback backup();
+    callback restore();
     callback clear-all-data();
 
     callback sync-clicked();
@@ -680,6 +686,8 @@ export component MainWindow inherits Window {
             test-connection => { root.test-connection(); }
             sync-now => { root.sync-now(); }
             export-csv => { root.export-csv(); }
+            backup => { root.backup(); }
+            restore => { root.restore(); }
             clear-all-data => { root.clear-all-data(); }
         }
 

@@ -120,6 +120,64 @@ pub fn export_csv(window: &MainWindow) {
     window.set_settings_message("CSVエクスポートはAndroid版では未対応です".into());
 }
 
+// バックアップ/リストアもrfd（ネイティブファイルダイアログ）を使うためデスクトップのみ。
+#[cfg(not(target_os = "android"))]
+pub fn backup(window: &MainWindow) {
+    let content = match events::get_events_content() {
+        Ok(c) => c,
+        Err(e) => { window.set_settings_message(format!("バックアップ失敗: {}", e).into()); return; }
+    };
+    let default_name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
+    let path = rfd::FileDialog::new()
+        .set_file_name(&default_name)
+        .add_filter("テキスト", &["txt"])
+        .save_file();
+    let Some(path) = path else { return };
+    match events::write_csv_file(path.to_string_lossy().to_string(), content) {
+        Ok(()) => window.set_settings_message(format!("バックアップを保存しました → {}", path.display()).into()),
+        Err(e) => window.set_settings_message(format!("バックアップ失敗: {}", e).into()),
+    }
+}
+
+#[cfg(target_os = "android")]
+pub fn backup(window: &MainWindow) {
+    window.set_settings_message("バックアップはAndroid版では未対応です".into());
+}
+
+// 誤操作防止のため2回クリックで実行（全データ削除と同様のパターン）。
+#[cfg(not(target_os = "android"))]
+static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(not(target_os = "android"))]
+pub fn restore(window: &MainWindow, state: &crate::home::SharedState) {
+    if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
+        window.set_settings_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
+        return;
+    }
+    RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
+
+    let path = rfd::FileDialog::new()
+        .add_filter("テキスト", &["txt"])
+        .pick_file();
+    let Some(path) = path else { return };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => { window.set_settings_message(format!("読み込み失敗: {}", e).into()); return; }
+    };
+    match events::restore_events(content) {
+        Ok(()) => {
+            window.set_settings_message("バックアップから復元しました".into());
+            crate::home::refresh_all(window, state);
+        }
+        Err(e) => window.set_settings_message(format!("復元失敗: {}", e).into()),
+    }
+}
+
+#[cfg(target_os = "android")]
+pub fn restore(window: &MainWindow, _state: &crate::home::SharedState) {
+    window.set_settings_message("復元はAndroid版では未対応です".into());
+}
+
 pub fn clear_all_data(window: &MainWindow, state: &crate::home::SharedState) {
     if !CLEAR_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_settings_message("もう一度クリックすると全データを削除します".into());

@@ -297,6 +297,19 @@ pub fn run() {
     }
     {
         let weak = window.as_weak();
+        window.on_backup(move || {
+            if let Some(w) = weak.upgrade() { settings_ui::backup(&w); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_restore(move || {
+            if let Some(w) = weak.upgrade() { settings_ui::restore(&w, &s); }
+        });
+    }
+    {
+        let weak = window.as_weak();
         let s = state.clone();
         window.on_clear_all_data(move || {
             if let Some(w) = weak.upgrade() { settings_ui::clear_all_data(&w, &s); }
