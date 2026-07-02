@@ -136,19 +136,19 @@ class MainActivity : TauriActivity() {
     val isFirstLaunch = pauseTime == Long.MAX_VALUE
     val elapsed = if (isFirstLaunch) -1L else SystemClock.elapsedRealtime() - pauseTime
     Log.i("SleepTracker", "[lifecycle] onResume: isFirstLaunch=$isFirstLaunch elapsed=${elapsed}ms")
-    if (!isFirstLaunch && elapsed >= 5 * 60 * 1000L) {
+    if (!isFirstLaunch && elapsed >= 10 * 1000L) {
       // WebView takes 18-20s to unfreeze after long background. Cold start is ~500ms.
+      // So always recreate() after 10s background — faster than waiting for unfreeze.
       recreateInitiatedAt = SystemClock.elapsedRealtime()
-      Log.i("SleepTracker", "[lifecycle] long background → recreate() at ${recreateInitiatedAt}ms")
+      Log.i("SleepTracker", "[lifecycle] background ${elapsed}ms → recreate() at ${recreateInitiatedAt}ms")
       recreate()
       return
     }
-    // Log timing from recreate() for measurement (new Activity after recreate has isFirstLaunch=true)
     if (isFirstLaunch && recreateInitiatedAt > 0L) {
       val sinceRecreate = SystemClock.elapsedRealtime() - recreateInitiatedAt
       Log.i("SleepTracker", "[lifecycle] onResume after recreate: +${sinceRecreate}ms since recreate()")
     }
-    if (isFirstLaunch || elapsed > 10_000L) showResumeOverlay(isFirstLaunch)
+    if (isFirstLaunch) showResumeOverlay(isFirstLaunch)
   }
 
   private fun showResumeOverlay(isFirstLaunch: Boolean = false) {
