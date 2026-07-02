@@ -98,6 +98,9 @@ pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::home::SharedState) 
     });
 }
 
+// rfdクレートはAndroidバックエンドを持たないため、CSVエクスポートは今はデスクトップのみ。
+// Android版はファイル共有(Intent)経由の実装が別途必要（今後の課題）。
+#[cfg(not(target_os = "android"))]
 pub fn export_csv(window: &MainWindow) {
     let sessions = events::get_sessions().unwrap_or_default();
     let csv = events::export_csv(&sessions);
@@ -110,6 +113,11 @@ pub fn export_csv(window: &MainWindow) {
         Ok(()) => window.set_settings_message("CSVエクスポート完了".into()),
         Err(e) => window.set_settings_message(format!("エクスポート失敗: {}", e).into()),
     }
+}
+
+#[cfg(target_os = "android")]
+pub fn export_csv(window: &MainWindow) {
+    window.set_settings_message("CSVエクスポートはAndroid版では未対応です".into());
 }
 
 pub fn clear_all_data(window: &MainWindow, state: &crate::home::SharedState) {
