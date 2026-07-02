@@ -376,5 +376,14 @@ pub fn run() {
     #[cfg(target_os = "android")]
     android_bg::setup(&window, &state);
 
-    window.run().expect("ウィンドウの実行に失敗しました");
+    // window.run() は「最後のウィンドウが隠れたら」イベントループごと終了してしまうため、
+    // トレイに閉じるだけのWindowsデスクトップでは使えない
+    // （閉じるボタン → HideWindow のつもりが、実質的にアプリごと終了してしまう）。
+    // run_event_loop_until_quit() はトレイの「終了」メニューが呼ぶ quit_event_loop() まで
+    // 生き続けるので、こちらを使う。
+    window.show().expect("ウィンドウの表示に失敗しました");
+    #[cfg(windows)]
+    slint::run_event_loop_until_quit().expect("イベントループの実行に失敗しました");
+    #[cfg(not(windows))]
+    slint::run_event_loop().expect("イベントループの実行に失敗しました");
 }
