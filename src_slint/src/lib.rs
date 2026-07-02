@@ -45,6 +45,22 @@ pub fn init_android_app_dir(path: PathBuf) {
     let _ = ANDROID_APP_DIR.set(path);
 }
 
+// アプリ専用の外部ストレージ領域（/storage/emulated/0/Android/data/<package>/files/）。
+// スコープドストレージ配下でも特別な権限なしにファイルマネージャーから参照できるため、
+// CSVエクスポート・バックアップ・リストア（rfdが使えないAndroidの代替）に使う。
+#[cfg(target_os = "android")]
+static ANDROID_EXTERNAL_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn init_android_external_dir(path: Option<PathBuf>) {
+    let _ = ANDROID_EXTERNAL_DIR.set(path);
+}
+
+#[cfg(target_os = "android")]
+pub fn android_external_dir() -> Option<PathBuf> {
+    ANDROID_EXTERNAL_DIR.get().cloned().flatten()
+}
+
 #[cfg(not(target_os = "android"))]
 fn repo_root() -> &'static PathBuf {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();

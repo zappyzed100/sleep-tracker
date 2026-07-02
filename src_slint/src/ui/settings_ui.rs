@@ -117,9 +117,22 @@ pub fn export_csv(window: &MainWindow) {
     }
 }
 
+// Android版はrfdが使えないため、アプリ専用の外部ストレージ領域
+// （/storage/emulated/0/Android/data/com.sleeptracker.app/files/）に固定ファイル名で書き出す。
+// 特別な権限なしにファイルマネージャーから参照・取り出しができる。
 #[cfg(target_os = "android")]
 pub fn export_csv(window: &MainWindow) {
-    window.set_settings_message("CSVエクスポートはAndroid版では未対応です".into());
+    let Some(dir) = crate::android_external_dir() else {
+        window.set_settings_message("外部ストレージが利用できません".into());
+        return;
+    };
+    let sessions = events::get_sessions().unwrap_or_default();
+    let csv = events::export_csv(&sessions);
+    let path = dir.join("sleep_sessions.csv");
+    match events::write_csv_file(path.to_string_lossy().to_string(), csv) {
+        Ok(()) => window.set_settings_message(format!("CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{}", path.file_name().unwrap().to_string_lossy()).into()),
+        Err(e) => window.set_settings_message(format!("エクスポート失敗: {}", e).into()),
+    }
 }
 
 // バックアップ/リストアもrfd（ネイティブファイルダイアログ）を使うためデスクトップのみ。
@@ -143,7 +156,20 @@ pub fn backup(window: &MainWindow) {
 
 #[cfg(target_os = "android")]
 pub fn backup(window: &MainWindow) {
-    window.set_settings_message("バックアップはAndroid版では未対応です".into());
+    let Some(dir) = crate::android_external_dir() else {
+        window.set_settings_message("外部ストレージが利用できません".into());
+        return;
+    };
+    let content = match events::get_events_content() {
+        Ok(c) => c,
+        Err(e) => { window.set_settings_message(format!("バックアップ失敗: {}", e).into()); return; }
+    };
+    let name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
+    let path = dir.join(&name);
+    match events::write_csv_file(path.to_string_lossy().to_string(), content) {
+        Ok(()) => window.set_settings_message(format!("バックアップ完了 → Android/data/com.sleeptracker.app/files/{}", name).into()),
+        Err(e) => window.set_settings_message(format!("バックアップ失敗: {}", e).into()),
+    }
 }
 
 // 誤操作防止のため2回クリックで実行（全データ削除と同様のパターン）。
@@ -175,9 +201,37 @@ pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
     }
 }
 
+// ファイルピッカーが使えないため、固定ファイル名（restore.txt）を外部ストレージ領域に
+// ファイルマネージャーで置いてもらう方式。誤操作防止のため2回クリックで実行。
 #[cfg(target_os = "android")]
-pub fn restore(window: &MainWindow, _state: &crate::ui::home::SharedState) {
-    window.set_settings_message("復元はAndroid版では未対応です".into());
+static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "android")]
+pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
+    let Some(dir) = crate::android_external_dir() else {
+        window.set_settings_message("外部ストレージが利用できません".into());
+        return;
+    };
+    let path = dir.join("restore.txt");
+    if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
+        window.set_settings_message(format!(
+            "Android/data/com.sleeptracker.app/files/restore.txt にバックアップファイルを配置してから、もう一度クリックしてください"
+        ).into());
+        return;
+    }
+    RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => { window.set_settings_message(format!("restore.txt の読み込み失敗: {}", e).into()); return; }
+    };
+    match events::restore_events(content) {
+        Ok(()) => {
+            window.set_settings_message("バックアップから復元しました".into());
+            crate::ui::home::refresh_all(window, state);
+        }
+        Err(e) => window.set_settings_message(format!("復元失敗: {}", e).into()),
+    }
 }
 
 pub fn clear_all_data(window: &MainWindow, state: &crate::ui::home::SharedState) {
