@@ -7,8 +7,10 @@ import { LineEdit } from "std-widgets.slint";
 
 // 標準SpinBoxは常に上下ボタンが横に並んで表示され幅を取るため、
 // ホバー時だけ縦積みの上下ボタンを右側に出す自作の数値スピナー。
-// クリックでフォーカスし、数字キー入力（2桁で確定）・上下矢印キー・Enterでの
-// 確定・Escapeでの取り消しに対応する。
+// 自作FocusScope+キーバッファ方式は実機でキー入力が反応しない不具合があったため、
+// Slint標準のTextInput（LineEditの内部実装と同じ、フォーカス・キー入力を自前で
+// 面倒見てくれる低レベル部品）に置き換えた。input-type:numberで数字以外の入力は
+// Slint側で自動的に弾かれる。
 component NumSpin {
     in property <int> value;
     in property <int> minimum: 0;
@@ -20,96 +22,75 @@ component NumSpin {
     width: root.spin-width;
     height: 34px;
 
-    property <string> input-buffer: "";
-    property <int> input-buffer-len: 0;
-    property <bool> editing: root.input-buffer-len > 0;
-    property <string> display-text: root.editing ? root.input-buffer : ((root.zero-pad && root.value < 10) ? "0\{root.value}" : "\{root.value}");
-
     function commit(v: int) {
-        root.input-buffer = "";
-        root.input-buffer-len = 0;
         root.edited(max(min(v, root.maximum), root.minimum));
     }
 
-    fs := FocusScope {
-        key-pressed(event) => {
-            if (event.text >= "0" && event.text <= "9") {
-                root.input-buffer = root.input-buffer-len >= 2 ? event.text : root.input-buffer + event.text;
-                root.input-buffer-len = root.input-buffer-len >= 2 ? 1 : root.input-buffer-len + 1;
-                if (root.input-buffer-len >= 2) {
-                    root.commit(root.input-buffer.to-float());
-                }
-                accept
-            } else if (event.text == Key.Backspace) {
-                root.input-buffer = "";
-                root.input-buffer-len = 0;
-                accept
-            } else if (event.text == Key.UpArrow) {
-                root.commit(root.value + 1);
-                accept
-            } else if (event.text == Key.DownArrow) {
-                root.commit(root.value - 1);
-                accept
-            } else if (event.text == Key.Return) {
-                if (root.input-buffer != "") {
-                    root.commit(root.input-buffer.to-float());
-                }
-                accept
-            } else if (event.text == Key.Escape) {
-                root.input-buffer = "";
-                root.input-buffer-len = 0;
-                accept
-            } else {
-                reject
-            }
-        }
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { ti.focus(); }
 
-        ta := TouchArea {
-            width: 100%;
-            height: 100%;
-            clicked => { fs.focus(); }
+        Rectangle {
+            background: #313244;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: ti.has-focus ? #89b4fa : (ta.has-hover ? #45475a : transparent);
 
-            Rectangle {
-                background: #313244;
-                border-radius: 6px;
-                border-width: 1px;
-                border-color: fs.has-focus ? #89b4fa : (ta.has-hover ? #45475a : transparent);
+            ti := TextInput {
+                x: 0px;
+                width: 100%;
+                height: 100%;
+                text: (root.zero-pad && root.value < 10) ? "0\{root.value}" : "\{root.value}";
+                color: #cdd6f4;
+                font-size: 15px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                single-line: true;
+                input-type: number;
 
-                Text {
-                    x: 0px;
-                    width: 100%;
-                    text: root.display-text;
-                    color: #cdd6f4;
-                    font-size: 15px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                if ta.has-hover: Rectangle {
-                    x: parent.width - 20px;
-                    width: 20px;
-                    height: 100%;
-
-                    upTa := TouchArea {
-                        y: 0px;
-                        height: parent.height / 2;
-                        width: 100%;
-                        clicked => { root.commit(root.value + 1); }
-                        Rectangle {
-                            background: upTa.has-hover ? #45475a : transparent;
-                            Text { text: "▲"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
-                        }
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        root.commit(root.value + 1);
+                        accept
+                    } else if (event.text == Key.DownArrow) {
+                        root.commit(root.value - 1);
+                        accept
+                    } else {
+                        reject
                     }
-                    downTa := TouchArea {
-                        y: parent.height / 2;
-                        height: parent.height / 2;
-                        width: 100%;
-                        clicked => { root.commit(root.value - 1); }
-                        Rectangle {
-                            background: downTa.has-hover ? #45475a : transparent;
-                            Text { text: "▼"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
-                        }
+                }
+                accepted => {
+                    if (self.text != "") {
+                        root.commit(self.text.to-float());
+                    }
+                }
+            }
+
+            if ta.has-hover: Rectangle {
+                x: parent.width - 20px;
+                width: 20px;
+                height: 100%;
+
+                upTa := TouchArea {
+                    y: 0px;
+                    height: parent.height / 2;
+                    width: 100%;
+                    clicked => { root.commit(root.value + 1); }
+                    Rectangle {
+                        background: upTa.has-hover ? #45475a : transparent;
+                        Text { text: "▲"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                downTa := TouchArea {
+                    y: parent.height / 2;
+                    height: parent.height / 2;
+                    width: 100%;
+                    clicked => { root.commit(root.value - 1); }
+                    Rectangle {
+                        background: downTa.has-hover ? #45475a : transparent;
+                        Text { text: "▼"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }
