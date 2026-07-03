@@ -9,6 +9,7 @@
 //! 公開 : `Session`, `SessionCache`, `SESSION_CACHE`, `parse_sessions_rust`,
 //!        `sort_events_file`, `get_sessions`, `add_session`, `delete_session`,
 //!        `get_events_content`, `restore_events`, `clear_all_data`, `compact_data`,
+//!        `maybe_auto_backup`, `clear_backups`,
 //!        `export_csv`, `write_csv_file`, `import_csv`,
 //!        `is_out_from_content`, `apply_mobile_event_line`
 
@@ -595,6 +596,80 @@ pub fn restore_events(content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())?;
     sort_events_file(&path)?;
     *SESSION_CACHE.lock().unwrap() = None;
+    Ok(())
+}
+
+// ── 日次ローカル自動バックアップ（世代は自動削除しない） ─────────────────────
+//
+// 手動の「バックアップ」ボタン（設定タブ）と同じ内容をファイルダイアログなしで
+// data/backups/ に書き出す。前回バックアップ時刻は data/last_auto_backup.txt に
+// 保持し、アプリ再起動をまたいでも正しく約1日おきになるようにする。
+// 1件あたり数KB程度なので自動削除はせず、貯まった分は「バックアップを削除」
+// ボタン（clear_backups）で手動削除する。
+// Google Driveへの自動バックアップ（cloud::auto_backup_after_event）とは独立した、
+// ローカルディスク上の世代バックアップ。
+// PC版はmonitor.rsの常駐ループから毎時呼ばれる。Android版はプロセス常駐の
+// バックグラウンドスレッドを持てないため、android_bg.rsのフォアグラウンド中
+// タイマーから呼ばれる（＝アプリを開いた時だけ判定される）。
+
+const BACKUP_INTERVAL_DAYS: i64 = 1;
+
+pub fn maybe_auto_backup(data_dir: &std::path::Path) {
+    use chrono::{Duration as CDur, Local};
+
+    let marker_path = data_dir.join("last_auto_backup.txt");
+
+    let due = match std::fs::read_to_string(&marker_path) {
+        Ok(s) => match chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S") {
+            Ok(last) => (Local::now().naive_local() - last) >= CDur::days(BACKUP_INTERVAL_DAYS),
+            Err(_) => true,
+        },
+        // マーカーがない（初回起動）場合は、以降1日おきの基準点を作るため即バックアップする。
+        Err(_) => true,
+    };
+    if !due {
+        return;
+    }
+
+    let backups_dir = data_dir.join("backups");
+    if std::fs::create_dir_all(&backups_dir).is_err() {
+        eprintln!("{} auto_backup: ERROR backups/ ディレクトリを作成できません", TAG);
+        return;
+    }
+
+    let date = Local::now().format("%Y-%m-%d");
+    let mut wrote_any = false;
+    for name in ["sleep_events.txt", "sleep_manual.txt"] {
+        let src = data_dir.join(name);
+        let Ok(content) = std::fs::read_to_string(&src) else { continue };
+        let dest = backups_dir.join(format!("{}_{}", date, name));
+        match std::fs::write(&dest, &content) {
+            Ok(()) => {
+                wrote_any = true;
+                eprintln!("{} auto_backup: {:.1}KB → {:?}", TAG, content.len() as f64 / 1024.0, dest);
+            }
+            Err(e) => eprintln!("{} auto_backup: ERROR {}: {}", TAG, name, e),
+        }
+    }
+
+    if wrote_any {
+        let _ = std::fs::write(&marker_path, Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+    }
+}
+
+// data/backups/ 以下を全削除する（手動バックアップ・自動バックアップとも対象）。
+// 現在のsleep_events.txt/sleep_manual.txt自体には触れない。
+pub fn clear_backups(data_dir: &std::path::Path) -> Result<(), String> {
+    let backups_dir = data_dir.join("backups");
+    if !backups_dir.exists() {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(&backups_dir).map_err(|e| e.to_string())?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        if entry.path().is_file() {
+            std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }
 

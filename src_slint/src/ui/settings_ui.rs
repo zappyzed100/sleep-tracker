@@ -10,7 +10,7 @@
 //! 依存 : crate::{MainWindow}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
 //!        `create_shortcut`, `export_csv`, `clear_all_data`, `clear_all_data_and_cloud`,
-//!        `compact_data`, `sync_now`, `backup`, `restore`
+//!        `compact_data`, `clear_backups`, `sync_now`, `backup`, `restore`
 
 use crate::core::{cloud, config, events};
 use crate::platform::windows as platform;
@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static CLEAR_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 static CLEAR_CLOUD_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 static COMPACT_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
+static CLEAR_BACKUPS_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 
 // メッセージの種別。SettingsNote側でこの文字列を見て色を変える
@@ -502,6 +503,38 @@ pub fn compact_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Share
                         w.set_compact_in_progress(false);
                     }
                 }
+            }
+        });
+    });
+}
+
+// data/backups/（日次ローカル自動バックアップの蓄積分）を全削除する。
+// sleep_events.txt/sleep_manual.txt自体やクラウドには触れない、比較的軽い操作。
+pub fn clear_backups(weak: slint::Weak<MainWindow>) {
+    let Some(window) = weak.upgrade() else { return };
+    if !CLEAR_BACKUPS_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
+        window.set_backups_clear_message("もう一度クリックするとバックアップ履歴を削除します".into());
+        window.set_backups_clear_kind(KIND_WARN.into());
+        window.set_backups_clear_in_progress(false);
+        return;
+    }
+    CLEAR_BACKUPS_CONFIRM_PENDING.store(false, Ordering::SeqCst);
+
+    std::thread::spawn(move || {
+        let result = events::clear_backups(&crate::data_dir());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                match result {
+                    Ok(()) => {
+                        w.set_backups_clear_message(format!("✓ バックアップ履歴を削除しました ({})", now_hms()).into());
+                        w.set_backups_clear_kind(KIND_SUCCESS.into());
+                    }
+                    Err(e) => {
+                        w.set_backups_clear_message(format!("削除失敗: {} ({})", e, now_hms()).into());
+                        w.set_backups_clear_kind(KIND_ERROR.into());
+                    }
+                }
+                w.set_backups_clear_in_progress(false);
             }
         });
     });

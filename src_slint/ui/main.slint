@@ -1080,6 +1080,8 @@ component SettingsPanel {
     in property <string> clear-cloud-kind: "info";
     in property <string> compact-message: "";
     in property <string> compact-kind: "info";
+    in property <string> backups-clear-message: "";
+    in property <string> backups-clear-kind: "info";
     in-out property <bool> show-secret: false;
     in property <bool> test-in-progress: false;
     in property <bool> sync-in-progress: false;
@@ -1089,6 +1091,7 @@ component SettingsPanel {
     in property <bool> clear-in-progress: false;
     in property <bool> clear-cloud-in-progress: false;
     in property <bool> compact-in-progress: false;
+    in property <bool> backups-clear-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1104,6 +1107,7 @@ component SettingsPanel {
     callback clear-all-data();
     callback clear-all-data-and-cloud();
     callback compact-data();
+    callback clear-backups();
 
     Flickable {
         VerticalLayout {
@@ -1286,6 +1290,17 @@ component SettingsPanel {
                 }
                 if root.compact-message != "": SettingsNote { text: root.compact-message; kind: root.compact-kind; }
                 SettingsNote { text: "パースされたセッションだけを残して再構築し、手動追加(sleep_manual.txt)は統合後に空にします。"; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn {
+                        text: root.backups-clear-in-progress ? "削除中…" : "バックアップを削除";
+                        btn-width: 150px;
+                        busy: root.backups-clear-in-progress;
+                        clicked => { root.clear-backups(); }
+                    }
+                }
+                if root.backups-clear-message != "": SettingsNote { text: root.backups-clear-message; kind: root.backups-clear-kind; }
+                SettingsNote { text: "日次ローカル自動バックアップ(data/backups/)は自動削除されないため、ここで手動削除できます。"; }
             }
         }
     }
@@ -1387,6 +1402,8 @@ export component MainWindow inherits Window {
     in-out property <string> clear-cloud-kind: "info";
     in-out property <string> compact-message: "";
     in-out property <string> compact-kind: "info";
+    in-out property <string> backups-clear-message: "";
+    in-out property <string> backups-clear-kind: "info";
     in-out property <bool> test-in-progress: false;
     in-out property <bool> sync-in-progress: false;
     in-out property <bool> export-in-progress: false;
@@ -1395,6 +1412,7 @@ export component MainWindow inherits Window {
     in-out property <bool> clear-in-progress: false;
     in-out property <bool> clear-cloud-in-progress: false;
     in-out property <bool> compact-in-progress: false;
+    in-out property <bool> backups-clear-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1410,6 +1428,7 @@ export component MainWindow inherits Window {
     callback clear-all-data();
     callback clear-all-data-and-cloud();
     callback compact-data();
+    callback clear-backups();
 
     callback period-changed(string);
     callback bedtime-edited(int, int);
@@ -1568,6 +1587,8 @@ export component MainWindow inherits Window {
             clear-cloud-kind: root.clear-cloud-kind;
             compact-message: root.compact-message;
             compact-kind: root.compact-kind;
+            backups-clear-message: root.backups-clear-message;
+            backups-clear-kind: root.backups-clear-kind;
             test-in-progress: root.test-in-progress;
             sync-in-progress: root.sync-in-progress;
             export-in-progress: root.export-in-progress;
@@ -1576,6 +1597,7 @@ export component MainWindow inherits Window {
             clear-in-progress: root.clear-in-progress;
             clear-cloud-in-progress: root.clear-cloud-in-progress;
             compact-in-progress: root.compact-in-progress;
+            backups-clear-in-progress: root.backups-clear-in-progress;
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
             threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
@@ -1628,6 +1650,12 @@ export component MainWindow inherits Window {
                 if (!root.compact-in-progress) {
                     root.compact-in-progress = true;
                     root.compact-data();
+                }
+            }
+            clear-backups => {
+                if (!root.backups-clear-in-progress) {
+                    root.backups-clear-in-progress = true;
+                    root.clear-backups();
                 }
             }
         }

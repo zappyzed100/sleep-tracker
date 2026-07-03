@@ -6,6 +6,9 @@
 //!        真のバックグラウンド同期）は、Kotlinで書かれたWorkerクラスが必須で
 //!        cargo-apk（純Rust構成）の範囲外のため、今回は対象外とする
 //!        （アプリを開いている間の同期のみをカバーする）。
+//!        日次ローカル自動バックアップ（events::maybe_auto_backup）も同様に
+//!        フォアグラウンド中のみの判定になる（アプリを開いた時に前回から
+//!        24時間経過していれば取る）。
 //!
 //! 依存 : crate::{events, cloud, home}
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`
@@ -20,6 +23,8 @@ const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60
 pub fn setup(window: &MainWindow, state: &SharedState) {
     // 起動時: アプリを開いたことを記録（Tauri版のrecord_device_on相当）
     events::record_device_on();
+    // 起動時: 前回から24時間経っていればローカルバックアップを取る
+    events::maybe_auto_backup(&crate::data_dir());
 
     // 5分ごとにバックグラウンド同期（アプリが存命中のみ）
     let timer = slint::Timer::default();
@@ -31,6 +36,7 @@ pub fn setup(window: &MainWindow, state: &SharedState) {
         std::thread::spawn(move || {
             let sessions = cloud::sync_mobile_inner();
             eprintln!("[app] android periodic sync: {} sessions", sessions.len());
+            events::maybe_auto_backup(&crate::data_dir());
             let weak = weak.clone();
             let s = s.clone();
             let _ = slint::invoke_from_event_loop(move || {

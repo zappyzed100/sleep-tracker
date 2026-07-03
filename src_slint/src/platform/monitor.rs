@@ -187,87 +187,8 @@ fn maybe_in_house(events_path: &PathBuf, ts: &str) {
     }
 }
 
-// ── 日次ローカル自動バックアップ（最新10世代を保持） ─────────────────────────
-//
-// 手動の「バックアップ」ボタン（設定タブ）と同じ内容をファイルダイアログなしで
-// data/backups/ に書き出す。前回バックアップ時刻は data/last_auto_backup.txt に
-// 保持し、アプリ再起動をまたいでも正しく約1日おきになるようにする。
-// 古い世代は自動で削除し、直近10日分だけ残す。
-// Google Driveへの自動バックアップ（auto_backup_after_event）とは独立した、
-// ローカルディスク上の世代バックアップ。
-
-const BACKUP_INTERVAL_DAYS: i64 = 1;
-const BACKUP_KEEP_GENERATIONS: usize = 10;
-
-fn maybe_auto_backup(data_dir: &std::path::Path) {
-    let marker_path = data_dir.join("last_auto_backup.txt");
-
-    let due = match fs::read_to_string(&marker_path) {
-        Ok(s) => match chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S") {
-            Ok(last) => (Local::now().naive_local() - last) >= CDur::days(BACKUP_INTERVAL_DAYS),
-            Err(_) => true,
-        },
-        // マーカーがない（初回起動）場合は、以降1日おきの基準点を作るため即バックアップする。
-        Err(_) => true,
-    };
-    if !due {
-        return;
-    }
-
-    let backups_dir = data_dir.join("backups");
-    if fs::create_dir_all(&backups_dir).is_err() {
-        eprintln!("{} auto_backup: ERROR backups/ ディレクトリを作成できません", TAG);
-        return;
-    }
-
-    let date = Local::now().format("%Y-%m-%d");
-    let mut wrote_any = false;
-    for name in ["sleep_events.txt", "sleep_manual.txt"] {
-        let src = data_dir.join(name);
-        let Ok(content) = fs::read_to_string(&src) else { continue };
-        let dest = backups_dir.join(format!("{}_{}", date, name));
-        match fs::write(&dest, &content) {
-            Ok(()) => {
-                wrote_any = true;
-                eprintln!("{} auto_backup: {:.1}KB → {:?}", TAG, content.len() as f64 / 1024.0, dest);
-            }
-            Err(e) => eprintln!("{} auto_backup: ERROR {}: {}", TAG, name, e),
-        }
-    }
-
-    if wrote_any {
-        let _ = fs::write(&marker_path, now_str());
-        prune_old_backups(&backups_dir);
-    }
-}
-
-// backups/ 内のファイル名先頭10文字（"YYYY-MM-DD"）で世代を判定し、新しい方から
-// BACKUP_KEEP_GENERATIONS件だけ残して残りを削除する。
-fn prune_old_backups(backups_dir: &std::path::Path) {
-    let Ok(entries) = fs::read_dir(backups_dir) else { return };
-    let mut dates: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
-        .filter_map(|name| name.get(0..10).map(|d| d.to_string()))
-        .collect();
-    dates.sort();
-    dates.dedup();
-    if dates.len() <= BACKUP_KEEP_GENERATIONS {
-        return;
-    }
-    let to_remove = &dates[..dates.len() - BACKUP_KEEP_GENERATIONS];
-    let Ok(entries) = fs::read_dir(backups_dir) else { return };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let Some(name) = entry.file_name().to_str().map(|s| s.to_string()) else { continue };
-        if let Some(prefix) = name.get(0..10) {
-            if to_remove.iter().any(|d| d == prefix) {
-                if fs::remove_file(entry.path()).is_ok() {
-                    eprintln!("{} auto_backup: prune {}", TAG, name);
-                }
-            }
-        }
-    }
-}
+// 日次ローカル自動バックアップ本体は core::events::maybe_auto_backup に共通化されている
+// （PC・Android両方から呼べるようにするため）。
 
 // ── Monitor loop ──────────────────────────────────────────────────────────────
 
@@ -298,7 +219,7 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
     const WAKE_SECS: u64 = 60;
 
     maybe_in_house(&events_path, &now_str());
-    maybe_auto_backup(&data_dir);
+    crate::core::events::maybe_auto_backup(&data_dir);
 
     let mut sleeping              = false;
     let mut threshold             = crate::THRESHOLD_SECS.load(std::sync::atomic::Ordering::Relaxed);
@@ -368,7 +289,7 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
         if last_backup_check.elapsed() >= BACKUP_CHECK_INTERVAL {
             last_backup_check = Instant::now();
             let dd = data_dir.clone();
-            thread::spawn(move || maybe_auto_backup(&dd));
+            thread::spawn(move || crate::core::events::maybe_auto_backup(&dd));
         }
 
         // ── Skip detection if paused ──────────────────────────────────────────

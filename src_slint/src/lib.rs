@@ -402,6 +402,12 @@ pub fn run() {
             settings_ui::compact_data(weak.clone(), s.clone());
         });
     }
+    {
+        let weak = window.as_weak();
+        window.on_clear_backups(move || {
+            settings_ui::clear_backups(weak.clone());
+        });
+    }
 
     // ── バックグラウンド処理 ──
 
