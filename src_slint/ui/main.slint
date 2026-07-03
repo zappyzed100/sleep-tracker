@@ -1585,10 +1585,10 @@ export component MainWindow inherits Window {
                 homeScroll.scroll-accum-y += event.delta-y / 1px;
                 if homeScroll.scroll-accum-y > 60 {
                     homeScroll.scroll-accum-y = 0;
-                    root.next-week();
+                    root.prev-week();
                 } else if homeScroll.scroll-accum-y < -60 {
                     homeScroll.scroll-accum-y = 0;
-                    root.prev-week();
+                    root.next-week();
                 }
                 accept
             }
