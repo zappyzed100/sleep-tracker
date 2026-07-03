@@ -27,11 +27,17 @@ config.json
 # Claude Code project memory
 .claude/
 
-# src_slint runtime files（心拍/ロック等。sleep_events.txt・sleep_manual.txtは追跡対象）
+# src_slint runtime files（心拍/ロック等）
 src_slint/data/device_heartbeat.txt
 src_slint/data/sleep_heartbeat.txt
 src_slint/data/monitor.pid
 src_slint/data/monitor_paused
+
+# 個人の睡眠・在宅/外出履歴データ（実データ。公開リポジトリに絶対に含めない）
+src_slint/data/sleep_events.txt
+src_slint/data/sleep_manual.txt
+legacy/src_tauri/data/sleep_events.txt
+legacy/src_tauri/data/sleep_manual.txt
 
 # Android signing key (secret — never commit, any path incl. legacy/ backups)
 **/*.keystore
