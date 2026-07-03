@@ -362,7 +362,8 @@ component WeeklyChart {
     in property <[CurvePointVM]> waketime-curve;
     callback day-clicked(string);
 
-    height: 260px;
+    // 明示のheightは持たせない。使用箇所のvertical-stretch:1で親の余白いっぱいに
+    // 伸びるようにするため（固定値があるとstretchが効かずheight:260pxのままになる）。
 
     property <length> axis-l: 34px;
     property <length> axis-r: 46px;
@@ -618,7 +619,8 @@ component StatCol {
     in property <color> value-color: #cdd6f4;
 
     VerticalLayout {
-        spacing: 4px;
+        alignment: center;
+        spacing: 2px;
         Text {
             text: root.value;
             color: root.value-color;
@@ -681,7 +683,8 @@ component PredictionCard {
     callback now-clicked();
     callback optimal-clicked();
 
-    height: 68px;
+    width: 100%;
+    height: 100%;
 
     HorizontalLayout {
         padding-left: 20px;
@@ -720,6 +723,8 @@ component PredictionCard {
 
         nowBtn := TouchArea {
             width: 76px;
+            height: 34px;
+            y: (parent.height - self.height) / 2;
             clicked => { root.now-clicked(); }
             Rectangle {
                 background: nowBtn.has-hover ? #45475a : #313244;
@@ -729,6 +734,8 @@ component PredictionCard {
         }
         optBtn := TouchArea {
             width: 76px;
+            height: 34px;
+            y: (parent.height - self.height) / 2;
             clicked => { root.optimal-clicked(); }
             Rectangle {
                 background: optBtn.has-hover ? #45475a : #313244;
@@ -1123,74 +1130,82 @@ export component MainWindow inherits Window {
     callback add-session();
 
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        spacing: 0;
 
-        // ── トップバー ──
-        HorizontalLayout {
-            height: 44px;
-            spacing: 12px;
+        // ── トップバー（エッジツーエッジ、Tauri版のcrust色） ──
+        Rectangle {
+            background: #11111b;
+            height: 56px;
             HorizontalLayout {
-                spacing: 6px;
-                Text {
-                    text: "睡眠トラッカー";
-                    color: #cdd6f4;
-                    font-size: 22px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
-                Text {
-                    text: root.app-version;
-                    color: #a6adc8;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            HorizontalLayout {
-                spacing: 4px;
-                homeTabBtn := TouchArea {
-                    width: 68px;
-                    clicked => { root.tab = "home"; }
-                    VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "ホーム";
-                            color: root.tab == "home" ? #89b4fa : #cdd6f4;
-                            horizontal-alignment: center;
-                            font-size: 16px;
-                            font-weight: root.tab == "home" ? 700 : 400;
-                        }
-                        Rectangle { height: 3px; background: root.tab == "home" ? #89b4fa : transparent; }
+                height: 56px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 12px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "睡眠トラッカー";
+                        color: #cdd6f4;
+                        font-size: 22px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.app-version;
+                        color: #a6adc8;
+                        font-size: 13px;
+                        vertical-alignment: center;
                     }
                 }
-                settingsTabBtn := TouchArea {
-                    width: 68px;
-                    clicked => { root.tab = "settings"; }
-                    VerticalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "設定";
-                            color: root.tab == "settings" ? #89b4fa : #cdd6f4;
-                            horizontal-alignment: center;
-                            font-size: 16px;
-                            font-weight: root.tab == "settings" ? 700 : 400;
+                Rectangle { horizontal-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    homeTabBtn := TouchArea {
+                        width: 68px;
+                        clicked => { root.tab = "home"; }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "ホーム";
+                                color: root.tab == "home" ? #89b4fa : #cdd6f4;
+                                horizontal-alignment: center;
+                                font-size: 16px;
+                                font-weight: root.tab == "home" ? 700 : 400;
+                            }
+                            Rectangle { height: 3px; background: root.tab == "home" ? #89b4fa : transparent; }
                         }
-                        Rectangle { height: 3px; background: root.tab == "settings" ? #89b4fa : transparent; }
+                    }
+                    settingsTabBtn := TouchArea {
+                        width: 68px;
+                        clicked => { root.tab = "settings"; }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "設定";
+                                color: root.tab == "settings" ? #89b4fa : #cdd6f4;
+                                horizontal-alignment: center;
+                                font-size: 16px;
+                                font-weight: root.tab == "settings" ? 700 : 400;
+                            }
+                            Rectangle { height: 3px; background: root.tab == "settings" ? #89b4fa : transparent; }
+                        }
                     }
                 }
-            }
-            syncBtn := TouchArea {
-                width: 40px;
-                height: 40px;
-                clicked => { root.sync-now(); }
-                Rectangle {
-                    background: syncBtn.has-hover ? #45475a : #313244;
-                    border-radius: 6px;
-                    Text { text: "🔄"; horizontal-alignment: center; vertical-alignment: center; font-size: 17px; }
+                syncBtn := TouchArea {
+                    width: 36px;
+                    height: 36px;
+                    clicked => { root.sync-now(); }
+                    Text {
+                        text: "🔄";
+                        color: syncBtn.has-hover ? #cdd6f4 : #a6adc8;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        font-size: 18px;
+                    }
                 }
             }
         }
+        Rectangle { height: 1px; background: #313244; }
 
         if root.tab == "settings": SettingsPanel {
             vertical-stretch: 1;
@@ -1221,13 +1236,13 @@ export component MainWindow inherits Window {
             clear-all-data => { root.clear-all-data(); }
         }
 
-        if root.tab == "home": Rectangle {
+        if root.tab == "home": VerticalLayout {
             vertical-stretch: 1;
-            background: #181825;
-            border-radius: 10px;
-            clip: true;
 
-            VerticalLayout {
+            // ── 睡眠予測 ──
+            Rectangle {
+                background: #181825;
+                height: 64px;
                 PredictionCard {
                     bed-hour: root.bed-hour;
                     bed-minute: root.bed-minute;
@@ -1244,12 +1259,16 @@ export component MainWindow inherits Window {
                     now-clicked => { root.set-bedtime-now(); }
                     optimal-clicked => { root.set-bedtime-optimal(); }
                 }
+            }
 
-                Rectangle { height: 1px; background: #313244; }
+            Rectangle { height: 1px; background: #313244; }
 
-                // ── 統計ストリップ ──
+            // ── 統計ストリップ ──
+            Rectangle {
+                background: #181825;
+                height: 64px;
+
                 HorizontalLayout {
-                    height: 68px;
                     padding-left: 20px;
                     padding-right: 20px;
                     spacing: 18px;
@@ -1277,17 +1296,23 @@ export component MainWindow inherits Window {
                     Divider { }
                     StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
                 }
+            }
 
-                Rectangle { height: 1px; background: #313244; }
+            Rectangle { height: 1px; background: #313244; }
 
-                // ── 週ナビゲーション（左端=前の週、右端=次の週、中央=日付、その右にカレンダー/今週） ──
+            // ── 週ナビゲーション（左端=前の週、右端=次の週、中央=日付、その右にカレンダー/今週） ──
+            Rectangle {
+                background: #181825;
+                height: 50px;
+
                 HorizontalLayout {
-                    height: 52px;
                     padding-left: 20px;
                     padding-right: 20px;
                     spacing: 12px;
                     prevBtn := TouchArea {
                         width: 96px;
+                        height: 34px;
+                        y: (parent.height - self.height) / 2;
                         clicked => { root.prev-week(); }
                         Rectangle {
                             background: prevBtn.has-hover ? #45475a : #313244;
@@ -1304,17 +1329,22 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                     calBtn := TouchArea {
-                        width: 36px;
-                        height: 36px;
+                        width: 32px;
+                        height: 32px;
+                        y: (parent.height - self.height) / 2;
                         clicked => { root.open-calendar(); }
-                        Rectangle {
-                            background: calBtn.has-hover ? #45475a : #313244;
-                            border-radius: 6px;
-                            Text { text: "📅"; horizontal-alignment: center; vertical-alignment: center; font-size: 16px; }
+                        Text {
+                            text: "📅";
+                            color: calBtn.has-hover ? #cdd6f4 : #a6adc8;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            font-size: 18px;
                         }
                     }
                     todayBtn := TouchArea {
                         width: 66px;
+                        height: 34px;
+                        y: (parent.height - self.height) / 2;
                         clicked => { root.this-week(); }
                         Rectangle {
                             background: todayBtn.has-hover ? #45475a : #313244;
@@ -1324,6 +1354,8 @@ export component MainWindow inherits Window {
                     }
                     nextBtn := TouchArea {
                         width: 96px;
+                        height: 34px;
+                        y: (parent.height - self.height) / 2;
                         clicked => { root.next-week(); }
                         Rectangle {
                             background: nextBtn.has-hover ? #45475a : #313244;
@@ -1332,25 +1364,25 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+            }
 
-                Rectangle { height: 1px; background: #313244; }
+            Rectangle { height: 1px; background: #313244; }
 
-                // ── 週間チャート ──
-                VerticalLayout {
+            // ── 週間チャート（背景なし・余白のみ。空いた縦幅は自動でチャートに回る） ──
+            VerticalLayout {
+                vertical-stretch: 1;
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-top: 16px;
+                padding-bottom: 18px;
+                WeeklyChart {
                     vertical-stretch: 1;
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    padding-top: 14px;
-                    padding-bottom: 16px;
-                    WeeklyChart {
-                        vertical-stretch: 1;
-                        week: root.week;
-                        y-labels: root.y-labels;
-                        y2-labels: root.y2-labels;
-                        bedtime-curve: root.bedtime-curve;
-                        waketime-curve: root.waketime-curve;
-                        day-clicked(d) => { root.day-clicked(d); }
-                    }
+                    week: root.week;
+                    y-labels: root.y-labels;
+                    y2-labels: root.y2-labels;
+                    bedtime-curve: root.bedtime-curve;
+                    waketime-curve: root.waketime-curve;
+                    day-clicked(d) => { root.day-clicked(d); }
                 }
             }
         }
