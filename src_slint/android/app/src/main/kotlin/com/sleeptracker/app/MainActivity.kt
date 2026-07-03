@@ -1,7 +1,12 @@
 package com.sleeptracker.app
 
 import android.app.NativeActivity
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -22,6 +27,8 @@ class MainActivity : NativeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        requestIgnoreBatteryOptimizations()
+
         // WorkManagerの初期化はディスクI/O（Room DB作成）を伴いメインスレッドを
         // 数秒ブロックすることがあるためバックグラウンドスレッドで行う。
         val appCtx = applicationContext
@@ -35,6 +42,24 @@ class MainActivity : NativeActivity() {
                 workRequest
             )
         }.start()
+    }
+
+    // Dozeモード（画面OFF・静止状態が続くと入る省電力モード）に入ると、WorkManagerの
+    // 15分間隔は「最短でもこの間隔」に格下げされ、実行が数十分〜数時間単位で遅延する。
+    // スリープ中（＝画面OFFが最も長く続く場面）ほど遅延しやすいため、バッテリー最適化の
+    // 除外をユーザーに求めてDozeの影響を軽減する。既に許可済みなら何もしない。
+    private fun requestIgnoreBatteryOptimizations() {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        try {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            })
+        } catch (e: Exception) {
+            // 一部端末（MIUI等）でこのIntentに対応するActivityが存在しない場合がある。
+            // その場合は端末の設定アプリから手動で許可してもらう必要がある。
+            Log.w("SleepTracker", "[app] requestIgnoreBatteryOptimizations: ERROR ${e.message}")
+        }
     }
 
     // 起動時／バックグラウンドから画面ONで復帰時／スリープから画面ONで復帰時、
