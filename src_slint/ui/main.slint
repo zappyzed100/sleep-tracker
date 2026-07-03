@@ -126,11 +126,13 @@ component DayDetailModal {
             spacing: 12px;
 
             HorizontalLayout {
-                Text {
+                TextInput {
                     text: "🌙 " + root.date-label + " の睡眠";
                     color: #f9e2af;
                     font-size: 17px;
                     font-weight: 700;
+                    read-only: true;
+                    single-line: true;
                     horizontal-stretch: 1;
                 }
                 closeBtn := TouchArea {
@@ -150,7 +152,7 @@ component DayDetailModal {
                 VerticalLayout {
                     spacing: 8px;
 
-                    if root.sessions.length > 0: Text {
+                    if root.sessions.length > 0: TextInput {
                         width: 100%;
                         text: "合計 " + root.total-label;
                         color: #89b4fa;
@@ -159,6 +161,8 @@ component DayDetailModal {
                         height: 20px;
                         vertical-stretch: 0;
                         horizontal-alignment: left;
+                        read-only: true;
+                        single-line: true;
                     }
 
                     if root.sessions.length == 0: Text {
@@ -189,19 +193,23 @@ component DayDetailModal {
                                 font-weight: 700;
                                 vertical-alignment: center;
                             }
-                            Text {
+                            TextInput {
                                 text: s.time-range;
                                 color: #cdd6f4;
                                 font-size: 16px;
                                 font-weight: 700;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
+                                read-only: true;
+                                single-line: true;
                             }
-                            Text {
+                            TextInput {
                                 text: s.duration-label;
                                 color: #89b4fa;
                                 font-size: 15px;
                                 vertical-alignment: center;
+                                read-only: true;
+                                single-line: true;
                             }
                             delBtn := TouchArea {
                                 width: 50px;
@@ -332,10 +340,11 @@ component LegendItem {
     in property <color> swatch-color;
     in property <string> label;
     HorizontalLayout {
+        height: 16px;
         spacing: 6px;
         Rectangle {
             width: 12px; height: 12px;
-            y: 2px;
+            y: (parent.height - self.height) / 2;
             background: root.swatch-color;
             border-radius: 2px;
         }
@@ -427,7 +436,7 @@ component WeeklyChart {
             clicked => { root.day-clicked(day.date); }
             property <length> bar-h: self.height * max(day.bar-frac, 0.02);
             property <length> bar-y: self.height - self.bar-h;
-            property <length> bar-w: self.width * 0.55;
+            property <length> bar-w: self.width * 0.7;
             Rectangle {
                 x: (parent.width - col.bar-w) / 2;
                 y: col.bar-y;
@@ -463,19 +472,19 @@ component WeeklyChart {
     }
 
     for pt in root.bedtime-curve: Rectangle {
-        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 2.5px;
-        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 2.5px;
-        width: 5px;
-        height: 5px;
-        border-radius: 2.5px;
+        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 3.5px;
+        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 3.5px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
         background: #f9e2af;
     }
     for pt in root.waketime-curve: Rectangle {
-        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 2.5px;
-        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 2.5px;
-        width: 5px;
-        height: 5px;
-        border-radius: 2.5px;
+        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 3.5px;
+        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 3.5px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
         background: #a6e3a1;
     }
     for day[i] in root.week: LineDot {
@@ -621,11 +630,13 @@ component StatCol {
     VerticalLayout {
         alignment: center;
         spacing: 2px;
-        Text {
+        TextInput {
             text: root.value;
             color: root.value-color;
             font-size: 28px;
             font-weight: 700;
+            read-only: true;
+            single-line: true;
         }
         Text {
             text: root.label;
@@ -701,6 +712,8 @@ component PredictionCard {
         }
 
         HorizontalLayout {
+            height: 34px;
+            y: (parent.height - self.height) / 2;
             spacing: 4px;
             NumSpin {
                 spin-width: 60px;
@@ -750,11 +763,13 @@ component PredictionCard {
 
         if root.has-data: VerticalLayout {
             alignment: center;
-            Text {
+            TextInput {
                 text: root.bed-time-label + " 入眠 → " + root.predicted-wake-time + " 起床";
                 color: #cdd6f4;
                 font-size: 19px;
                 font-weight: 700;
+                read-only: true;
+                single-line: true;
             }
         }
 
@@ -824,6 +839,8 @@ component CheckRow {
         height: 100%;
         clicked => { root.toggled(); }
         HorizontalLayout {
+            width: 100%;
+            height: 100%;
             spacing: 8px;
             alignment: start;
             Rectangle {
@@ -840,6 +857,7 @@ component CheckRow {
                 color: #cdd6f4;
                 font-size: 16px;
                 height: 18px;
+                y: (parent.height - self.height) / 2;
                 vertical-alignment: center;
             }
         }
@@ -1162,8 +1180,11 @@ export component MainWindow inherits Window {
                     spacing: 4px;
                     homeTabBtn := TouchArea {
                         width: 68px;
+                        height: 41px;
+                        y: parent.height - self.height;
                         clicked => { root.tab = "home"; }
                         VerticalLayout {
+                            alignment: end;
                             spacing: 4px;
                             Text {
                                 text: "ホーム";
@@ -1177,8 +1198,11 @@ export component MainWindow inherits Window {
                     }
                     settingsTabBtn := TouchArea {
                         width: 68px;
+                        height: 41px;
+                        y: parent.height - self.height;
                         clicked => { root.tab = "settings"; }
                         VerticalLayout {
+                            alignment: end;
                             spacing: 4px;
                             Text {
                                 text: "設定";
@@ -1194,6 +1218,7 @@ export component MainWindow inherits Window {
                 syncBtn := TouchArea {
                     width: 36px;
                     height: 36px;
+                    y: parent.height - self.height - 3px;
                     clicked => { root.sync-now(); }
                     Text {
                         text: "🔄";
@@ -1278,6 +1303,8 @@ export component MainWindow inherits Window {
 
                     HorizontalLayout {
                         horizontal-stretch: 0;
+                        height: 30px;
+                        y: (parent.height - self.height) / 2;
                         spacing: 6px;
                         PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
                         PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
@@ -1320,10 +1347,13 @@ export component MainWindow inherits Window {
                             Text { text: "◀ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
                         }
                     }
-                    Text {
+                    TextInput {
                         text: root.week-range-label;
                         color: #cdd6f4;
                         font-size: 16px;
+                        font-weight: 700;
+                        read-only: true;
+                        single-line: true;
                         horizontal-stretch: 1;
                         horizontal-alignment: center;
                         vertical-alignment: center;

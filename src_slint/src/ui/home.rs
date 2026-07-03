@@ -237,7 +237,7 @@ fn catmull_rom(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), t
 // Catmull-Romスプラインでサンプル点を密に生成する。折れ線を「曲線・実線」に
 // 見せるため、Slint側ではこのサンプル点を小さい点として大量に並べて描画する。
 fn build_curve(values: &[Option<f32>]) -> Vec<CurvePointVM> {
-    const STEPS: usize = 14;
+    const STEPS: usize = 28;
     let n = values.len().max(1) as f32;
     let points: Vec<Option<(f32, f32)>> = values.iter().enumerate()
         .map(|(i, v)| v.map(|y| ((i as f32 + 0.5) / n, y)))
