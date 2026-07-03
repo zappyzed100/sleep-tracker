@@ -29,13 +29,13 @@ component NumSpin {
             border-color: ta.has-hover ? #45475a : transparent;
 
             Text {
-                x: 10px;
-                width: parent.width - 10px;
+                x: 0px;
+                width: 100%;
                 text: (root.zero-pad && root.value < 10) ? "0\{root.value}" : "\{root.value}";
                 color: #cdd6f4;
                 font-size: 15px;
                 font-weight: 700;
-                horizontal-alignment: left;
+                horizontal-alignment: center;
                 vertical-alignment: center;
             }
 
@@ -292,7 +292,7 @@ component DayDetailModal {
                         }
                     }
 
-                    if root.error-text != "": Text {
+                    if root.error-text != "": TextInput {
                         width: 100%;
                         text: root.error-text;
                         color: #f38ba8;
@@ -300,6 +300,7 @@ component DayDetailModal {
                         wrap: word-wrap;
                         horizontal-alignment: left;
                         vertical-stretch: 0;
+                        read-only: true;
                     }
                 }
             }
@@ -326,6 +327,7 @@ export struct DaySummaryVM {
 export struct CurvePointVM {
     x: float,
     y: float,
+    new-run: bool,  // trueなら直前の点とは繋がない（データ欠損をまたぐ境界）
 }
 
 export struct CalendarDayVM {
@@ -363,6 +365,39 @@ component LineDot inherits Rectangle {
     border-radius: 5px;
 }
 
+// 隣り合う2つのCurvePointVMを太い回転矩形で繋ぎ、点の連なりではなく
+// 途切れない実線に見せる（Slintの Path はアスペクト比維持スケールで横長
+// チャートに使えなかったため、細かい線分を回転させて繋ぐ方式を採る）。
+// ルート要素に明示のx/y/幅/高さ0を持たせないと、内部Imageの回転原点が
+// 親のレイアウト位置ぶんずれて描画される（過去にLineSegで踏んだバグ）。
+component CurveSeg {
+    in property <float> x1;
+    in property <float> y1;
+    in property <float> x2;
+    in property <float> y2;
+    in property <color> seg-color;
+    in property <bool> connected: true;
+
+    x: 0px;
+    y: 0px;
+    width: 0px;
+    height: 0px;
+
+    property <float> seg-dx: root.x2 - root.x1;
+    property <float> seg-dy: root.y2 - root.y1;
+    property <float> seg-len: sqrt(root.seg-dx * root.seg-dx + root.seg-dy * root.seg-dy);
+
+    if root.connected: Rectangle {
+        x: root.x1 * 1px;
+        y: root.y1 * 1px - 3px;
+        width: root.seg-len * 1px;
+        height: 6px;
+        background: root.seg-color;
+        transform-rotation: atan2(root.seg-dy, root.seg-dx);
+        transform-origin: { x: 0px, y: 3px };
+    }
+}
+
 component WeeklyChart {
     in property <[DaySummaryVM]> week;
     in property <[string]> y-labels;
@@ -377,7 +412,7 @@ component WeeklyChart {
     property <length> axis-l: 34px;
     property <length> axis-r: 46px;
     property <length> legend-h: 24px;
-    property <length> daylabel-h: 34px;
+    property <length> daylabel-h: 22px;
     property <length> bars-h: root.height - root.legend-h - root.daylabel-h;
     // 棒グラフの列間隔・曜日ラベルの列間隔は必ず同じ値を使う。
     // 別々の値だと列とラベルの中心がずれる（特に中間の列ほど誤差が蓄積する）。
@@ -471,21 +506,28 @@ component WeeklyChart {
         root.axis-l-px + (idx + 0.5) / 7 * root.chart-w-px
     }
 
-    for pt in root.bedtime-curve: Rectangle {
-        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 3.5px;
-        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 3.5px;
-        width: 7px;
-        height: 7px;
-        border-radius: 3.5px;
-        background: #f9e2af;
+    function curve-px-x(frac: float) -> float {
+        root.axis-l-px + frac * root.chart-w-px
     }
-    for pt in root.waketime-curve: Rectangle {
-        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 3.5px;
-        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 3.5px;
-        width: 7px;
-        height: 7px;
-        border-radius: 3.5px;
-        background: #a6e3a1;
+    function curve-px-y(frac: float) -> float {
+        root.legend-h-px + frac * root.bars-h-px
+    }
+
+    for pt[i] in root.bedtime-curve: CurveSeg {
+        x1: root.curve-px-x(pt.x);
+        y1: root.curve-px-y(pt.y);
+        x2: i + 1 < root.bedtime-curve.length ? root.curve-px-x(root.bedtime-curve[i + 1].x) : self.x1;
+        y2: i + 1 < root.bedtime-curve.length ? root.curve-px-y(root.bedtime-curve[i + 1].y) : self.y1;
+        connected: i + 1 < root.bedtime-curve.length && !root.bedtime-curve[i + 1].new-run;
+        seg-color: #f9e2af;
+    }
+    for pt[i] in root.waketime-curve: CurveSeg {
+        x1: root.curve-px-x(pt.x);
+        y1: root.curve-px-y(pt.y);
+        x2: i + 1 < root.waketime-curve.length ? root.curve-px-x(root.waketime-curve[i + 1].x) : self.x1;
+        y2: i + 1 < root.waketime-curve.length ? root.curve-px-y(root.waketime-curve[i + 1].y) : self.y1;
+        connected: i + 1 < root.waketime-curve.length && !root.waketime-curve[i + 1].new-run;
+        seg-color: #a6e3a1;
     }
     for day[i] in root.week: LineDot {
         cx: root.day-cx(i);
@@ -499,18 +541,27 @@ component WeeklyChart {
     }
 
     // ── 曜日ラベル（棒グラフと同じcol-spacingで列を揃える） ──
+    // TextをそのままHorizontalLayoutの子にすると、日付文字数の違い
+    // （"7/2"=3文字 と "6/29"=4文字など）でTextごとのpreferred-widthが
+    // 変わり、列幅が棒グラフ側（内容を持たないTouchArea＝常に均等割り）
+    // とズレてバー中心とラベル中心が合わなくなる。Rectangleで包んで
+    // 中身の自然幅を層のサイズ計算に影響させないようにする。
     HorizontalLayout {
         x: root.axis-l;
         y: root.legend-h + root.bars-h;
         width: root.width - root.axis-l - root.axis-r;
         height: root.daylabel-h;
         spacing: root.col-spacing;
-        for day[i] in root.week: Text {
-            text: day.day-label;
-            color: #cdd6f4;
-            font-size: 13px;
-            horizontal-alignment: center;
-            vertical-alignment: top;
+        for day[i] in root.week: Rectangle {
+            Text {
+                width: 100%;
+                height: 100%;
+                text: day.day-label;
+                color: #cdd6f4;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
         }
     }
 }
@@ -560,13 +611,15 @@ component CalendarPicker {
                         Text { text: "◀"; color: #a6adc8; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
-                Text {
+                TextInput {
                     text: root.month-label;
                     color: #cdd6f4;
                     font-size: 15px;
                     font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                    read-only: true;
+                    single-line: true;
                     horizontal-stretch: 1;
                 }
                 nextM := TouchArea {
@@ -667,11 +720,11 @@ component PeriodTab {
         height: 100%;
         clicked => { root.clicked(); }
         Rectangle {
-            background: root.active ? #89b4fa : (ta.has-hover ? #313244 : transparent);
+            background: root.active ? #89b4fa : (ta.has-hover ? #45475a : #313244);
             border-radius: 6px;
             Text {
                 text: root.text;
-                color: root.active ? #1e1e2e : #cdd6f4;
+                color: root.active ? #11111b : #a6adc8;
                 font-size: 14px;
                 font-weight: root.active ? 700 : 400;
                 horizontal-alignment: center;
@@ -701,7 +754,6 @@ component PredictionCard {
         padding-left: 20px;
         padding-right: 20px;
         spacing: 14px;
-        alignment: start;
 
         Text {
             text: "睡眠\n予測";
@@ -751,9 +803,9 @@ component PredictionCard {
             y: (parent.height - self.height) / 2;
             clicked => { root.optimal-clicked(); }
             Rectangle {
-                background: optBtn.has-hover ? #45475a : #313244;
+                background: optBtn.has-hover ? #74a8f7 : #89b4fa;
                 border-radius: 6px;
-                Text { text: "最適睡眠"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; }
+                Text { text: "最適睡眠"; color: #11111b; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; font-weight: 700; }
             }
         }
 
@@ -775,11 +827,18 @@ component PredictionCard {
 
         if root.has-data: Divider { }
 
-        if root.has-data: Rectangle { horizontal-stretch: 1; }
-
         if root.has-data: VerticalLayout {
+            horizontal-stretch: 1;
             alignment: center;
-            Text { text: root.predicted-method; color: #a6adc8; font-size: 13px; horizontal-alignment: right; }
+            TextInput {
+                width: 100%;
+                text: root.predicted-method;
+                color: #a6adc8;
+                font-size: 13px;
+                horizontal-alignment: right;
+                read-only: true;
+                single-line: true;
+            }
         }
 
         if !root.has-data: Text {
@@ -867,7 +926,7 @@ component CheckRow {
 component SettingsNote {
     in property <string> text;
     width: 100%;
-    Text { width: 100%; text: root.text; color: #a6adc8; font-size: 13px; wrap: word-wrap; horizontal-alignment: left; }
+    TextInput { width: 100%; text: root.text; color: #a6adc8; font-size: 13px; wrap: word-wrap; horizontal-alignment: left; read-only: true; }
 }
 
 component SettingsSection {
@@ -1168,11 +1227,13 @@ export component MainWindow inherits Window {
                         font-weight: 700;
                         vertical-alignment: center;
                     }
-                    Text {
+                    TextInput {
                         text: root.app-version;
                         color: #a6adc8;
                         font-size: 13px;
                         vertical-alignment: center;
+                        read-only: true;
+                        single-line: true;
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -1344,7 +1405,7 @@ export component MainWindow inherits Window {
                         Rectangle {
                             background: prevBtn.has-hover ? #45475a : #313244;
                             border-radius: 6px;
-                            Text { text: "◀ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
+                            Text { text: "‹ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
                         }
                     }
                     TextInput {
@@ -1390,7 +1451,7 @@ export component MainWindow inherits Window {
                         Rectangle {
                             background: nextBtn.has-hover ? #45475a : #313244;
                             border-radius: 6px;
-                            Text { text: "次の週 ▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
+                            Text { text: "次の週 ›"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
                         }
                     }
                 }

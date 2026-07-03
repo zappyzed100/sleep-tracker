@@ -247,8 +247,9 @@ fn build_curve(values: &[Option<f32>]) -> Vec<CurvePointVM> {
     let mut run: Vec<(f32, f32)> = Vec::new();
     let flush = |run: &mut Vec<(f32, f32)>, result: &mut Vec<CurvePointVM>| {
         let n = run.len();
+        let start_len = result.len();
         if n == 1 {
-            result.push(CurvePointVM { x: run[0].0, y: run[0].1 });
+            result.push(CurvePointVM { x: run[0].0, y: run[0].1, new_run: true });
         } else if n > 1 {
             for i in 0..n - 1 {
                 let p0 = if i == 0 { run[0] } else { run[i - 1] };
@@ -258,10 +259,13 @@ fn build_curve(values: &[Option<f32>]) -> Vec<CurvePointVM> {
                 for s in 0..STEPS {
                     let t = s as f32 / STEPS as f32;
                     let (x, y) = catmull_rom(p0, p1, p2, p3, t);
-                    result.push(CurvePointVM { x, y });
+                    result.push(CurvePointVM { x, y, new_run: false });
                 }
             }
-            result.push(CurvePointVM { x: run[n - 1].0, y: run[n - 1].1 });
+            result.push(CurvePointVM { x: run[n - 1].0, y: run[n - 1].1, new_run: false });
+        }
+        if let Some(first) = result.get_mut(start_len) {
+            first.new_run = true;
         }
         run.clear();
     };
@@ -302,7 +306,7 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
         let is_active = selected.as_deref() == Some(date_str.as_str());
         DaySummaryVM {
             date: date_str.into(),
-            day_label: format!("{}\n{}/{}", DAYS_JA[i], d.date.month(), d.date.day()).into(),
+            day_label: format!("{} {}/{}", DAYS_JA[i], d.date.month(), d.date.day()).into(),
             duration_label: if d.total_hours > 0.0 { utils::format_duration(d.total_hours).into() } else { "".into() },
             bar_frac: (d.total_hours / y_max) as f32,
             has_data: d.total_hours > 0.0,
