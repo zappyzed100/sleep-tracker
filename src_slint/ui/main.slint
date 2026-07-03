@@ -437,12 +437,12 @@ component CurveSeg {
 
     if root.connected: Rectangle {
         x: root.x1 * 1px;
-        y: root.y1 * 1px - 2px;
+        y: root.y1 * 1px - 1.5px;
         width: root.seg-len * 1px;
-        height: 4px;
+        height: 3px;
         background: root.seg-color;
         transform-rotation: atan2(root.seg-dy, root.seg-dx);
-        transform-origin: { x: 0px, y: 2px };
+        transform-origin: { x: 0px, y: 1.5px };
     }
 }
 
@@ -754,6 +754,8 @@ component StatCol {
 }
 
 component Divider {
+    width: 1px;
+    height: 40px;
     Rectangle {
         width: 1px;
         height: 40px;
@@ -1045,6 +1047,10 @@ component SettingsPanel {
     in-out property <bool> show-secret: false;
     in property <bool> test-in-progress: false;
     in property <bool> sync-in-progress: false;
+    in property <bool> export-in-progress: false;
+    in property <bool> backup-in-progress: false;
+    in property <bool> restore-in-progress: false;
+    in property <bool> clear-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1174,19 +1180,40 @@ component SettingsPanel {
                 title: "データ管理";
                 HorizontalLayout {
                     alignment: start;
-                    SettingsBtn { text: "CSVエクスポート"; btn-width: 130px; clicked => { root.export-csv(); } }
+                    SettingsBtn {
+                        text: root.export-in-progress ? "書き出し中…" : "CSVエクスポート";
+                        btn-width: 130px;
+                        busy: root.export-in-progress;
+                        clicked => { root.export-csv(); }
+                    }
                 }
                 SettingsNote { text: "Excel等で分析用。就寝・起床・睡眠時間・種別の4列。"; }
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
-                    SettingsBtn { text: "バックアップ"; btn-width: 110px; clicked => { root.backup(); } }
-                    SettingsBtn { text: "バックアップから復元"; btn-width: 170px; clicked => { root.restore(); } }
+                    SettingsBtn {
+                        text: root.backup-in-progress ? "保存中…" : "バックアップ";
+                        btn-width: 110px;
+                        busy: root.backup-in-progress;
+                        clicked => { root.backup(); }
+                    }
+                    SettingsBtn {
+                        text: root.restore-in-progress ? "復元中…" : "バックアップから復元";
+                        btn-width: 170px;
+                        busy: root.restore-in-progress;
+                        clicked => { root.restore(); }
+                    }
                 }
                 SettingsNote { text: "生データをそのまま保存・復元。別PCへの移行や完全バックアップに。"; }
                 HorizontalLayout {
                     alignment: start;
-                    SettingsBtn { text: "全データを削除"; btn-width: 130px; danger: true; clicked => { root.clear-all-data(); } }
+                    SettingsBtn {
+                        text: root.clear-in-progress ? "削除中…" : "全データを削除";
+                        btn-width: 130px;
+                        danger: true;
+                        busy: root.clear-in-progress;
+                        clicked => { root.clear-all-data(); }
+                    }
                 }
                 if root.data-message != "": SettingsNote { text: root.data-message; }
             }
@@ -1274,6 +1301,10 @@ export component MainWindow inherits Window {
     in property <string> data-message: "";
     in-out property <bool> test-in-progress: false;
     in-out property <bool> sync-in-progress: false;
+    in-out property <bool> export-in-progress: false;
+    in-out property <bool> backup-in-progress: false;
+    in-out property <bool> restore-in-progress: false;
+    in-out property <bool> clear-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1415,6 +1446,10 @@ export component MainWindow inherits Window {
             data-message: root.data-message;
             test-in-progress: root.test-in-progress;
             sync-in-progress: root.sync-in-progress;
+            export-in-progress: root.export-in-progress;
+            backup-in-progress: root.backup-in-progress;
+            restore-in-progress: root.restore-in-progress;
+            clear-in-progress: root.clear-in-progress;
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
             threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
@@ -1433,10 +1468,30 @@ export component MainWindow inherits Window {
                     root.sync-now();
                 }
             }
-            export-csv => { root.export-csv(); }
-            backup => { root.backup(); }
-            restore => { root.restore(); }
-            clear-all-data => { root.clear-all-data(); }
+            export-csv => {
+                if (!root.export-in-progress) {
+                    root.export-in-progress = true;
+                    root.export-csv();
+                }
+            }
+            backup => {
+                if (!root.backup-in-progress) {
+                    root.backup-in-progress = true;
+                    root.backup();
+                }
+            }
+            restore => {
+                if (!root.restore-in-progress) {
+                    root.restore-in-progress = true;
+                    root.restore();
+                }
+            }
+            clear-all-data => {
+                if (!root.clear-in-progress) {
+                    root.clear-in-progress = true;
+                    root.clear-all-data();
+                }
+            }
         }
 
         if root.tab == "home": homeScroll := TouchArea {
@@ -1465,6 +1520,10 @@ export component MainWindow inherits Window {
                 background: #181825;
                 height: 64px;
                 PredictionCard {
+                    x: 0px;
+                    y: 0px;
+                    width: 100%;
+                    height: 100%;
                     bed-hour: root.bed-hour;
                     bed-minute: root.bed-minute;
                     bed-time-label: root.bed-time-label;
@@ -1504,36 +1563,27 @@ export component MainWindow inherits Window {
 
                     Text { text: "統計"; color: #a6adc8; font-size: 13px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 0; }
 
-                    // ラベルの右側は残り幅いっぱいを使い、中でセンタリングする。
-                    // 左詰めのままだと右側だけ大きな余白が残り、左右のバランスが
-                    // 崩れて見えるため（左は20pxパディングのみ、右は数百px余る）。
                     HorizontalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        spacing: 18px;
-
-                        HorizontalLayout {
-                            horizontal-stretch: 0;
-                            height: 30px;
-                            y: (parent.height - self.height) / 2;
-                            spacing: 6px;
-                            PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
-                            PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
-                            PeriodTab { text: "1年"; active: root.period-key == "year"; clicked => { root.period-changed("year"); } }
-                            PeriodTab { text: "全期間"; tab-width: 70px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
-                        }
-
-                        Divider { }
-                        StatCol { value: root.days-recorded; label: "記録日数"; }
-                        Divider { }
-                        StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
-                        Divider { }
-                        StatCol { value: root.last-sleep; label: "最後の睡眠"; }
-                        Divider { }
-                        StatCol { value: root.current-time; label: "現在時刻"; }
-                        Divider { }
-                        StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
+                        horizontal-stretch: 0;
+                        height: 30px;
+                        y: (parent.height - self.height) / 2;
+                        spacing: 6px;
+                        PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
+                        PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
+                        PeriodTab { text: "1年"; active: root.period-key == "year"; clicked => { root.period-changed("year"); } }
+                        PeriodTab { text: "全期間"; tab-width: 70px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
                     }
+
+                    Divider { }
+                    StatCol { value: root.days-recorded; label: "記録日数"; }
+                    Divider { }
+                    StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
+                    Divider { }
+                    StatCol { value: root.last-sleep; label: "最後の睡眠"; }
+                    Divider { }
+                    StatCol { value: root.current-time; label: "現在時刻"; }
+                    Divider { }
+                    StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
                 }
             }
 

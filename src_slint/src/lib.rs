@@ -125,12 +125,15 @@ pub fn run() {
     let window = MainWindow::new().expect("ウィンドウの作成に失敗しました");
     window.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
 
-    // 睡眠予測カードの初期入眠時刻 = 現在時刻（PredictionCard.tsx の currentHHMM 相当）
+    // 睡眠予測カードの初期入眠時刻 = 現在時刻（PredictionCard.tsx の currentHHMM 相当）。
+    // 「今すぐ」ボタンを押したのと同じ状態なので、起動時からbedtime-sourceも"now"にして
+    // ボタンの選択状態表示を実態と一致させる。
     {
         use chrono::Local;
         let now = Local::now();
         window.set_bed_hour(now.format("%H").to_string().parse().unwrap_or(22));
         window.set_bed_minute(now.format("%M").to_string().parse().unwrap_or(0));
+        window.set_bedtime_source("now".into());
     }
 
     settings_ui::load_into_window(&window);
@@ -349,27 +352,27 @@ pub fn run() {
     {
         let weak = window.as_weak();
         window.on_export_csv(move || {
-            if let Some(w) = weak.upgrade() { settings_ui::export_csv(&w); }
+            settings_ui::export_csv(weak.clone());
         });
     }
     {
         let weak = window.as_weak();
         window.on_backup(move || {
-            if let Some(w) = weak.upgrade() { settings_ui::backup(&w); }
+            settings_ui::backup(weak.clone());
         });
     }
     {
         let weak = window.as_weak();
         let s = state.clone();
         window.on_restore(move || {
-            if let Some(w) = weak.upgrade() { settings_ui::restore(&w, &s); }
+            settings_ui::restore(weak.clone(), s.clone());
         });
     }
     {
         let weak = window.as_weak();
         let s = state.clone();
         window.on_clear_all_data(move || {
-            if let Some(w) = weak.upgrade() { settings_ui::clear_all_data(&w, &s); }
+            settings_ui::clear_all_data(weak.clone(), s.clone());
         });
     }
 
