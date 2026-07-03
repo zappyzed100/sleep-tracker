@@ -31,9 +31,10 @@ static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
 
 // ── Path utilities ────────────────────────────────────────────────────────────
 //
-// デスクトップ: Tauri版の repo_root() と同じ考え方で、exe の場所から上に辿って
-// src_tauri/ をマーカーに探す。開発中は既存Tauri版と同じデータ
-// （sleep_events.txt等）を共有して実データで検証できるようにするための暫定措置。
+// デスクトップ: exe の場所から上に辿って ui/main.slint をマーカーにsrc_slint/
+// 自身を探す。データ・設定ファイルはsrc_slint/配下に自己完結させる
+// （以前はTauri版のsrc_tauri/data/を間借りしていたが、src_tauri/を削除すると
+// データを見失う脆い作りだったため、src_slint単体で完結するよう変更した）。
 // Android: setup()でAndroidのアプリ内部ストレージパスを渡してもらう（Tauri版のAPP_DIR相当）。
 
 #[cfg(target_os = "android")]
@@ -61,13 +62,13 @@ pub fn android_external_dir() -> Option<PathBuf> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn repo_root() -> &'static PathBuf {
+fn app_root() -> &'static PathBuf {
     static ROOT: OnceLock<PathBuf> = OnceLock::new();
     ROOT.get_or_init(|| {
         let exe = std::env::current_exe().unwrap_or_default();
         let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
         for _ in 0..8 {
-            if dir.join("src_tauri").exists() { return dir; }
+            if dir.join("ui").join("main.slint").exists() { return dir; }
             match dir.parent() {
                 Some(p) => dir = p.to_path_buf(),
                 None => break,
@@ -81,7 +82,7 @@ fn repo_root() -> &'static PathBuf {
 pub fn data_dir() -> PathBuf {
     static DATA: OnceLock<PathBuf> = OnceLock::new();
     DATA.get_or_init(|| {
-        let dir = repo_root().join("src_tauri").join("data");
+        let dir = app_root().join("data");
         let _ = std::fs::create_dir_all(&dir);
         dir
     }).clone()
@@ -94,7 +95,7 @@ pub fn data_dir() -> PathBuf {
 
 #[cfg(not(target_os = "android"))]
 pub fn config_path() -> PathBuf {
-    repo_root().join("config.json")
+    app_root().join("config.json")
 }
 
 #[cfg(target_os = "android")]
