@@ -99,7 +99,7 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
     let event_type = match tag {
         "LEAVE_HOME" | "LEAVE"                       => "OUT_START",
         "ARRIVE_HOME" | "ARRIVE"                     => "OUT_END",
-        "SCREEN_ON" | "APP_OPEN" | "APP_FOREGROUND"  => "DEVICE_ON",
+        "DEVICE_ON"                                   => "DEVICE_ON",
         other                                         => return Err(format!("不明タグ: {}", other)),
     };
 

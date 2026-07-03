@@ -1,8 +1,8 @@
 //! cloud.rs — モバイルイベント取得・Drive バックアップ・クラウド同期
 //!
 //! 役割 : Google Apps Script 経由でモバイルデバイスのイベントを取得し
-//!        sleep_events.txt に書き込む。Drive へのバックアップと
-//!        SCREEN_ON 通知の送信も担当する。
+//!        sleep_events.txt に書き込む。Drive へのバックアップも担当する。
+//!        SCREEN_ON はDEVICE_ONに統合済み（Android側はDriveSignalWorker経由でDEVICE_ONを送信）。
 //!        Tauri版 src-tauri/src/cloud.rs の移植。
 //!        `#[tauri::command] async fn` + `spawn_blocking` は同期関数に変更し、
 //!        UIスレッドをブロックしないための非同期呼び出しは呼び出し側（main.rs）の
@@ -11,7 +11,7 @@
 //! 依存 : crate::data_dir, crate::http_client, config::load_config_inner,
 //!        events::apply_mobile_event_line, events::sort_events_file,
 //!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust
-//! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`, `send_screen_on`,
+//! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`,
 //!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -420,7 +420,7 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         }
     }
 
-    // 3. Pull mobile events from Sheet (SCREEN_ON / LEAVE_HOME / ARRIVE_HOME)
+    // 3. Pull mobile events from Sheet (DEVICE_ON / LEAVE_HOME / ARRIVE_HOME)
     pull_mobile_events_inner();
 
     // 4. Sort + dedup
@@ -500,32 +500,6 @@ pub fn fetch_from_cloud() -> Result<Vec<super::events::Session>, String> {
     let ms = t0.elapsed().as_millis();
     eprintln!("{} fetch_from_cloud #{}: {:.1}KB received  (+{}ms)", TAG, n, kb, ms);
     Ok(sessions)
-}
-
-pub fn send_screen_on() -> Result<String, String> {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
-
-    let cfg = load_config_inner();
-    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
-        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
-        _ => return Err("クラウド接続が未設定です".into()),
-    };
-    let ts = chrono::Local::now().timestamp_millis();
-    let url = format!("{}?secret={}&tag=APP_FOREGROUND&ts={}", base_url.trim_end_matches('/'), secret, ts);
-    let client = crate::http_client()?;
-    let resp = client
-        .post(&url)
-        .header("Content-Length", "0")
-        .body("")
-        .send()
-        .map_err(|e| format!("送信失敗: {}", e))?;
-    if resp.status().is_success() {
-        eprintln!("{} send_screen_on #{}", TAG, n);
-        Ok("SCREEN_ON 送信完了".into())
-    } else {
-        Err(format!("HTTP {}", resp.status().as_u16()))
-    }
 }
 
 pub fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Result<String, String> {

@@ -10,7 +10,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-// Sends a SCREEN_ON heartbeat to Google Drive every 15 minutes while the device is active.
+// Sends a DEVICE_ON heartbeat to Google Drive every 15 minutes while the device is active.
 // Runs via WorkManager so it works even when the app is in the background.
 // Tauri版 DriveSignalWorker.kt からほぼそのまま移植（Rust側を呼ばずKotlin単体で完結する設計）。
 class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
@@ -30,15 +30,8 @@ class DriveSignalWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 return@withContext Result.success()
             }
 
-            val ts = System.currentTimeMillis()
-            // Distinguish startup run (WorkManager fires immediately after first schedule)
-            // from genuine background heartbeats. Within 5 min of app open → APP_OPEN.
-            val openTimeMs = applicationContext
-                .getSharedPreferences("sleep_tracker", Context.MODE_PRIVATE)
-                .getLong("app_open_time_ms", 0L)
-            val elapsedMs = if (openTimeMs > 0L) ts - openTimeMs else Long.MAX_VALUE
-            val tag = if (elapsedMs < 5 * 60 * 1000L) "APP_OPEN" else "SCREEN_ON"
-            Log.i("SleepTracker", "[worker] DriveSignalWorker: tag=$tag elapsed=${elapsedMs}ms")
+            val ts  = System.currentTimeMillis()
+            val tag = "DEVICE_ON"
 
             val url  = URL("${baseUrl.trimEnd('/')}?secret=$secret&tag=$tag&ts=$ts")
             val conn = (url.openConnection() as HttpURLConnection).apply {
