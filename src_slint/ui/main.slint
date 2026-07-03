@@ -7,6 +7,8 @@ import { LineEdit } from "std-widgets.slint";
 
 // 標準SpinBoxは常に上下ボタンが横に並んで表示され幅を取るため、
 // ホバー時だけ縦積みの上下ボタンを右側に出す自作の数値スピナー。
+// クリックでフォーカスし、数字キー入力（2桁で確定）・上下矢印キー・Enterでの
+// 確定・Escapeでの取り消しに対応する。
 component NumSpin {
     in property <int> value;
     in property <int> minimum: 0;
@@ -18,50 +20,96 @@ component NumSpin {
     width: root.spin-width;
     height: 34px;
 
-    ta := TouchArea {
-        width: 100%;
-        height: 100%;
+    property <string> input-buffer: "";
+    property <int> input-buffer-len: 0;
+    property <bool> editing: root.input-buffer-len > 0;
+    property <string> display-text: root.editing ? root.input-buffer : ((root.zero-pad && root.value < 10) ? "0\{root.value}" : "\{root.value}");
 
-        Rectangle {
-            background: #313244;
-            border-radius: 6px;
-            border-width: 1px;
-            border-color: ta.has-hover ? #45475a : transparent;
+    function commit(v: int) {
+        root.input-buffer = "";
+        root.input-buffer-len = 0;
+        root.edited(max(min(v, root.maximum), root.minimum));
+    }
 
-            Text {
-                x: 0px;
-                width: 100%;
-                text: (root.zero-pad && root.value < 10) ? "0\{root.value}" : "\{root.value}";
-                color: #cdd6f4;
-                font-size: 15px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            if ta.has-hover: Rectangle {
-                x: parent.width - 20px;
-                width: 20px;
-                height: 100%;
-
-                upTa := TouchArea {
-                    y: 0px;
-                    height: parent.height / 2;
-                    width: 100%;
-                    clicked => { root.edited(min(root.value + 1, root.maximum)); }
-                    Rectangle {
-                        background: upTa.has-hover ? #45475a : transparent;
-                        Text { text: "▲"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
-                    }
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text >= "0" && event.text <= "9") {
+                root.input-buffer = root.input-buffer-len >= 2 ? event.text : root.input-buffer + event.text;
+                root.input-buffer-len = root.input-buffer-len >= 2 ? 1 : root.input-buffer-len + 1;
+                if (root.input-buffer-len >= 2) {
+                    root.commit(root.input-buffer.to-float());
                 }
-                downTa := TouchArea {
-                    y: parent.height / 2;
-                    height: parent.height / 2;
+                accept
+            } else if (event.text == Key.Backspace) {
+                root.input-buffer = "";
+                root.input-buffer-len = 0;
+                accept
+            } else if (event.text == Key.UpArrow) {
+                root.commit(root.value + 1);
+                accept
+            } else if (event.text == Key.DownArrow) {
+                root.commit(root.value - 1);
+                accept
+            } else if (event.text == Key.Return) {
+                if (root.input-buffer != "") {
+                    root.commit(root.input-buffer.to-float());
+                }
+                accept
+            } else if (event.text == Key.Escape) {
+                root.input-buffer = "";
+                root.input-buffer-len = 0;
+                accept
+            } else {
+                reject
+            }
+        }
+
+        ta := TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => { fs.focus(); }
+
+            Rectangle {
+                background: #313244;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: fs.has-focus ? #89b4fa : (ta.has-hover ? #45475a : transparent);
+
+                Text {
+                    x: 0px;
                     width: 100%;
-                    clicked => { root.edited(max(root.value - 1, root.minimum)); }
-                    Rectangle {
-                        background: downTa.has-hover ? #45475a : transparent;
-                        Text { text: "▼"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
+                    text: root.display-text;
+                    color: #cdd6f4;
+                    font-size: 15px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                if ta.has-hover: Rectangle {
+                    x: parent.width - 20px;
+                    width: 20px;
+                    height: 100%;
+
+                    upTa := TouchArea {
+                        y: 0px;
+                        height: parent.height / 2;
+                        width: 100%;
+                        clicked => { root.commit(root.value + 1); }
+                        Rectangle {
+                            background: upTa.has-hover ? #45475a : transparent;
+                            Text { text: "▲"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+                    downTa := TouchArea {
+                        y: parent.height / 2;
+                        height: parent.height / 2;
+                        width: 100%;
+                        clicked => { root.commit(root.value - 1); }
+                        Rectangle {
+                            background: downTa.has-hover ? #45475a : transparent;
+                            Text { text: "▼"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
+                        }
                     }
                 }
             }
@@ -389,12 +437,12 @@ component CurveSeg {
 
     if root.connected: Rectangle {
         x: root.x1 * 1px;
-        y: root.y1 * 1px - 3px;
+        y: root.y1 * 1px - 2px;
         width: root.seg-len * 1px;
-        height: 6px;
+        height: 4px;
         background: root.seg-color;
         transform-rotation: atan2(root.seg-dy, root.seg-dx);
-        transform-origin: { x: 0px, y: 3px };
+        transform-origin: { x: 0px, y: 2px };
     }
 }
 
@@ -468,6 +516,9 @@ component WeeklyChart {
         height: root.bars-h;
         spacing: root.col-spacing;
         for day[i] in root.week: col := TouchArea {
+            min-width: 0px;
+            preferred-width: 0px;
+            horizontal-stretch: 1;
             clicked => { root.day-clicked(day.date); }
             property <length> bar-h: self.height * max(day.bar-frac, 0.02);
             property <length> bar-y: self.height - self.bar-h;
@@ -553,6 +604,9 @@ component WeeklyChart {
         height: root.daylabel-h;
         spacing: root.col-spacing;
         for day[i] in root.week: Rectangle {
+            min-width: 0px;
+            preferred-width: 0px;
+            horizontal-stretch: 1;
             Text {
                 width: 100%;
                 height: 100%;
@@ -742,18 +796,22 @@ component PredictionCard {
     in property <string> predicted-wake-time: "--:--";
     in property <string> predicted-method: "";
     in property <bool> has-data: false;
+    // "now" | "optimal" | ""。今すぐ/最適睡眠は排他的な選択状態として色で示す。
+    in property <string> bedtime-source: "";
 
     callback bedtime-edited(int, int);
     callback now-clicked();
     callback optimal-clicked();
 
-    width: 100%;
-    height: 100%;
+    Rectangle {
+        width: 100%;
+        height: 100%;
 
-    HorizontalLayout {
-        padding-left: 20px;
+        HorizontalLayout {
+            padding-left: 20px;
         padding-right: 20px;
         spacing: 14px;
+        alignment: start;
 
         Text {
             text: "睡眠\n予測";
@@ -791,10 +849,18 @@ component PredictionCard {
             height: 34px;
             y: (parent.height - self.height) / 2;
             clicked => { root.now-clicked(); }
+            property <bool> active: root.bedtime-source == "now";
             Rectangle {
-                background: nowBtn.has-hover ? #45475a : #313244;
+                background: nowBtn.active ? (nowBtn.has-hover ? #74a8f7 : #89b4fa) : (nowBtn.has-hover ? #45475a : #313244);
                 border-radius: 6px;
-                Text { text: "今すぐ"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; }
+                Text {
+                    text: "今すぐ";
+                    color: nowBtn.active ? #11111b : #cdd6f4;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    font-size: 14px;
+                    font-weight: nowBtn.active ? 700 : 400;
+                }
             }
         }
         optBtn := TouchArea {
@@ -802,10 +868,18 @@ component PredictionCard {
             height: 34px;
             y: (parent.height - self.height) / 2;
             clicked => { root.optimal-clicked(); }
+            property <bool> active: root.bedtime-source == "optimal";
             Rectangle {
-                background: optBtn.has-hover ? #74a8f7 : #89b4fa;
+                background: optBtn.active ? (optBtn.has-hover ? #74a8f7 : #89b4fa) : (optBtn.has-hover ? #45475a : #313244);
                 border-radius: 6px;
-                Text { text: "最適睡眠"; color: #11111b; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; font-weight: 700; }
+                Text {
+                    text: "最適睡眠";
+                    color: optBtn.active ? #11111b : #cdd6f4;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    font-size: 14px;
+                    font-weight: optBtn.active ? 700 : 400;
+                }
             }
         }
 
@@ -825,17 +899,19 @@ component PredictionCard {
             }
         }
 
-        if root.has-data: Divider { }
+        if root.has-data && root.predicted-method != "": Divider { }
 
-        if root.has-data: VerticalLayout {
-            horizontal-stretch: 1;
+        // 予測方法（Heuristic (global avg)など）は他のstrip-colと同じ
+        // 「小さいラベル＋値」の左詰め形式にする。何を表しているかが
+        // わかるよう「予測方法」ラベルを付ける。
+        if root.has-data && root.predicted-method != "": VerticalLayout {
             alignment: center;
+            spacing: 2px;
+            Text { text: "予測方法"; color: #6c7086; font-size: 11px; }
             TextInput {
-                width: 100%;
                 text: root.predicted-method;
                 color: #a6adc8;
                 font-size: 13px;
-                horizontal-alignment: right;
                 read-only: true;
                 single-line: true;
             }
@@ -846,6 +922,7 @@ component PredictionCard {
             color: #a6adc8;
             font-size: 15px;
             vertical-alignment: center;
+        }
         }
     }
 }
@@ -860,6 +937,7 @@ component SettingsBtn {
     in property <string> text;
     in property <bool> danger: false;
     in property <bool> primary: false;
+    in property <bool> busy: false;
     in property <length> btn-width: 100px;
     callback clicked();
     width: root.btn-width;
@@ -867,17 +945,20 @@ component SettingsBtn {
     ta := TouchArea {
         width: 100%;
         height: 100%;
-        clicked => { root.clicked(); }
+        enabled: !root.busy;
+        clicked => { if (!root.busy) { root.clicked(); } }
         Rectangle {
-            background: root.danger
-                ? (ta.has-hover ? #f38ba8 : rgba(243, 139, 168, 0.2))
-                : root.primary
-                    ? (ta.has-hover ? #74c7ec : #89b4fa)
-                    : (ta.has-hover ? #45475a : #313244);
+            background: root.busy
+                ? #45475a
+                : root.danger
+                    ? (ta.has-hover ? #f38ba8 : rgba(243, 139, 168, 0.2))
+                    : root.primary
+                        ? (ta.pressed ? #5f95e8 : ta.has-hover ? #74c7ec : #89b4fa)
+                        : (ta.pressed ? #585b70 : ta.has-hover ? #45475a : #313244);
             border-radius: 6px;
             Text {
                 text: root.text;
-                color: root.danger ? (ta.has-hover ? #1e1e2e : #f38ba8) : root.primary ? #1e1e2e : #cdd6f4;
+                color: root.busy ? #a6adc8 : root.danger ? (ta.has-hover ? #1e1e2e : #f38ba8) : root.primary ? #1e1e2e : #cdd6f4;
                 font-size: 15px;
                 font-weight: root.primary ? 700 : 400;
                 horizontal-alignment: center;
@@ -962,6 +1043,8 @@ component SettingsPanel {
     in property <string> sync-message: "";
     in property <string> data-message: "";
     in-out property <bool> show-secret: false;
+    in property <bool> test-in-progress: false;
+    in property <bool> sync-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1065,12 +1148,24 @@ component SettingsPanel {
                     spacing: 8px;
                     alignment: start;
                     SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
-                    SettingsBtn { text: "接続テスト"; btn-width: 100px; clicked => { root.test-connection(); } }
-                    SettingsBtn { text: "今すぐ同期"; btn-width: 100px; clicked => { root.sync-now(); } }
+                    SettingsBtn {
+                        text: root.test-in-progress ? "テスト中…" : "接続テスト";
+                        btn-width: 100px;
+                        busy: root.test-in-progress;
+                        clicked => { root.test-connection(); }
+                    }
+                    SettingsBtn {
+                        text: root.sync-in-progress ? "同期中…" : "今すぐ同期";
+                        btn-width: 100px;
+                        busy: root.sync-in-progress;
+                        clicked => { root.sync-now(); }
+                    }
                 }
-                if root.connection-status != "": SettingsNote { text: (root.connection-ok ? "✓ " : "✗ ") + root.connection-status; }
+                if root.test-in-progress: SettingsNote { text: "接続をテストしています…"; }
+                if root.sync-in-progress: SettingsNote { text: "同期しています…"; }
+                if !root.test-in-progress && root.connection-status != "": SettingsNote { text: (root.connection-ok ? "✓ " : "✗ ") + root.connection-status; }
                 if root.save-message != "": SettingsNote { text: root.save-message; }
-                if root.sync-message != "": SettingsNote { text: root.sync-message; }
+                if !root.sync-in-progress && root.sync-message != "": SettingsNote { text: root.sync-message; }
                 SettingsNote { text: "設定は config.json にローカル保存されます"; }
             }
 
@@ -1120,6 +1215,9 @@ export component MainWindow inherits Window {
     // 睡眠予測カード用のプロパティ
     in-out property <int> bed-hour: 22;
     in-out property <int> bed-minute: 0;
+    // "now" | "optimal" | ""（手動入力など）。今すぐ/最適睡眠ボタンの
+    // どちらが有効かを色で示すために使う。
+    in-out property <string> bedtime-source: "";
     in property <string> bed-time-label: "--:--";
     in property <string> predicted-duration: "—";
     in property <string> predicted-wake-time: "--:--";
@@ -1174,6 +1272,8 @@ export component MainWindow inherits Window {
     in property <string> save-message: "";
     in property <string> sync-message: "";
     in property <string> data-message: "";
+    in-out property <bool> test-in-progress: false;
+    in-out property <bool> sync-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1280,10 +1380,15 @@ export component MainWindow inherits Window {
                     width: 36px;
                     height: 36px;
                     y: parent.height - self.height - 3px;
-                    clicked => { root.sync-now(); }
+                    clicked => {
+                        if (!root.sync-in-progress) {
+                            root.sync-in-progress = true;
+                            root.sync-now();
+                        }
+                    }
                     Text {
                         text: "🔄";
-                        color: syncBtn.has-hover ? #cdd6f4 : #a6adc8;
+                        color: root.sync-in-progress ? #89b4fa : (syncBtn.has-hover ? #cdd6f4 : #a6adc8);
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         font-size: 18px;
@@ -1308,22 +1413,52 @@ export component MainWindow inherits Window {
             save-message: root.save-message;
             sync-message: root.sync-message;
             data-message: root.data-message;
+            test-in-progress: root.test-in-progress;
+            sync-in-progress: root.sync-in-progress;
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
             threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
             toggle-target-wake(v) => { root.target-wake-enabled = v; root.toggle-target-wake(v); }
             target-wake-changed(h, m) => { root.target-wake-h = h; root.target-wake-m = m; root.target-wake-changed(h, m); }
             save-settings => { root.save-settings(); }
-            test-connection => { root.test-connection(); }
-            sync-now => { root.sync-now(); }
+            test-connection => {
+                if (!root.test-in-progress) {
+                    root.test-in-progress = true;
+                    root.test-connection();
+                }
+            }
+            sync-now => {
+                if (!root.sync-in-progress) {
+                    root.sync-in-progress = true;
+                    root.sync-now();
+                }
+            }
             export-csv => { root.export-csv(); }
             backup => { root.backup(); }
             restore => { root.restore(); }
             clear-all-data => { root.clear-all-data(); }
         }
 
-        if root.tab == "home": VerticalLayout {
+        if root.tab == "home": homeScroll := TouchArea {
             vertical-stretch: 1;
+            // マウスホイールで先週/次週を切り替える。トラックパッド等は1ジェスチャーで
+            // 大量のイベントが飛んでくるため、accum-yに溜めて閾値を超えたら1回だけ送る。
+            property <float> scroll-accum-y: 0;
+            scroll-event(event) => {
+                homeScroll.scroll-accum-y += event.delta-y / 1px;
+                if homeScroll.scroll-accum-y > 60 {
+                    homeScroll.scroll-accum-y = 0;
+                    root.next-week();
+                } else if homeScroll.scroll-accum-y < -60 {
+                    homeScroll.scroll-accum-y = 0;
+                    root.prev-week();
+                }
+                accept
+            }
+
+            VerticalLayout {
+            width: 100%;
+            height: 100%;
 
             // ── 睡眠予測 ──
             Rectangle {
@@ -1337,13 +1472,21 @@ export component MainWindow inherits Window {
                     predicted-wake-time: root.predicted-wake-time;
                     predicted-method: root.predicted-method;
                     has-data: root.has-prediction;
+                    bedtime-source: root.bedtime-source;
                     bedtime-edited(h, m) => {
                         root.bed-hour = h;
                         root.bed-minute = m;
+                        root.bedtime-source = "";
                         root.bedtime-edited(h, m);
                     }
-                    now-clicked => { root.set-bedtime-now(); }
-                    optimal-clicked => { root.set-bedtime-optimal(); }
+                    now-clicked => {
+                        root.bedtime-source = "now";
+                        root.set-bedtime-now();
+                    }
+                    optimal-clicked => {
+                        root.bedtime-source = "optimal";
+                        root.set-bedtime-optimal();
+                    }
                 }
             }
 
@@ -1358,31 +1501,39 @@ export component MainWindow inherits Window {
                     padding-left: 20px;
                     padding-right: 20px;
                     spacing: 18px;
-                    alignment: start;
 
                     Text { text: "統計"; color: #a6adc8; font-size: 13px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 0; }
 
+                    // ラベルの右側は残り幅いっぱいを使い、中でセンタリングする。
+                    // 左詰めのままだと右側だけ大きな余白が残り、左右のバランスが
+                    // 崩れて見えるため（左は20pxパディングのみ、右は数百px余る）。
                     HorizontalLayout {
-                        horizontal-stretch: 0;
-                        height: 30px;
-                        y: (parent.height - self.height) / 2;
-                        spacing: 6px;
-                        PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
-                        PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
-                        PeriodTab { text: "1年"; active: root.period-key == "year"; clicked => { root.period-changed("year"); } }
-                        PeriodTab { text: "全期間"; tab-width: 70px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
-                    }
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 18px;
 
-                    Divider { }
-                    StatCol { value: root.days-recorded; label: "記録日数"; }
-                    Divider { }
-                    StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
-                    Divider { }
-                    StatCol { value: root.last-sleep; label: "最後の睡眠"; }
-                    Divider { }
-                    StatCol { value: root.current-time; label: "現在時刻"; }
-                    Divider { }
-                    StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
+                        HorizontalLayout {
+                            horizontal-stretch: 0;
+                            height: 30px;
+                            y: (parent.height - self.height) / 2;
+                            spacing: 6px;
+                            PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
+                            PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
+                            PeriodTab { text: "1年"; active: root.period-key == "year"; clicked => { root.period-changed("year"); } }
+                            PeriodTab { text: "全期間"; tab-width: 70px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
+                        }
+
+                        Divider { }
+                        StatCol { value: root.days-recorded; label: "記録日数"; }
+                        Divider { }
+                        StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
+                        Divider { }
+                        StatCol { value: root.last-sleep; label: "最後の睡眠"; }
+                        Divider { }
+                        StatCol { value: root.current-time; label: "現在時刻"; }
+                        Divider { }
+                        StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
+                    }
                 }
             }
 
@@ -1475,6 +1626,7 @@ export component MainWindow inherits Window {
                     waketime-curve: root.waketime-curve;
                     day-clicked(d) => { root.day-clicked(d); }
                 }
+            }
             }
         }
     }

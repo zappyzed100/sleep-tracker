@@ -70,6 +70,8 @@ pub fn create_shortcut(window: &MainWindow) {
 }
 
 // 別スレッドでテスト接続し、完了後にUIスレッドで結果を反映する。
+// test-in-progress は呼び出し側（Slint）で即座にtrueへ設定済み。完了後に必ずfalseへ戻す
+// （成功・失敗問わず）ことで、ボタンの「テスト中…」表示が固まったままにならないようにする。
 pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: String) {
     std::thread::spawn(move || {
         let result = cloud::test_mobile_connection(url, secret);
@@ -79,12 +81,14 @@ pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: Strin
                     Ok(msg) => { w.set_connection_ok(true); w.set_connection_status(msg.into()); }
                     Err(e) => { w.set_connection_ok(false); w.set_connection_status(e.into()); }
                 }
+                w.set_test_in_progress(false);
             }
         });
     });
 }
 
 // 別スレッドでsync_gistを実行し、完了後にUIスレッドで再読み込みする。
+// sync-in-progress も同様に、成功・失敗どちらの経路でも必ずfalseへ戻す。
 pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     std::thread::spawn(move || {
         let msg = cloud::sync_gist();
@@ -95,6 +99,7 @@ pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedSta
                     Ok(m) => w.set_sync_message(m.into()),
                     Err(e) => w.set_sync_message(format!("同期失敗: {}", e).into()),
                 }
+                w.set_sync_in_progress(false);
             }
         });
     });
