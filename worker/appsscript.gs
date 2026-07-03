@@ -128,10 +128,16 @@ function doPost(e) {
     return ContentService.createTextOutput("missing tag or ts");
   }
 
-  // Convert Unix ms timestamp to "YYYY-MM-DD HH:mm:ss" for readability
-  const tsMs = parseInt(ts, 10);
+  // tsはAndroid（Unix msエポック、例: "1783068576551"）とiPhoneショートカット
+  // （"yyyy-MM-dd HH:mm:ss"形式の整形済み文字列）の2種類の形式がありうる。
+  // parseInt(ts, 10)は非数値文字で止まるため、"2026-07-03 18:55:00"のような
+  // 文字列に対しても先頭の"2026"だけを数値として誤って解釈してしまう
+  // （結果、1970-01-01付近の日時になるバグがあった）。数字のみで構成される
+  // 場合だけエポックとして扱い、それ以外は整形済み文字列としてそのまま使う。
   const tz = Session.getScriptTimeZone();
-  const tsStr = isNaN(tsMs) ? ts : Utilities.formatDate(new Date(tsMs), tz, "yyyy-MM-dd HH:mm:ss");
+  const tsStr = /^\d+$/.test(ts)
+    ? Utilities.formatDate(new Date(parseInt(ts, 10)), tz, "yyyy-MM-dd HH:mm:ss")
+    : ts;
 
   SpreadsheetApp.getActiveSpreadsheet()
     .getSheetByName("events")
