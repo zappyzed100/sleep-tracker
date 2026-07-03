@@ -300,6 +300,14 @@ export struct DaySummaryVM {
     waketime-has: bool,
 }
 
+// 折れ線グラフの曲線をなめらかに描くためのサンプル点。
+// Rust側でCatmull-Romスプライン補間して大量に生成し、小さい点を密に
+// 並べることで実線に見せる（x/yはチャート領域内の0.0〜1.0比率）。
+export struct CurvePointVM {
+    x: float,
+    y: float,
+}
+
 export struct CalendarDayVM {
     day: int,
     date: string,       // ISO日付
@@ -323,57 +331,35 @@ component LegendItem {
     }
 }
 
-// 2点間を、小さな正方形を等間隔に並べて繋ぐ「ドット連結」方式の線分。
-// Slintの回転プロパティ（rotation-angle等）はコンポーネントのルート要素に
-// 適用できない・原点の挙動が分かりにくいなどの理由で正しい位置に描画できな
-// かったため、確実に動作するx/y直接指定のみで完結するこの方式に切り替えた。
-component LineSeg {
-    in property <float> x1;
-    in property <float> y1;
-    in property <float> x2;
-    in property <float> y2;
-    in property <color> seg-color;
-
-    // 自分自身の原点をWeeklyChart側の座標系と揃えておかないと、子のドットの
-    // 相対座標がLineSegの暗黙の配置位置ぶんだけズレてしまう
-    // （PeriodTab/SettingsBtn等でも踏んだ「コンポーネント直下に明示ジオメトリが
-    // 必要」というのと同種の問題）。
-    x: 0px;
-    y: 0px;
-
-    for step in 25: Rectangle {
-        x: (root.x1 + (step / 24.0) * (root.x2 - root.x1)) * 1px - 2px;
-        y: (root.y1 + (step / 24.0) * (root.y2 - root.y1)) * 1px - 2px;
-        width: 4px;
-        height: 4px;
-        border-radius: 2px;
-        background: root.seg-color;
-    }
-}
-
+// 実データのある曜日を強調する大きめの点（連続する曲線は別途CurvePointVMで描く）。
 component LineDot inherits Rectangle {
     in property <float> cx;
     in property <float> cy;
-    x: cx * 1px - 3px;
-    y: cy * 1px - 3px;
-    width: 6px;
-    height: 6px;
-    border-radius: 3px;
+    x: cx * 1px - 5px;
+    y: cy * 1px - 5px;
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
 }
 
 component WeeklyChart {
     in property <[DaySummaryVM]> week;
     in property <[string]> y-labels;
     in property <[string]> y2-labels;
+    in property <[CurvePointVM]> bedtime-curve;
+    in property <[CurvePointVM]> waketime-curve;
     callback day-clicked(string);
 
     height: 260px;
 
     property <length> axis-l: 34px;
     property <length> axis-r: 46px;
-    property <length> legend-h: 22px;
-    property <length> daylabel-h: 22px;
+    property <length> legend-h: 24px;
+    property <length> daylabel-h: 34px;
     property <length> bars-h: root.height - root.legend-h - root.daylabel-h;
+    // 棒グラフの列間隔・曜日ラベルの列間隔は必ず同じ値を使う。
+    // 別々の値だと列とラベルの中心がずれる（特に中間の列ほど誤差が蓄積する）。
+    property <length> col-spacing: 10px;
 
     // ── 凡例 ──
     HorizontalLayout {
@@ -395,7 +381,7 @@ component WeeklyChart {
         y: root.legend-h + root.bars-h * i / max(root.y-labels.length - 1, 1) - 7px;
         text: lbl;
         color: #a6adc8;
-        font-size: 11px;
+        font-size: 12px;
         horizontal-alignment: right;
     }
     for lbl[i] in root.y-labels: Rectangle {
@@ -413,44 +399,37 @@ component WeeklyChart {
         y: root.legend-h + root.bars-h * i / max(root.y2-labels.length - 1, 1) - 7px;
         text: lbl;
         color: #a6adc8;
-        font-size: 11px;
+        font-size: 12px;
         horizontal-alignment: left;
     }
 
-    // ── 棒グラフ ──
+    // ── 棒グラフ（Tauri版に合わせ、列幅の約55%の細さに絞る） ──
     HorizontalLayout {
         x: root.axis-l;
         y: root.legend-h;
         width: root.width - root.axis-l - root.axis-r;
         height: root.bars-h;
-        spacing: 4px;
+        spacing: root.col-spacing;
         for day[i] in root.week: col := TouchArea {
             clicked => { root.day-clicked(day.date); }
-            property <length> bar-h: parent.height * max(day.bar-frac, 0.02);
-            property <length> bar-y: parent.height - self.bar-h;
+            property <length> bar-h: self.height * max(day.bar-frac, 0.02);
+            property <length> bar-y: self.height - self.bar-h;
+            property <length> bar-w: self.width * 0.55;
             Rectangle {
+                x: (parent.width - col.bar-w) / 2;
                 y: col.bar-y;
                 height: col.bar-h;
-                width: 100%;
-                background: day.has-data ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.45)) : #313244;
+                width: col.bar-w;
+                background: day.has-data ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.55)) : #313244;
                 border-radius: 4px;
                 animate y, height { duration: 150ms; easing: ease-out; }
             }
-            if day.has-data && col.bar-h > 28px: Text {
-                y: col.bar-y + 6px;
+            if day.has-data: Text {
+                y: col.bar-y + (col.bar-h - self.preferred-height) / 2;
                 width: 100%;
                 text: day.duration-label;
                 color: #11111b;
-                font-size: 12px;
-                font-weight: 700;
-                horizontal-alignment: center;
-            }
-            if day.has-data && col.bar-h <= 28px: Text {
-                y: col.bar-y - 17px;
-                width: 100%;
-                text: day.duration-label;
-                color: #cdd6f4;
-                font-size: 12px;
+                font-size: 15px;
                 font-weight: 700;
                 horizontal-alignment: center;
             }
@@ -458,10 +437,9 @@ component WeeklyChart {
     }
 
     // ── 入眠・起床の折れ線（棒グラフの上に重ねる） ──
-    // SlintのPath要素はviewboxをwidget寸法へ均一スケール（アスペクト比維持）で
-    // マッピングするため、横長の描画領域では線が中央に圧縮されたり範囲外に
-    // クリップされたりして正しく描画できなかった。回転させた細いRectangleを
-    // 点と点の間に配置する方式に切り替えて、この問題を回避する。
+    // Rust側でCatmull-Romスプライン補間したサンプル点を小さい点で密に並べて曲線に
+    // 見せる（Slintの Path はviewboxをアスペクト比維持でスケールするため横長の
+    // チャートでは使えなかった）。実データのある曜日には別途大きめの点を重ねる。
     property <float> chart-w-px: (root.width - root.axis-l - root.axis-r) / 1px;
     property <float> bars-h-px: root.bars-h / 1px;
     property <float> axis-l-px: root.axis-l / 1px;
@@ -471,19 +449,21 @@ component WeeklyChart {
         root.axis-l-px + (idx + 0.5) / 7 * root.chart-w-px
     }
 
-    for i in 6: LineSeg {
-        x1: root.day-cx(i);
-        y1: root.legend-h-px + root.week[i].bedtime-y * root.bars-h-px;
-        x2: root.day-cx(i + 1);
-        y2: root.legend-h-px + root.week[i + 1].bedtime-y * root.bars-h-px;
-        seg-color: (root.week[i].bedtime-has && root.week[i + 1].bedtime-has) ? #f9e2af : transparent;
+    for pt in root.bedtime-curve: Rectangle {
+        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 2.5px;
+        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 2.5px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: #f9e2af;
     }
-    for i in 6: LineSeg {
-        x1: root.day-cx(i);
-        y1: root.legend-h-px + root.week[i].waketime-y * root.bars-h-px;
-        x2: root.day-cx(i + 1);
-        y2: root.legend-h-px + root.week[i + 1].waketime-y * root.bars-h-px;
-        seg-color: (root.week[i].waketime-has && root.week[i + 1].waketime-has) ? #a6e3a1 : transparent;
+    for pt in root.waketime-curve: Rectangle {
+        x: (root.axis-l-px + pt.x * root.chart-w-px) * 1px - 2.5px;
+        y: (root.legend-h-px + pt.y * root.bars-h-px) * 1px - 2.5px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: #a6e3a1;
     }
     for day[i] in root.week: LineDot {
         cx: root.day-cx(i);
@@ -496,18 +476,19 @@ component WeeklyChart {
         background: day.waketime-has ? #a6e3a1 : transparent;
     }
 
-    // ── 曜日ラベル ──
+    // ── 曜日ラベル（棒グラフと同じcol-spacingで列を揃える） ──
     HorizontalLayout {
         x: root.axis-l;
         y: root.legend-h + root.bars-h;
         width: root.width - root.axis-l - root.axis-r;
         height: root.daylabel-h;
-        spacing: 10px;
+        spacing: root.col-spacing;
         for day[i] in root.week: Text {
             text: day.day-label;
             color: #cdd6f4;
             font-size: 13px;
             horizontal-alignment: center;
+            vertical-alignment: top;
         }
     }
 }
@@ -629,7 +610,7 @@ component StatCol {
         Text {
             text: root.value;
             color: root.value-color;
-            font-size: 26px;
+            font-size: 28px;
             font-weight: 700;
         }
         Text {
@@ -651,10 +632,10 @@ component Divider {
 component PeriodTab {
     in property <string> text;
     in property <bool> active;
-    in property <length> tab-width: 50px;
+    in property <length> tab-width: 58px;
     callback clicked();
     width: root.tab-width;
-    height: 28px;
+    height: 30px;
     horizontal-stretch: 0;
     ta := TouchArea {
         width: 100%;
@@ -666,7 +647,7 @@ component PeriodTab {
             Text {
                 text: root.text;
                 color: root.active ? #1e1e2e : #cdd6f4;
-                font-size: 12px;
+                font-size: 14px;
                 font-weight: root.active ? 700 : 400;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -688,91 +669,90 @@ component PredictionCard {
     callback now-clicked();
     callback optimal-clicked();
 
-    Rectangle {
-        background: #181825;
-        border-radius: 10px;
-        height: 90px;
+    height: 68px;
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 14px;
+        alignment: start;
+
+        Text {
+            text: "睡眠\n予測";
+            color: #a6adc8;
+            font-size: 13px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
 
         HorizontalLayout {
-            padding: 20px;
-            spacing: 20px;
-            alignment: start;
+            spacing: 4px;
+            NumSpin {
+                spin-width: 60px;
+                zero-pad: true;
+                minimum: 0;
+                maximum: 23;
+                value: root.bed-hour;
+                edited(v) => { root.bedtime-edited(v, root.bed-minute); }
+            }
+            Text { text: ":"; color: #cdd6f4; font-size: 24px; font-weight: 700; vertical-alignment: center; }
+            NumSpin {
+                spin-width: 60px;
+                zero-pad: true;
+                minimum: 0;
+                maximum: 59;
+                value: root.bed-minute;
+                edited(v) => { root.bedtime-edited(root.bed-hour, v); }
+            }
+        }
 
+        nowBtn := TouchArea {
+            width: 76px;
+            clicked => { root.now-clicked(); }
+            Rectangle {
+                background: nowBtn.has-hover ? #45475a : #313244;
+                border-radius: 6px;
+                Text { text: "今すぐ"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; }
+            }
+        }
+        optBtn := TouchArea {
+            width: 76px;
+            clicked => { root.optimal-clicked(); }
+            Rectangle {
+                background: optBtn.has-hover ? #45475a : #313244;
+                border-radius: 6px;
+                Text { text: "最適睡眠"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; }
+            }
+        }
+
+        if root.has-data: Divider { }
+
+        if root.has-data: StatCol { value: root.predicted-duration; label: "予測睡眠時間"; value-color: #89b4fa; }
+
+        if root.has-data: VerticalLayout {
+            alignment: center;
             Text {
-                text: "睡眠\n予測";
-                color: #a6adc8;
-                font-size: 12px;
+                text: root.bed-time-label + " 入眠 → " + root.predicted-wake-time + " 起床";
+                color: #cdd6f4;
+                font-size: 19px;
                 font-weight: 700;
-                vertical-alignment: center;
             }
+        }
 
-            HorizontalLayout {
-                spacing: 4px;
-                NumSpin {
-                    spin-width: 60px;
-                    zero-pad: true;
-                    minimum: 0;
-                    maximum: 23;
-                    value: root.bed-hour;
-                    edited(v) => { root.bedtime-edited(v, root.bed-minute); }
-                }
-                Text { text: ":"; color: #cdd6f4; font-size: 20px; vertical-alignment: center; }
-                NumSpin {
-                    spin-width: 60px;
-                    zero-pad: true;
-                    minimum: 0;
-                    maximum: 59;
-                    value: root.bed-minute;
-                    edited(v) => { root.bedtime-edited(root.bed-hour, v); }
-                }
-            }
+        if root.has-data: Divider { }
 
-            nowBtn := TouchArea {
-                width: 70px;
-                clicked => { root.now-clicked(); }
-                Rectangle {
-                    background: nowBtn.has-hover ? #45475a : #313244;
-                    border-radius: 6px;
-                    Text { text: "今すぐ"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
-                }
-            }
-            optBtn := TouchArea {
-                width: 70px;
-                clicked => { root.optimal-clicked(); }
-                Rectangle {
-                    background: optBtn.has-hover ? #45475a : #313244;
-                    border-radius: 6px;
-                    Text { text: "最適睡眠"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
-                }
-            }
+        if root.has-data: Rectangle { horizontal-stretch: 1; }
 
-            if root.has-data: Divider { }
+        if root.has-data: VerticalLayout {
+            alignment: center;
+            Text { text: root.predicted-method; color: #a6adc8; font-size: 13px; horizontal-alignment: right; }
+        }
 
-            if root.has-data: StatCol { value: root.predicted-duration; label: "予測睡眠時間"; value-color: #89b4fa; }
-
-            if root.has-data: VerticalLayout {
-                alignment: center;
-                Text {
-                    text: root.bed-time-label + " 入眠 → " + root.predicted-wake-time + " 起床";
-                    color: #cdd6f4;
-                    font-size: 18px;
-                    font-weight: 700;
-                }
-            }
-
-            if root.has-data: Divider { }
-
-            if root.has-data: VerticalLayout {
-                alignment: center;
-                Text { text: root.predicted-method; color: #a6adc8; font-size: 11px; }
-            }
-
-            if !root.has-data: Text {
-                text: "データなし";
-                color: #a6adc8;
-                font-size: 14px;
-                vertical-alignment: center;
-            }
+        if !root.has-data: Text {
+            text: "データなし";
+            color: #a6adc8;
+            font-size: 15px;
+            vertical-alignment: center;
         }
     }
 }
@@ -780,7 +760,7 @@ component PredictionCard {
 component SectionTitle {
     in property <string> text;
     width: 100%;
-    Text { width: 100%; text: root.text; color: #cdd6f4; font-size: 15px; font-weight: 700; horizontal-alignment: left; }
+    Text { width: 100%; text: root.text; color: #cdd6f4; font-size: 17px; font-weight: 700; horizontal-alignment: left; }
 }
 
 component SettingsBtn {
@@ -790,7 +770,7 @@ component SettingsBtn {
     in property <length> btn-width: 100px;
     callback clicked();
     width: root.btn-width;
-    height: 34px;
+    height: 38px;
     ta := TouchArea {
         width: 100%;
         height: 100%;
@@ -805,7 +785,7 @@ component SettingsBtn {
             Text {
                 text: root.text;
                 color: root.danger ? (ta.has-hover ? #1e1e2e : #f38ba8) : root.primary ? #1e1e2e : #cdd6f4;
-                font-size: 13px;
+                font-size: 15px;
                 font-weight: root.primary ? 700 : 400;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -832,7 +812,7 @@ component CheckRow {
                 background: root.checked ? #89b4fa : transparent;
                 Text { text: root.checked ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
             }
-            Text { text: root.label; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
+            Text { text: root.label; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
         }
     }
 }
@@ -840,7 +820,7 @@ component CheckRow {
 component SettingsNote {
     in property <string> text;
     width: 100%;
-    Text { width: 100%; text: root.text; color: #a6adc8; font-size: 12px; wrap: word-wrap; horizontal-alignment: left; }
+    Text { width: 100%; text: root.text; color: #a6adc8; font-size: 13px; wrap: word-wrap; horizontal-alignment: left; }
 }
 
 component SettingsSection {
@@ -913,14 +893,14 @@ component SettingsPanel {
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
-                    Text { text: "キーボード / マウス操作がない状態が"; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
+                    Text { text: "キーボード / マウス操作がない状態が"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
                     NumSpin {
                         spin-width: 74px;
                         minimum: 5; maximum: 300;
                         value: root.idle-threshold-minutes;
                         edited(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
                     }
-                    Text { text: "分以上続いたら睡眠と判定"; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
+                    Text { text: "分以上続いたら睡眠と判定"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
                 }
                 HorizontalLayout {
                     alignment: start;
@@ -1044,6 +1024,8 @@ export component MainWindow inherits Window {
     in property <string> week-range-label: "";
     in property <[string]> y-labels: [];
     in property <[string]> y2-labels: [];
+    in property <[CurvePointVM]> bedtime-curve: [];
+    in property <[CurvePointVM]> waketime-curve: [];
 
     // カレンダーピッカー用のプロパティ
     in property <bool> cal-open: false;
@@ -1123,7 +1105,7 @@ export component MainWindow inherits Window {
 
         // ── トップバー ──
         HorizontalLayout {
-            height: 40px;
+            height: 44px;
             spacing: 12px;
             HorizontalLayout {
                 spacing: 6px;
@@ -1145,33 +1127,33 @@ export component MainWindow inherits Window {
             HorizontalLayout {
                 spacing: 4px;
                 homeTabBtn := TouchArea {
-                    width: 60px;
+                    width: 68px;
                     clicked => { root.tab = "home"; }
                     VerticalLayout {
-                        spacing: 2px;
+                        spacing: 4px;
                         Text {
                             text: "ホーム";
                             color: root.tab == "home" ? #89b4fa : #cdd6f4;
                             horizontal-alignment: center;
-                            font-size: 14px;
+                            font-size: 16px;
                             font-weight: root.tab == "home" ? 700 : 400;
                         }
-                        Rectangle { height: 2px; background: root.tab == "home" ? #89b4fa : transparent; }
+                        Rectangle { height: 3px; background: root.tab == "home" ? #89b4fa : transparent; }
                     }
                 }
                 settingsTabBtn := TouchArea {
-                    width: 60px;
+                    width: 68px;
                     clicked => { root.tab = "settings"; }
                     VerticalLayout {
-                        spacing: 2px;
+                        spacing: 4px;
                         Text {
                             text: "設定";
                             color: root.tab == "settings" ? #89b4fa : #cdd6f4;
                             horizontal-alignment: center;
-                            font-size: 14px;
+                            font-size: 16px;
                             font-weight: root.tab == "settings" ? 700 : 400;
                         }
-                        Rectangle { height: 2px; background: root.tab == "settings" ? #89b4fa : transparent; }
+                        Rectangle { height: 3px; background: root.tab == "settings" ? #89b4fa : transparent; }
                     }
                 }
             }
@@ -1206,39 +1188,41 @@ export component MainWindow inherits Window {
             clear-all-data => { root.clear-all-data(); }
         }
 
-        if root.tab == "home": VerticalLayout {
+        if root.tab == "home": Rectangle {
             vertical-stretch: 1;
-            spacing: 16px;
+            background: #181825;
+            border-radius: 10px;
+            clip: true;
 
-            PredictionCard {
-                bed-hour: root.bed-hour;
-                bed-minute: root.bed-minute;
-                bed-time-label: root.bed-time-label;
-                predicted-duration: root.predicted-duration;
-                predicted-wake-time: root.predicted-wake-time;
-                predicted-method: root.predicted-method;
-                has-data: root.has-prediction;
-                bedtime-edited(h, m) => {
-                    root.bed-hour = h;
-                    root.bed-minute = m;
-                    root.bedtime-edited(h, m);
+            VerticalLayout {
+                PredictionCard {
+                    bed-hour: root.bed-hour;
+                    bed-minute: root.bed-minute;
+                    bed-time-label: root.bed-time-label;
+                    predicted-duration: root.predicted-duration;
+                    predicted-wake-time: root.predicted-wake-time;
+                    predicted-method: root.predicted-method;
+                    has-data: root.has-prediction;
+                    bedtime-edited(h, m) => {
+                        root.bed-hour = h;
+                        root.bed-minute = m;
+                        root.bedtime-edited(h, m);
+                    }
+                    now-clicked => { root.set-bedtime-now(); }
+                    optimal-clicked => { root.set-bedtime-optimal(); }
                 }
-                now-clicked => { root.set-bedtime-now(); }
-                optimal-clicked => { root.set-bedtime-optimal(); }
-            }
 
-            // ── 統計ストリップ ──
-            Rectangle {
-                background: #181825;
-                border-radius: 10px;
-                height: 90px;
+                Rectangle { height: 1px; background: #313244; }
 
+                // ── 統計ストリップ ──
                 HorizontalLayout {
-                    padding: 20px;
+                    height: 68px;
+                    padding-left: 20px;
+                    padding-right: 20px;
                     spacing: 18px;
                     alignment: start;
 
-                    Text { text: "統計"; color: #a6adc8; font-size: 12px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 0; }
+                    Text { text: "統計"; color: #a6adc8; font-size: 13px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 0; }
 
                     HorizontalLayout {
                         horizontal-stretch: 0;
@@ -1246,7 +1230,7 @@ export component MainWindow inherits Window {
                         PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
                         PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
                         PeriodTab { text: "1年"; active: root.period-key == "year"; clicked => { root.period-changed("year"); } }
-                        PeriodTab { text: "全期間"; tab-width: 62px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
+                        PeriodTab { text: "全期間"; tab-width: 70px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
                     }
 
                     Divider { }
@@ -1260,71 +1244,80 @@ export component MainWindow inherits Window {
                     Divider { }
                     StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
                 }
-            }
 
-            // ── 週ナビゲーション ──
-            HorizontalLayout {
-                spacing: 12px;
-                height: 32px;
-                prevBtn := TouchArea {
-                    width: 82px;
-                    clicked => { root.prev-week(); }
-                    Rectangle {
-                        background: prevBtn.has-hover ? #313244 : transparent;
-                        border-radius: 6px;
-                        Text { text: "◀ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
-                    }
-                }
-                Text {
-                    text: root.week-range-label;
-                    color: #cdd6f4;
-                    font-size: 14px;
-                    vertical-alignment: center;
-                }
-                calBtn := TouchArea {
-                    width: 32px;
-                    height: 32px;
-                    clicked => { root.open-calendar(); }
-                    Rectangle {
-                        background: calBtn.has-hover ? #313244 : transparent;
-                        border-radius: 6px;
-                        Text { text: "📅"; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; }
-                    }
-                }
-                todayBtn := TouchArea {
-                    width: 60px;
-                    clicked => { root.this-week(); }
-                    Rectangle {
-                        background: todayBtn.has-hover ? #45475a : #313244;
-                        border-radius: 6px;
-                        Text { text: "今週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
-                    }
-                }
-                nextBtn := TouchArea {
-                    width: 82px;
-                    clicked => { root.next-week(); }
-                    Rectangle {
-                        background: nextBtn.has-hover ? #313244 : transparent;
-                        border-radius: 6px;
-                        Text { text: "次の週 ▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
-                    }
-                }
-                Rectangle { horizontal-stretch: 1; }
-            }
+                Rectangle { height: 1px; background: #313244; }
 
-            // ── 週間チャート ──
-            Rectangle {
-                background: #181825;
-                border-radius: 10px;
-                vertical-stretch: 1;
-                WeeklyChart {
-                    x: 20px; y: 16px;
-                    width: parent.width - 40px;
-                    height: parent.height - 32px;
-                    week: root.week;
-                    y-labels: root.y-labels;
-                    y2-labels: root.y2-labels;
-                    day-clicked(d) => { root.day-clicked(d); }
+                // ── 週ナビゲーション（左端=前の週、右端=次の週、中央=日付、その右にカレンダー/今週） ──
+                HorizontalLayout {
+                    height: 52px;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    spacing: 12px;
+                    prevBtn := TouchArea {
+                        width: 96px;
+                        clicked => { root.prev-week(); }
+                        Rectangle {
+                            background: prevBtn.has-hover ? #313244 : transparent;
+                            border-radius: 6px;
+                            Text { text: "◀ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
+                        }
+                    }
+                    Text {
+                        text: root.week-range-label;
+                        color: #cdd6f4;
+                        font-size: 16px;
+                        horizontal-stretch: 1;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    calBtn := TouchArea {
+                        width: 36px;
+                        height: 36px;
+                        clicked => { root.open-calendar(); }
+                        Rectangle {
+                            background: calBtn.has-hover ? #313244 : transparent;
+                            border-radius: 6px;
+                            Text { text: "📅"; horizontal-alignment: center; vertical-alignment: center; font-size: 16px; }
+                        }
+                    }
+                    todayBtn := TouchArea {
+                        width: 66px;
+                        clicked => { root.this-week(); }
+                        Rectangle {
+                            background: todayBtn.has-hover ? #45475a : #313244;
+                            border-radius: 6px;
+                            Text { text: "今週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
+                        }
+                    }
+                    nextBtn := TouchArea {
+                        width: 96px;
+                        clicked => { root.next-week(); }
+                        Rectangle {
+                            background: nextBtn.has-hover ? #313244 : transparent;
+                            border-radius: 6px;
+                            Text { text: "次の週 ▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: #313244; }
+
+                // ── 週間チャート ──
+                VerticalLayout {
+                    vertical-stretch: 1;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 14px;
+                    padding-bottom: 16px;
+                    WeeklyChart {
+                        vertical-stretch: 1;
+                        week: root.week;
+                        y-labels: root.y-labels;
+                        y2-labels: root.y2-labels;
+                        bedtime-curve: root.bedtime-curve;
+                        waketime-curve: root.waketime-curve;
+                        day-clicked(d) => { root.day-clicked(d); }
+                    }
                 }
             }
         }
@@ -1335,8 +1328,8 @@ export component MainWindow inherits Window {
         clicked => { root.close-calendar(); }
     }
     if root.cal-open: CalendarPicker {
-        x: 356px;
-        y: 324px;
+        x: 610px;
+        y: 277px;
         month-label: root.cal-month-label;
         days: root.cal-days;
         prev-month => { root.cal-prev-month(); }

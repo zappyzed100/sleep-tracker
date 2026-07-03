@@ -11,7 +11,7 @@
 //!        `open_calendar`, `close_calendar`, `cal_prev_month`, `cal_next_month`, `cal_select_day`
 
 use crate::core::{events, prediction, utils, Session};
-use crate::{CalendarDayVM, DaySummaryVM, MainWindow, SessionVM};
+use crate::{CalendarDayVM, CurvePointVM, DaySummaryVM, MainWindow, SessionVM};
 use chrono::{Datelike, NaiveDate};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -205,6 +205,58 @@ fn build_y2_labels(y2_min: f64, y2_max: f64) -> Vec<slint::SharedString> {
     }).collect()
 }
 
+// Catmull-Romスプラインで2点(p1,p2)間をなめらかに補間する（p0,p3は前後の制御点）。
+fn catmull_rom(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), t: f32) -> (f32, f32) {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let calc = |a: f32, b: f32, c: f32, d: f32| -> f32 {
+        0.5 * ((2.0 * b) + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3)
+    };
+    (calc(p0.0, p1.0, p2.0, p3.0), calc(p0.1, p1.1, p2.1, p3.1))
+}
+
+// 週7日ぶんのdaily y座標（Noneはデータ欠損）から、連続する区間ごとに
+// Catmull-Romスプラインでサンプル点を密に生成する。折れ線を「曲線・実線」に
+// 見せるため、Slint側ではこのサンプル点を小さい点として大量に並べて描画する。
+fn build_curve(values: &[Option<f32>]) -> Vec<CurvePointVM> {
+    const STEPS: usize = 14;
+    let n = values.len().max(1) as f32;
+    let points: Vec<Option<(f32, f32)>> = values.iter().enumerate()
+        .map(|(i, v)| v.map(|y| ((i as f32 + 0.5) / n, y)))
+        .collect();
+
+    let mut result = Vec::new();
+    let mut run: Vec<(f32, f32)> = Vec::new();
+    let flush = |run: &mut Vec<(f32, f32)>, result: &mut Vec<CurvePointVM>| {
+        let n = run.len();
+        if n == 1 {
+            result.push(CurvePointVM { x: run[0].0, y: run[0].1 });
+        } else if n > 1 {
+            for i in 0..n - 1 {
+                let p0 = if i == 0 { run[0] } else { run[i - 1] };
+                let p1 = run[i];
+                let p2 = run[i + 1];
+                let p3 = if i + 2 < n { run[i + 2] } else { run[n - 1] };
+                for s in 0..STEPS {
+                    let t = s as f32 / STEPS as f32;
+                    let (x, y) = catmull_rom(p0, p1, p2, p3, t);
+                    result.push(CurvePointVM { x, y });
+                }
+            }
+            result.push(CurvePointVM { x: run[n - 1].0, y: run[n - 1].1 });
+        }
+        run.clear();
+    };
+    for p in points {
+        match p {
+            Some(pt) => run.push(pt),
+            None => flush(&mut run, &mut result),
+        }
+    }
+    flush(&mut run, &mut result);
+    result
+}
+
 pub fn update_chart(window: &MainWindow, state: &SharedState) {
     let (week_base, selected) = {
         let s = state.lock().unwrap();
@@ -243,6 +295,11 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
             waketime_has: d.waketime_h.is_some(),
         }
     }).collect();
+    let bedtime_ys: Vec<Option<f32>> = vm.iter().zip(days.iter()).map(|(v, d)| d.bedtime_h.map(|_| v.bedtime_y)).collect();
+    let waketime_ys: Vec<Option<f32>> = vm.iter().zip(days.iter()).map(|(v, d)| d.waketime_h.map(|_| v.waketime_y)).collect();
+    window.set_bedtime_curve(slint::ModelRc::new(slint::VecModel::from(build_curve(&bedtime_ys))));
+    window.set_waketime_curve(slint::ModelRc::new(slint::VecModel::from(build_curve(&waketime_ys))));
+
     window.set_week(slint::ModelRc::new(slint::VecModel::from(vm)));
 
     window.set_y_labels(slint::ModelRc::new(slint::VecModel::from(build_y_labels(y_max))));
