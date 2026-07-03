@@ -12,7 +12,8 @@
 //!        events::apply_mobile_event_line, events::sort_events_file,
 //!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust
 //! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`,
-//!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`
+//!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`,
+//!        `clear_cloud_data`, `push_compacted_to_drive`
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -143,6 +144,42 @@ pub fn backup_to_drive(content: &str) -> String {
         eprintln!("{} ERROR backup_to_drive: HTTP {}  (+{}ms)", TAG, status, ms);
         format!("Drive HTTP {}", status)
     }
+}
+
+// Drive上のバックアップファイル（sleep_events_backup.txt/sleep_manual_backup.txt）と
+// eventsシートの行を全消去する。ローカルファイルの削除は呼び出し側が別途行う。
+pub fn clear_cloud_data() -> Result<(), String> {
+    let cfg = load_config_inner();
+    let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
+        (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
+        _ => return Err("クラウド接続が未設定です".into()),
+    };
+    let url = format!("{}?secret={}&action=clear_all", base_url.trim_end_matches('/'), secret);
+    let resp = crate::http_client()?
+        .post(&url)
+        .header("Content-Length", "0")
+        .body("")
+        .send()
+        .map_err(|e| format!("送信失敗: {}", e))?;
+    if resp.status().is_success() {
+        eprintln!("{} clear_cloud_data: done", TAG);
+        Ok(())
+    } else {
+        Err(format!("HTTP {}", resp.status().as_u16()))
+    }
+}
+
+// events::compact_data() で作り直したsleep_events.txtをクラウドにも反映する。
+// 通常のsync（Drive→localマージ→push）を使うと、Driveに残っている古い（圧縮前の）
+// 内容がローカルに逆マージされて圧縮結果が消えてしまう。そのためここでは
+// 先にclear_all（Driveのバックアップファイル・スプレッドシートのevents行を全消去）
+// してから、圧縮後の内容をマージなしで直接pushする。
+pub fn push_compacted_to_drive(compacted_events_content: &str) -> Result<(), String> {
+    clear_cloud_data()?;
+    let events_msg = backup_to_drive(compacted_events_content);
+    let manual_msg = backup_manual_to_drive("");
+    eprintln!("{} push_compacted_to_drive: events={} manual={}", TAG, events_msg, manual_msg);
+    Ok(())
 }
 
 // Download raw sleep_events.txt content from Drive. Returns None on error / empty / unauthorized.

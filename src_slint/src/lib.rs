@@ -388,6 +388,20 @@ pub fn run() {
             settings_ui::clear_all_data(weak.clone(), s.clone());
         });
     }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_clear_all_data_and_cloud(move || {
+            settings_ui::clear_all_data_and_cloud(weak.clone(), s.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_compact_data(move || {
+            settings_ui::compact_data(weak.clone(), s.clone());
+        });
+    }
 
     // ── バックグラウンド処理 ──
 

@@ -33,6 +33,10 @@ src_slint/data/sleep_heartbeat.txt
 src_slint/data/monitor.pid
 src_slint/data/monitor_paused
 
+# PC版のローカル自動バックアップ（日次、直近10世代。個人データを含むため追跡対象外）
+src_slint/data/backups/
+src_slint/data/last_auto_backup.txt
+
 # 個人の睡眠・在宅/外出履歴データ（実データ。公開リポジトリに絶対に含めない）
 src_slint/data/sleep_events.txt
 src_slint/data/sleep_manual.txt

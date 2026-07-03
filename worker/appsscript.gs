@@ -121,6 +121,29 @@ function doPost(e) {
     }
   }
 
+  // 全データ削除（クラウド側）: Driveのバックアップファイルとeventsシートの行を全消去する。
+  // ローカルファイルの削除はアプリ側（PC）で別途行う。
+  if (e.parameter.action === "clear_all") {
+    try {
+      const folder = getBackupFolder();
+      for (const fileName of ["sleep_events_backup.txt", "sleep_manual_backup.txt"]) {
+        const files = folder.getFilesByName(fileName);
+        if (files.hasNext()) {
+          files.next().setContent("");
+        }
+      }
+      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("events");
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 1) {
+        sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+      }
+      return ContentService.createTextOutput("ok");
+    } catch (err) {
+      Logger.log("[clear_all] ERROR: " + err.message);
+      return ContentService.createTextOutput("error: " + err.message);
+    }
+  }
+
   // iPhone / Android event: URL params
   const tag = (e.parameter.tag ?? "").trim();
   const ts  = (e.parameter.ts  ?? "").trim();

@@ -8,7 +8,7 @@
 //! 依存 : crate::data_dir, crate::THRESHOLD_SECS, crate::cloud, chrono
 //! 公開 : `Session`, `SessionCache`, `SESSION_CACHE`, `parse_sessions_rust`,
 //!        `sort_events_file`, `get_sessions`, `add_session`, `delete_session`,
-//!        `get_events_content`, `restore_events`, `clear_all_data`,
+//!        `get_events_content`, `restore_events`, `clear_all_data`, `compact_data`,
 //!        `export_csv`, `write_csv_file`, `import_csv`,
 //!        `is_out_from_content`, `apply_mobile_event_line`
 
@@ -598,11 +598,70 @@ pub fn restore_events(content: String) -> Result<(), String> {
     Ok(())
 }
 
+// ローカルの sleep_events.txt / sleep_manual.txt を両方とも空にする。
+// クラウド（Drive・スプレッドシート）は消さない。
 pub fn clear_all_data() -> Result<(), String> {
     let path = crate::data_dir().join("sleep_events.txt");
     std::fs::write(&path, "").map_err(|e| e.to_string())?;
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
+    std::fs::write(&manual_path, "").map_err(|e| e.to_string())?;
     *SESSION_CACHE.lock().unwrap() = None;
     Ok(())
+}
+
+// sleep_events.txt / sleep_manual.txt を、実際にセッションとしてパースされている
+// 内容だけの最小構成に作り直す（不要な生イベント・削除済みマーカーなどを一掃する）。
+// 手順：一度セッションリストを構築し、それをIDLE_START/IDLE_RESUMEペアとして再構築する
+// （sleep_manual.txtの内容もここに統合されるため、sleep_manual.txt自体は空にする）。
+// 現在進行中で閉じていないIDLE_START・OUT_STARTがあれば、それだけは生イベントとして
+// そのまま残す（削除すると進行中の睡眠/外出状態を見失うため）。
+// 戻り値: 再構築後のsleep_events.txtの内容（Driveへの直接pushに再利用するため）。
+pub fn compact_data() -> Result<String, String> {
+    let events_path = crate::data_dir().join("sleep_events.txt");
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
+
+    let sessions = parse_sessions_rust()?;
+
+    // 現在進行中で閉じていないIDLE_START/OUT_STARTのタイムスタンプを検出する。
+    // ファイルを時刻順に走査し、START系イベントで開き、対応するEND系イベントで閉じる。
+    let raw = std::fs::read_to_string(&events_path).unwrap_or_default();
+    let mut open_idle: Option<String> = None;
+    let mut open_out: Option<String> = None;
+    for line in raw.lines() {
+        let line = line.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}');
+        let Some(c) = line.find(',') else { continue };
+        let ts = &line[..c];
+        match &line[c + 1..] {
+            "IDLE_START" => open_idle = Some(ts.to_string()),
+            "IDLE_RESUME" => open_idle = None,
+            "OUT_START"  => open_out = Some(ts.to_string()),
+            "OUT_END" | "IN_HOUSE" => open_out = None,
+            _ => {}
+        }
+    }
+
+    let mut lines: Vec<String> = Vec::with_capacity(sessions.len() * 2 + 2);
+    for s in &sessions {
+        lines.push(format!("{},IDLE_START", s.start));
+        lines.push(format!("{},IDLE_RESUME", s.end));
+    }
+    if let Some(ts) = open_idle {
+        lines.push(format!("{},IDLE_START", ts));
+    }
+    if let Some(ts) = open_out {
+        lines.push(format!("{},OUT_START", ts));
+    }
+    lines.sort();
+    let content = if lines.is_empty() { String::new() } else { lines.join("\n") + "\n" };
+
+    let _lock = EVENTS_FILE_LOCK.lock().unwrap();
+    std::fs::write(&events_path, &content).map_err(|e| e.to_string())?;
+    std::fs::write(&manual_path, "").map_err(|e| e.to_string())?;
+    drop(_lock);
+
+    *SESSION_CACHE.lock().unwrap() = None;
+    eprintln!("{} compact_data: {} sessions → {} lines ({:.1}KB)", TAG, sessions.len(), lines.len(), content.len() as f64 / 1024.0);
+    Ok(content)
 }
 
 pub fn export_csv(sessions: &[Session]) -> String {

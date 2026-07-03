@@ -9,7 +9,8 @@
 //!
 //! 依存 : crate::{MainWindow}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
-//!        `create_shortcut`, `export_csv`, `clear_all_data`, `sync_now`, `backup`, `restore`
+//!        `create_shortcut`, `export_csv`, `clear_all_data`, `clear_all_data_and_cloud`,
+//!        `compact_data`, `sync_now`, `backup`, `restore`
 
 use crate::core::{cloud, config, events};
 use crate::platform::windows as platform;
@@ -19,6 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // 全データ削除・復元の誤操作防止用（2回クリックで実行）。設定画面はウィンドウ1つのみなので
 // プロセスグローバルなフラグで十分。
 static CLEAR_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
+static CLEAR_CLOUD_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
+static COMPACT_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 
 // メッセージの種別。SettingsNote側でこの文字列を見て色を変える
@@ -380,10 +383,11 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
     window.set_restore_in_progress(false);
 }
 
+// ローカルの sleep_events.txt / sleep_manual.txt だけを削除する（クラウドは残る）。
 pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
     if !CLEAR_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_clear_message("もう一度クリックすると全データを削除します".into());
+        window.set_clear_message("もう一度クリックするとローカルの全データを削除します".into());
         window.set_clear_kind(KIND_WARN.into());
         window.set_clear_in_progress(false);
         return;
@@ -396,7 +400,7 @@ pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Sha
             if let Some(w) = weak.upgrade() {
                 match result {
                     Ok(()) => {
-                        w.set_clear_message(format!("✓ 全データを削除しました ({})", now_hms()).into());
+                        w.set_clear_message(format!("✓ ローカルの全データを削除しました ({})", now_hms()).into());
                         w.set_clear_kind(KIND_SUCCESS.into());
                         crate::ui::home::refresh_all(&w, &state);
                     }
@@ -406,6 +410,98 @@ pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Sha
                     }
                 }
                 w.set_clear_in_progress(false);
+            }
+        });
+    });
+}
+
+// ローカルに加えてクラウド（Driveのバックアップファイル・スプレッドシートのevents行）も
+// 削除する。ローカルより一段階重い操作のため、確認フラグはローカル削除とは別に持つ。
+pub fn clear_all_data_and_cloud(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
+    let Some(window) = weak.upgrade() else { return };
+    if !CLEAR_CLOUD_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
+        window.set_clear_cloud_message("もう一度クリックするとクラウドも含めて全データを削除します".into());
+        window.set_clear_cloud_kind(KIND_WARN.into());
+        window.set_clear_cloud_in_progress(false);
+        return;
+    }
+    CLEAR_CLOUD_CONFIRM_PENDING.store(false, Ordering::SeqCst);
+
+    std::thread::spawn(move || {
+        let local_result = events::clear_all_data();
+        let cloud_result = cloud::clear_cloud_data();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                match (local_result, cloud_result) {
+                    (Ok(()), Ok(())) => {
+                        w.set_clear_cloud_message(format!("✓ ローカル・クラウドとも全データを削除しました ({})", now_hms()).into());
+                        w.set_clear_cloud_kind(KIND_SUCCESS.into());
+                        crate::ui::home::refresh_all(&w, &state);
+                    }
+                    (Ok(()), Err(e)) => {
+                        w.set_clear_cloud_message(format!("ローカルは削除済み、クラウド削除失敗: {} ({})", e, now_hms()).into());
+                        w.set_clear_cloud_kind(KIND_ERROR.into());
+                        crate::ui::home::refresh_all(&w, &state);
+                    }
+                    (Err(e), _) => {
+                        w.set_clear_cloud_message(format!("削除失敗: {} ({})", e, now_hms()).into());
+                        w.set_clear_cloud_kind(KIND_ERROR.into());
+                    }
+                }
+                w.set_clear_cloud_in_progress(false);
+            }
+        });
+    });
+}
+
+// sleep_events.txt/sleep_manual.txtを、実際にセッションとしてパースされる内容だけの
+// 最小構成に作り直す（events::compact_data 参照）。ローカルで作り直した後、その内容を
+// クラウド（Drive・スプレッドシート）にも直接反映する。破壊的な操作のため2回クリック確認。
+pub fn compact_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
+    let Some(window) = weak.upgrade() else { return };
+    if !COMPACT_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
+        window.set_compact_message("もう一度クリックするとデータを圧縮します".into());
+        window.set_compact_kind(KIND_WARN.into());
+        window.set_compact_in_progress(false);
+        return;
+    }
+    COMPACT_CONFIRM_PENDING.store(false, Ordering::SeqCst);
+
+    std::thread::spawn(move || {
+        let result = events::compact_data();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                match result {
+                    Ok(content) => {
+                        w.set_compact_message(format!("✓ ローカルを圧縮しました。クラウドに反映中… ({})", now_hms()).into());
+                        w.set_compact_kind(KIND_SUCCESS.into());
+                        crate::ui::home::refresh_all(&w, &state);
+
+                        std::thread::spawn(move || {
+                            let cloud_result = cloud::push_compacted_to_drive(&content);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    match cloud_result {
+                                        Ok(()) => {
+                                            w.set_compact_message(format!("✓ 圧縮完了（ローカル・クラウドとも） ({})", now_hms()).into());
+                                            w.set_compact_kind(KIND_SUCCESS.into());
+                                        }
+                                        Err(e) => {
+                                            w.set_compact_message(format!("ローカルは圧縮済み、クラウド反映失敗: {} ({})", e, now_hms()).into());
+                                            w.set_compact_kind(KIND_ERROR.into());
+                                        }
+                                    }
+                                    w.set_compact_in_progress(false);
+                                }
+                            });
+                        });
+                    }
+                    Err(e) => {
+                        w.set_compact_message(format!("圧縮失敗: {} ({})", e, now_hms()).into());
+                        w.set_compact_kind(KIND_ERROR.into());
+                        w.set_compact_in_progress(false);
+                    }
+                }
             }
         });
     });

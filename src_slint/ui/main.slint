@@ -1076,6 +1076,10 @@ component SettingsPanel {
     in property <string> restore-kind: "info";
     in property <string> clear-message: "";
     in property <string> clear-kind: "info";
+    in property <string> clear-cloud-message: "";
+    in property <string> clear-cloud-kind: "info";
+    in property <string> compact-message: "";
+    in property <string> compact-kind: "info";
     in-out property <bool> show-secret: false;
     in property <bool> test-in-progress: false;
     in property <bool> sync-in-progress: false;
@@ -1083,6 +1087,8 @@ component SettingsPanel {
     in property <bool> backup-in-progress: false;
     in property <bool> restore-in-progress: false;
     in property <bool> clear-in-progress: false;
+    in property <bool> clear-cloud-in-progress: false;
+    in property <bool> compact-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1096,6 +1102,8 @@ component SettingsPanel {
     callback backup();
     callback restore();
     callback clear-all-data();
+    callback clear-all-data-and-cloud();
+    callback compact-data();
 
     Flickable {
         VerticalLayout {
@@ -1248,14 +1256,36 @@ component SettingsPanel {
                 HorizontalLayout {
                     alignment: start;
                     SettingsBtn {
-                        text: root.clear-in-progress ? "削除中…" : "全データを削除";
-                        btn-width: 130px;
+                        text: root.clear-in-progress ? "削除中…" : "ローカルの全データを削除";
+                        btn-width: 190px;
                         danger: true;
                         busy: root.clear-in-progress;
                         clicked => { root.clear-all-data(); }
                     }
                 }
                 if root.clear-message != "": SettingsNote { text: root.clear-message; kind: root.clear-kind; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn {
+                        text: root.clear-cloud-in-progress ? "削除中…" : "クラウドも含めて全データ削除";
+                        btn-width: 220px;
+                        danger: true;
+                        busy: root.clear-cloud-in-progress;
+                        clicked => { root.clear-all-data-and-cloud(); }
+                    }
+                }
+                if root.clear-cloud-message != "": SettingsNote { text: root.clear-cloud-message; kind: root.clear-cloud-kind; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn {
+                        text: root.compact-in-progress ? "圧縮中…" : "データを圧縮";
+                        btn-width: 130px;
+                        busy: root.compact-in-progress;
+                        clicked => { root.compact-data(); }
+                    }
+                }
+                if root.compact-message != "": SettingsNote { text: root.compact-message; kind: root.compact-kind; }
+                SettingsNote { text: "パースされたセッションだけを残して再構築し、手動追加(sleep_manual.txt)は統合後に空にします。"; }
             }
         }
     }
@@ -1353,12 +1383,18 @@ export component MainWindow inherits Window {
     in-out property <string> restore-kind: "info";
     in-out property <string> clear-message: "";
     in-out property <string> clear-kind: "info";
+    in-out property <string> clear-cloud-message: "";
+    in-out property <string> clear-cloud-kind: "info";
+    in-out property <string> compact-message: "";
+    in-out property <string> compact-kind: "info";
     in-out property <bool> test-in-progress: false;
     in-out property <bool> sync-in-progress: false;
     in-out property <bool> export-in-progress: false;
     in-out property <bool> backup-in-progress: false;
     in-out property <bool> restore-in-progress: false;
     in-out property <bool> clear-in-progress: false;
+    in-out property <bool> clear-cloud-in-progress: false;
+    in-out property <bool> compact-in-progress: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1372,6 +1408,8 @@ export component MainWindow inherits Window {
     callback backup();
     callback restore();
     callback clear-all-data();
+    callback clear-all-data-and-cloud();
+    callback compact-data();
 
     callback period-changed(string);
     callback bedtime-edited(int, int);
@@ -1526,12 +1564,18 @@ export component MainWindow inherits Window {
             restore-kind: root.restore-kind;
             clear-message: root.clear-message;
             clear-kind: root.clear-kind;
+            clear-cloud-message: root.clear-cloud-message;
+            clear-cloud-kind: root.clear-cloud-kind;
+            compact-message: root.compact-message;
+            compact-kind: root.compact-kind;
             test-in-progress: root.test-in-progress;
             sync-in-progress: root.sync-in-progress;
             export-in-progress: root.export-in-progress;
             backup-in-progress: root.backup-in-progress;
             restore-in-progress: root.restore-in-progress;
             clear-in-progress: root.clear-in-progress;
+            clear-cloud-in-progress: root.clear-cloud-in-progress;
+            compact-in-progress: root.compact-in-progress;
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
             threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
@@ -1572,6 +1616,18 @@ export component MainWindow inherits Window {
                 if (!root.clear-in-progress) {
                     root.clear-in-progress = true;
                     root.clear-all-data();
+                }
+            }
+            clear-all-data-and-cloud => {
+                if (!root.clear-cloud-in-progress) {
+                    root.clear-cloud-in-progress = true;
+                    root.clear-all-data-and-cloud();
+                }
+            }
+            compact-data => {
+                if (!root.compact-in-progress) {
+                    root.compact-in-progress = true;
+                    root.compact-data();
                 }
             }
         }
