@@ -4,7 +4,7 @@
 //!        読み込み/保存/操作をまとめる。CSVエクスポートはrfdのネイティブ
 //!        保存ダイアログを使用する。ファイルダイアログを伴う操作（エクスポート・
 //!        バックアップ・復元）と全データ削除は別スレッドで実行し、UIスレッドを
-//!        ブロックしない。完了メッセージには必ず所要時間（秒）を付ける。
+//!        ブロックしない。完了メッセージには必ずボタンを押した時刻を付ける。
 //!
 //! 依存 : crate::{MainWindow}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
@@ -14,15 +14,16 @@ use crate::core::{cloud, config, events};
 use crate::platform::windows as platform;
 use crate::MainWindow;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 // 全データ削除・復元の誤操作防止用（2回クリックで実行）。設定画面はウィンドウ1つのみなので
 // プロセスグローバルなフラグで十分。
 static CLEAR_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 
-fn fmt_secs(t0: Instant) -> String {
-    format!("{:.2}秒", t0.elapsed().as_secs_f64())
+// 完了メッセージに付ける「今の時刻」（HH:MM:SS）。処理の所要時間ではなく、
+// ボタンを押した操作が完了した時刻を表示する。
+fn now_hms() -> String {
+    chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
 pub fn load_into_window(window: &MainWindow) {
@@ -50,37 +51,34 @@ fn current_target_wake(window: &MainWindow) -> Option<String> {
 }
 
 pub fn save(window: &MainWindow) {
-    let t0 = Instant::now();
     let idle = window.get_idle_threshold_minutes() as u32;
     let url = window.get_mobile_url().to_string();
     let secret = window.get_mobile_secret().to_string();
     let target = current_target_wake(window);
     match config::save_config(idle, url, secret, target, None) {
-        Ok(()) => window.set_save_message(format!("✓ 保存しました ({})", fmt_secs(t0)).into()),
-        Err(e) => window.set_save_message(format!("保存失敗: {} ({})", e, fmt_secs(t0)).into()),
+        Ok(()) => window.set_save_message(format!("✓ 保存しました ({})", now_hms()).into()),
+        Err(e) => window.set_save_message(format!("保存失敗: {} ({})", e, now_hms()).into()),
     }
 }
 
 pub fn toggle_startup(window: &MainWindow, enable: bool) {
-    let t0 = Instant::now();
     match platform::set_startup(enable) {
         Ok(()) => {
             let msg = if enable { "✓ 自動起動をONにしました" } else { "✓ 自動起動をOFFにしました" };
-            window.set_shortcut_message(format!("{} ({})", msg, fmt_secs(t0)).into());
+            window.set_shortcut_message(format!("{} ({})", msg, now_hms()).into());
         }
         Err(e) => {
-            window.set_shortcut_message(format!("スタートアップ設定失敗: {} ({})", e, fmt_secs(t0)).into());
+            window.set_shortcut_message(format!("スタートアップ設定失敗: {} ({})", e, now_hms()).into());
             window.set_startup_enabled(!enable);
         }
     }
 }
 
 pub fn create_shortcut(window: &MainWindow) {
-    let t0 = Instant::now();
     match platform::create_desktop_shortcut() {
-        Ok(true) => window.set_shortcut_message(format!("✓ デスクトップにショートカットを作成しました ({})", fmt_secs(t0)).into()),
-        Ok(false) => window.set_shortcut_message(format!("既にショートカットが作成されています（上書きしました） ({})", fmt_secs(t0)).into()),
-        Err(e) => window.set_shortcut_message(format!("作成失敗: {} ({})", e, fmt_secs(t0)).into()),
+        Ok(true) => window.set_shortcut_message(format!("✓ デスクトップにショートカットを作成しました ({})", now_hms()).into()),
+        Ok(false) => window.set_shortcut_message(format!("既にショートカットが作成されています（上書きしました） ({})", now_hms()).into()),
+        Err(e) => window.set_shortcut_message(format!("作成失敗: {} ({})", e, now_hms()).into()),
     }
 }
 
@@ -88,14 +86,13 @@ pub fn create_shortcut(window: &MainWindow) {
 // test-in-progress は呼び出し側（Slint）で即座にtrueへ設定済み。完了後に必ずfalseへ戻す
 // （成功・失敗問わず）ことで、ボタンの「テスト中…」表示が固まったままにならないようにする。
 pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: String) {
-    let t0 = Instant::now();
     std::thread::spawn(move || {
         let result = cloud::test_mobile_connection(url, secret);
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    Ok(msg) => { w.set_connection_ok(true); w.set_connection_status(format!("{} ({})", msg, fmt_secs(t0)).into()); }
-                    Err(e) => { w.set_connection_ok(false); w.set_connection_status(format!("{} ({})", e, fmt_secs(t0)).into()); }
+                    Ok(msg) => { w.set_connection_ok(true); w.set_connection_status(format!("{} ({})", msg, now_hms()).into()); }
+                    Err(e) => { w.set_connection_ok(false); w.set_connection_status(format!("{} ({})", e, now_hms()).into()); }
                 }
                 w.set_test_in_progress(false);
             }
@@ -106,15 +103,16 @@ pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: Strin
 // 別スレッドでsync_gistを実行し、完了後にUIスレッドで再読み込みする。
 // sync-in-progress も同様に、成功・失敗どちらの経路でも必ずfalseへ戻す。
 pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
-    let t0 = Instant::now();
     std::thread::spawn(move || {
         let msg = cloud::sync_gist();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 crate::ui::home::refresh_all(&w, &state);
+                // 同期成功時の詳細（モバイル/Driveの内訳など）はログにだけ残し、
+                // UI表示は「同期完了」と完了時刻だけのシンプルな表示にする。
                 match msg {
-                    Ok(m) => w.set_sync_message(format!("{} ({})", m, fmt_secs(t0)).into()),
-                    Err(e) => w.set_sync_message(format!("同期失敗: {} ({})", e, fmt_secs(t0)).into()),
+                    Ok(_) => w.set_sync_message(format!("✓ 同期完了 ({})", now_hms()).into()),
+                    Err(e) => w.set_sync_message(format!("同期失敗: {} ({})", e, now_hms()).into()),
                 }
                 w.set_sync_in_progress(false);
             }
@@ -129,7 +127,6 @@ pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedSta
 #[cfg(not(target_os = "android"))]
 pub fn export_csv(weak: slint::Weak<MainWindow>) {
     std::thread::spawn(move || {
-        let t0 = Instant::now();
         let sessions = events::get_sessions().unwrap_or_default();
         let csv = events::export_csv(&sessions);
         let path = rfd::FileDialog::new()
@@ -141,8 +138,8 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
             if let Some(w) = weak.upgrade() {
                 match result {
                     None => w.set_data_message("キャンセルしました".into()),
-                    Some(Ok(())) => w.set_data_message(format!("✓ CSVエクスポート完了 ({})", fmt_secs(t0)).into()),
-                    Some(Err(e)) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, fmt_secs(t0)).into()),
+                    Some(Ok(())) => w.set_data_message(format!("✓ CSVエクスポート完了 ({})", now_hms()).into()),
+                    Some(Err(e)) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, now_hms()).into()),
                 }
                 w.set_export_in_progress(false);
             }
@@ -155,7 +152,6 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
 // 特別な権限なしにファイルマネージャーから参照・取り出しができる。
 #[cfg(target_os = "android")]
 pub fn export_csv(weak: slint::Weak<MainWindow>) {
-    let t0 = Instant::now();
     let Some(w) = weak.upgrade() else { return };
     let Some(dir) = crate::android_external_dir() else {
         w.set_data_message("外部ストレージが利用できません".into());
@@ -166,8 +162,8 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
     let csv = events::export_csv(&sessions);
     let path = dir.join("sleep_sessions.csv");
     match events::write_csv_file(path.to_string_lossy().to_string(), csv) {
-        Ok(()) => w.set_data_message(format!("CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{} ({})", path.file_name().unwrap().to_string_lossy(), fmt_secs(t0)).into()),
-        Err(e) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, fmt_secs(t0)).into()),
+        Ok(()) => w.set_data_message(format!("CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{} ({})", path.file_name().unwrap().to_string_lossy(), now_hms()).into()),
+        Err(e) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, now_hms()).into()),
     }
     w.set_export_in_progress(false);
 }
@@ -176,7 +172,6 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
 #[cfg(not(target_os = "android"))]
 pub fn backup(weak: slint::Weak<MainWindow>) {
     std::thread::spawn(move || {
-        let t0 = Instant::now();
         let content = events::get_events_content();
         let result = match content {
             Ok(content) => {
@@ -193,8 +188,8 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
             if let Some(w) = weak.upgrade() {
                 match result {
                     None => w.set_data_message("キャンセルしました".into()),
-                    Some(Ok(path)) => w.set_data_message(format!("✓ バックアップを保存しました → {} ({})", path, fmt_secs(t0)).into()),
-                    Some(Err(e)) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, fmt_secs(t0)).into()),
+                    Some(Ok(path)) => w.set_data_message(format!("✓ バックアップを保存しました → {} ({})", path, now_hms()).into()),
+                    Some(Err(e)) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into()),
                 }
                 w.set_backup_in_progress(false);
             }
@@ -204,7 +199,6 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
 
 #[cfg(target_os = "android")]
 pub fn backup(weak: slint::Weak<MainWindow>) {
-    let t0 = Instant::now();
     let Some(w) = weak.upgrade() else { return };
     let Some(dir) = crate::android_external_dir() else {
         w.set_data_message("外部ストレージが利用できません".into());
@@ -214,7 +208,7 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
     let content = match events::get_events_content() {
         Ok(c) => c,
         Err(e) => {
-            w.set_data_message(format!("バックアップ失敗: {} ({})", e, fmt_secs(t0)).into());
+            w.set_data_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into());
             w.set_backup_in_progress(false);
             return;
         }
@@ -222,8 +216,8 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
     let name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
     let path = dir.join(&name);
     match events::write_csv_file(path.to_string_lossy().to_string(), content) {
-        Ok(()) => w.set_data_message(format!("バックアップ完了 → Android/data/com.sleeptracker.app/files/{} ({})", name, fmt_secs(t0)).into()),
-        Err(e) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, fmt_secs(t0)).into()),
+        Ok(()) => w.set_data_message(format!("バックアップ完了 → Android/data/com.sleeptracker.app/files/{} ({})", name, now_hms()).into()),
+        Err(e) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into()),
     }
     w.set_backup_in_progress(false);
 }
@@ -241,7 +235,6 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
     RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
 
     std::thread::spawn(move || {
-        let t0 = Instant::now();
         let path = rfd::FileDialog::new().add_filter("テキスト", &["txt"]).pick_file();
         let result = path.map(|path| {
             std::fs::read_to_string(&path)
@@ -253,10 +246,10 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
                 match result {
                     None => w.set_data_message("キャンセルしました".into()),
                     Some(Ok(())) => {
-                        w.set_data_message(format!("✓ バックアップから復元しました ({})", fmt_secs(t0)).into());
+                        w.set_data_message(format!("✓ バックアップから復元しました ({})", now_hms()).into());
                         crate::ui::home::refresh_all(&w, &state);
                     }
-                    Some(Err(e)) => w.set_data_message(format!("復元失敗: {} ({})", e, fmt_secs(t0)).into()),
+                    Some(Err(e)) => w.set_data_message(format!("復元失敗: {} ({})", e, now_hms()).into()),
                 }
                 w.set_restore_in_progress(false);
             }
@@ -284,21 +277,20 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
     }
     RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
 
-    let t0 = Instant::now();
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
-            window.set_data_message(format!("restore.txt の読み込み失敗: {} ({})", e, fmt_secs(t0)).into());
+            window.set_data_message(format!("restore.txt の読み込み失敗: {} ({})", e, now_hms()).into());
             window.set_restore_in_progress(false);
             return;
         }
     };
     match events::restore_events(content) {
         Ok(()) => {
-            window.set_data_message(format!("バックアップから復元しました ({})", fmt_secs(t0)).into());
+            window.set_data_message(format!("バックアップから復元しました ({})", now_hms()).into());
             crate::ui::home::refresh_all(&window, &state);
         }
-        Err(e) => window.set_data_message(format!("復元失敗: {} ({})", e, fmt_secs(t0)).into()),
+        Err(e) => window.set_data_message(format!("復元失敗: {} ({})", e, now_hms()).into()),
     }
     window.set_restore_in_progress(false);
 }
@@ -313,16 +305,15 @@ pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Sha
     CLEAR_CONFIRM_PENDING.store(false, Ordering::SeqCst);
 
     std::thread::spawn(move || {
-        let t0 = Instant::now();
         let result = events::clear_all_data();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
                     Ok(()) => {
-                        w.set_data_message(format!("全データを削除しました ({})", fmt_secs(t0)).into());
+                        w.set_data_message(format!("全データを削除しました ({})", now_hms()).into());
                         crate::ui::home::refresh_all(&w, &state);
                     }
-                    Err(e) => w.set_data_message(format!("削除失敗: {} ({})", e, fmt_secs(t0)).into()),
+                    Err(e) => w.set_data_message(format!("削除失敗: {} ({})", e, now_hms()).into()),
                 }
                 w.set_clear_in_progress(false);
             }

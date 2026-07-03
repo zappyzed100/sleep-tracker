@@ -987,10 +987,14 @@ component CheckRow {
     }
 }
 
+// wrap:word-wrapを使うとwidth:100%の解決前に高さが計算され、
+// 「カードは少し大きくなるのに文字が見えない」不具合になっていたため、
+// ステータス表示は折り返しなしの1行に変更し、高さも明示する。
 component SettingsNote {
     in property <string> text;
     width: 100%;
-    TextInput { width: 100%; text: root.text; color: #a6adc8; font-size: 13px; wrap: word-wrap; horizontal-alignment: left; read-only: true; }
+    height: 20px;
+    TextInput { width: 100%; height: 100%; text: root.text; color: #a6adc8; font-size: 13px; horizontal-alignment: left; vertical-alignment: center; single-line: true; read-only: true; }
 }
 
 component SettingsSection {
