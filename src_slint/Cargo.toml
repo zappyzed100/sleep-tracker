@@ -38,6 +38,9 @@ slint = { version = "1.13", features = ["backend-android-activity-06"] }
 [build-dependencies]
 slint-build = "1.13"
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [package.metadata.android]
 package = "com.sleeptracker.app"
 compile_sdk_version = 34

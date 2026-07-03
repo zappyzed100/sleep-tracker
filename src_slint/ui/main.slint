@@ -75,6 +75,7 @@ export struct SessionVM {
     time-range: string,     // "7/1 23:00 → 7/2 07:00"
     duration-label: string,
     deleting: bool,
+    overlaps: bool,          // 他のセッションと時間帯が重複している
 }
 
 component DayDetailModal {
@@ -127,7 +128,7 @@ component DayDetailModal {
             HorizontalLayout {
                 Text {
                     text: "🌙 " + root.date-label + " の睡眠";
-                    color: #cdd6f4;
+                    color: #f9e2af;
                     font-size: 17px;
                     font-weight: 700;
                     horizontal-stretch: 1;
@@ -139,7 +140,7 @@ component DayDetailModal {
                     Rectangle {
                         background: closeBtn.has-hover ? #313244 : transparent;
                         border-radius: 6px;
-                        Text { text: "✕"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "×"; color: closeBtn.has-hover ? #cdd6f4 : #a6adc8; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }
@@ -172,24 +173,34 @@ component DayDetailModal {
 
                     for s in root.sessions: Rectangle {
                         vertical-stretch: 0;
-                        background: #181825;
+                        background: s.overlaps ? rgba(243, 139, 168, 0.18) : #181825;
                         border-radius: 8px;
-                        height: 40px;
+                        border-width: s.overlaps ? 1px : 0px;
+                        border-color: #f38ba8;
+                        height: 44px;
                         HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 12px;
                             spacing: 10px;
+                            if s.overlaps: Text {
+                                text: "⚠ 重複";
+                                color: #f38ba8;
+                                font-size: 12px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
                             Text {
                                 text: s.time-range;
                                 color: #cdd6f4;
-                                font-size: 13px;
+                                font-size: 16px;
+                                font-weight: 700;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
                             }
                             Text {
                                 text: s.duration-label;
-                                color: #a6adc8;
-                                font-size: 13px;
+                                color: #89b4fa;
+                                font-size: 15px;
                                 vertical-alignment: center;
                             }
                             delBtn := TouchArea {
@@ -211,18 +222,19 @@ component DayDetailModal {
                     }
 
                     addToggleBtn := TouchArea {
-                        height: 32px;
+                        height: 34px;
                         vertical-stretch: 0;
                         clicked => { root.toggle-add(); }
                         Rectangle {
                             background: addToggleBtn.has-hover ? #313244 : transparent;
                             border-radius: 6px;
                             border-width: 1px;
-                            border-color: #313244;
+                            border-color: #45475a;
                             Text {
                                 text: root.add-open ? "▲ キャンセル" : "＋ 睡眠を手動追加";
-                                color: #cdd6f4;
-                                font-size: 13px;
+                                color: root.add-open ? #f38ba8 : #a6e3a1;
+                                font-size: 14px;
+                                font-weight: 600;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -798,21 +810,31 @@ component CheckRow {
     in property <bool> checked;
     in property <string> label;
     callback toggled();
+    width: 100%;
+    height: 30px;
     ck := TouchArea {
-        height: 30px;
+        width: 100%;
+        height: 100%;
         clicked => { root.toggled(); }
         HorizontalLayout {
             spacing: 8px;
             alignment: start;
             Rectangle {
                 width: 18px; height: 18px;
+                y: (parent.height - self.height) / 2;
                 border-width: 1px;
                 border-color: #89b4fa;
                 border-radius: 4px;
                 background: root.checked ? #89b4fa : transparent;
                 Text { text: root.checked ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
             }
-            Text { text: root.label; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
+            Text {
+                text: root.label;
+                color: #cdd6f4;
+                font-size: 16px;
+                height: 18px;
+                vertical-alignment: center;
+            }
         }
     }
 }
@@ -995,6 +1017,7 @@ component SettingsPanel {
 
 export component MainWindow inherits Window {
     title: "睡眠トラッカー";
+    icon: @image-url("../assets/icon.png");
     width: 1200px;
     height: 750px;
     background: #1e1e2e;
@@ -1157,6 +1180,16 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            syncBtn := TouchArea {
+                width: 40px;
+                height: 40px;
+                clicked => { root.sync-now(); }
+                Rectangle {
+                    background: syncBtn.has-hover ? #45475a : #313244;
+                    border-radius: 6px;
+                    Text { text: "🔄"; horizontal-alignment: center; vertical-alignment: center; font-size: 17px; }
+                }
+            }
         }
 
         if root.tab == "settings": SettingsPanel {
@@ -1257,7 +1290,7 @@ export component MainWindow inherits Window {
                         width: 96px;
                         clicked => { root.prev-week(); }
                         Rectangle {
-                            background: prevBtn.has-hover ? #313244 : transparent;
+                            background: prevBtn.has-hover ? #45475a : #313244;
                             border-radius: 6px;
                             Text { text: "◀ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
                         }
@@ -1275,7 +1308,7 @@ export component MainWindow inherits Window {
                         height: 36px;
                         clicked => { root.open-calendar(); }
                         Rectangle {
-                            background: calBtn.has-hover ? #313244 : transparent;
+                            background: calBtn.has-hover ? #45475a : #313244;
                             border-radius: 6px;
                             Text { text: "📅"; horizontal-alignment: center; vertical-alignment: center; font-size: 16px; }
                         }
@@ -1293,7 +1326,7 @@ export component MainWindow inherits Window {
                         width: 96px;
                         clicked => { root.next-week(); }
                         Rectangle {
-                            background: nextBtn.has-hover ? #313244 : transparent;
+                            background: nextBtn.has-hover ? #45475a : #313244;
                             border-radius: 6px;
                             Text { text: "次の週 ▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 15px; }
                         }

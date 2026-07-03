@@ -133,18 +133,36 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
         None => sessions.iter().collect(),
     };
 
-    let mut unique_days: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // 平均睡眠は「セッション数」ではなく「記録日数」で割る。1日に複数セッション
+    // （昼寝＋本睡眠など）があると、セッション単位の平均では1日あたりの睡眠時間が
+    // 薄まって過小評価されてしまうため、日ごとに睡眠時間を合算してから平均する。
+    // PC/Android両方から記録された重複区間は merge_intervals で1本にまとめてから
+    // 合算する（重なった分の二重計上を防ぐ）。
+    let mut per_day_intervals: std::collections::HashMap<&str, Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>> = std::collections::HashMap::new();
     for s in &recent {
-        unique_days.insert(&s.start[..10.min(s.start.len())]);
+        let day_key = &s.start[..10.min(s.start.len())];
+        if let (Ok(st), Ok(en)) = (
+            chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S"),
+            chrono::NaiveDateTime::parse_from_str(s.end.trim(), "%Y-%m-%d %H:%M:%S"),
+        ) {
+            per_day_intervals.entry(day_key).or_default().push((st, en));
+        }
     }
-    let avg = if !recent.is_empty() {
-        Some(recent.iter().map(|s| s.duration_hours).sum::<f64>() / recent.len() as f64)
+    let per_day: std::collections::HashMap<&str, f64> = per_day_intervals.into_iter()
+        .map(|(day, intervals)| {
+            let merged = utils::merge_intervals(intervals);
+            let hours: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
+            (day, hours)
+        })
+        .collect();
+    let avg = if !per_day.is_empty() {
+        Some(per_day.values().sum::<f64>() / per_day.len() as f64)
     } else {
         None
     };
     let last = sessions.last().map(|s| s.duration_hours);
 
-    window.set_days_recorded(format!("{}日", unique_days.len()).into());
+    window.set_days_recorded(format!("{}日", per_day.len()).into());
     window.set_avg_sleep(avg.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
     window.set_last_sleep(last.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
 
@@ -422,14 +440,31 @@ pub fn open_day_detail(window: &MainWindow, state: &SharedState, date: &str) {
 
     let sessions = events::get_sessions().unwrap_or_default();
     let day_sessions: Vec<&Session> = sessions.iter().filter(|s| s.start.starts_with(date)).collect();
-    let total: f64 = day_sessions.iter().map(|s| s.duration_hours).sum();
 
-    let vm: Vec<SessionVM> = day_sessions.iter().map(|s| SessionVM {
-        start: s.start.clone().into(),
-        end: s.end.clone().into(),
-        time_range: format!("{} → {}", fmt_ts_short(&s.start), fmt_ts_short(&s.end)).into(),
-        duration_label: utils::format_duration(s.duration_hours).into(),
-        deleting: false,
+    // PC/Android両方から記録された重複区間は合計計算では1本にまとめて二重計上を
+    // 防ぐ（一覧表示では元のセッションをそのまま出し、重複しているものには
+    // ⚠マークを付ける）。
+    let parse = |s: &str| chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok();
+    let day_intervals: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> = day_sessions.iter()
+        .filter_map(|s| Some((parse(&s.start)?, parse(&s.end)?)))
+        .collect();
+    let merged = utils::merge_intervals(day_intervals.clone());
+    let total: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
+
+    let vm: Vec<SessionVM> = day_sessions.iter().enumerate().map(|(i, s)| {
+        let overlaps = match (parse(&s.start), parse(&s.end)) {
+            (Some(st), Some(en)) => day_intervals.iter().enumerate()
+                .any(|(j, (os, oe))| j != i && st < *oe && en > *os),
+            _ => false,
+        };
+        SessionVM {
+            start: s.start.clone().into(),
+            end: s.end.clone().into(),
+            time_range: format!("{} → {}", fmt_ts_short(&s.start), fmt_ts_short(&s.end)).into(),
+            duration_label: utils::format_duration(s.duration_hours).into(),
+            deleting: false,
+            overlaps,
+        }
     }).collect();
 
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap_or_else(|_| chrono::Local::now().date_naive());

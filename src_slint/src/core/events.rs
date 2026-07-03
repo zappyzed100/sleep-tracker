@@ -475,7 +475,20 @@ pub fn get_sessions() -> Result<Vec<Session>, String> {
     Ok(sessions)
 }
 
+// 手動追加する睡眠時間が既存のセッションと重なっていないか確認する。
+// タイムスタンプは "YYYY-MM-DD HH:MM:SS" 固定長のため文字列比較がそのまま
+// 時刻比較として使える。
+fn overlaps_existing(start: &str, end: &str) -> Option<(String, String)> {
+    let sessions = get_sessions().unwrap_or_default();
+    sessions.into_iter()
+        .find(|s| start < s.end.as_str() && end > s.start.as_str())
+        .map(|s| (s.start, s.end))
+}
+
 pub fn add_session(start: String, end: String) -> Result<(), String> {
+    if let Some((os, oe)) = overlaps_existing(&start, &end) {
+        return Err(format!("既存の睡眠記録（{} → {}）と重なっています", os, oe));
+    }
     eprintln!("{} add_session: {} → {}", TAG, start, end);
     let path = crate::data_dir().join("sleep_manual.txt");
     let line = format!("{},{}\n", start, end);

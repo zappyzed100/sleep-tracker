@@ -43,6 +43,24 @@ fn to_night_hour(dt: NaiveDateTime) -> f64 {
     if h < 12.0 { h + 24.0 } else { h }
 }
 
+// PC版・Android版それぞれが記録した睡眠時間が重なっている場合、単純に合計すると
+// 二重計上になる（例: 0:00-8:00 と 4:00-10:00 は合計14hではなく、繋げて10h）。
+// 重複・隣接する区間を1本にマージしてから合計・就寝起床時刻を算出する。
+pub fn merge_intervals(mut intervals: Vec<(NaiveDateTime, NaiveDateTime)>) -> Vec<(NaiveDateTime, NaiveDateTime)> {
+    intervals.sort_by_key(|(s, _)| *s);
+    let mut merged: Vec<(NaiveDateTime, NaiveDateTime)> = Vec::new();
+    for (s, e) in intervals {
+        if let Some(last) = merged.last_mut() {
+            if s <= last.1 {
+                if e > last.1 { last.1 = e; }
+                continue;
+            }
+        }
+        merged.push((s, e));
+    }
+    merged
+}
+
 pub fn build_week(sessions: &[Session], week_base: NaiveDate) -> Vec<DaySummary> {
     let start = week_start(week_base);
     (0..7).map(|i| {
@@ -51,20 +69,22 @@ pub fn build_week(sessions: &[Session], week_base: NaiveDate) -> Vec<DaySummary>
         let day_start = day.and_hms_opt(0, 0, 0).unwrap();
         let day_end = next.and_hms_opt(0, 0, 0).unwrap();
 
-        let day_sessions: Vec<(&Session, NaiveDateTime, NaiveDateTime)> = sessions.iter()
+        let day_intervals: Vec<(NaiveDateTime, NaiveDateTime)> = sessions.iter()
             .filter_map(|s| {
                 let st = parse_local(&s.start)?;
-                if st >= day_start && st < day_end { Some((s, st, parse_local(&s.end)?)) } else { None }
+                let en = parse_local(&s.end)?;
+                if st >= day_start && st < day_end { Some((st, en)) } else { None }
             })
             .collect();
 
-        if day_sessions.is_empty() {
+        if day_intervals.is_empty() {
             return DaySummary { date: day, total_hours: 0.0, bedtime_h: None, waketime_h: None };
         }
 
-        let total: f64 = day_sessions.iter().map(|(s, _, _)| s.duration_hours).sum();
-        let (_, bedtime, waketime) = *day_sessions.iter()
-            .max_by(|a, b| a.0.duration_hours.partial_cmp(&b.0.duration_hours).unwrap_or(std::cmp::Ordering::Equal))
+        let merged = merge_intervals(day_intervals);
+        let total: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
+        let (bedtime, waketime) = *merged.iter()
+            .max_by(|a, b| (a.1 - a.0).cmp(&(b.1 - b.0)))
             .unwrap();
 
         DaySummary {
