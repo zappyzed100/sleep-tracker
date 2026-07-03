@@ -48,7 +48,13 @@ package = "com.sleeptracker.app"
 compile_sdk_version = 34
 target_sdk_version = 34
 min_sdk_version = 24
+resources = "android_res"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
+
+# PC版と共通のアイコン（assets/icon.png）をandroid_res/mipmap-*/ic_launcher.pngに
+# コピーして使う。
+[package.metadata.android.application]
+icon = "@mipmap/ic_launcher"
 

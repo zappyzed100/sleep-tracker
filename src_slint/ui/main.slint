@@ -434,6 +434,9 @@ component WeeklyChart {
     in property <[CurvePointVM]> bedtime-curve;
     in property <[CurvePointVM]> waketime-curve;
     callback day-clicked(string);
+    // Android実機でのタッチ操作向け。棒グラフ上での左右スワイプで週送りする。
+    callback swipe-prev();
+    callback swipe-next();
 
     // 明示のheightは持たせない。使用箇所のvertical-stretch:1で親の余白いっぱいに
     // 伸びるようにするため（固定値があるとstretchが効かずheight:260pxのままになる）。
@@ -500,7 +503,23 @@ component WeeklyChart {
             min-width: 0px;
             preferred-width: 0px;
             horizontal-stretch: 1;
-            clicked => { root.day-clicked(day.date); }
+            // タップと左右スワイプを区別する。指を離した時の横方向の移動量が
+            // 閾値を超えていればスワイプとして週送り、そうでなければ日付タップとして扱う。
+            property <float> swipe-start-x: 0;
+            property <float> swipe-dx: self.mouse-x / 1px - col.swipe-start-x;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    col.swipe-start-x = self.mouse-x / 1px;
+                } else if (event.kind == PointerEventKind.up) {
+                    if (col.swipe-dx > 60) {
+                        root.swipe-prev();
+                    } else if (col.swipe-dx < -60) {
+                        root.swipe-next();
+                    } else {
+                        root.day-clicked(day.date);
+                    }
+                }
+            }
             property <length> bar-h: self.height * max(day.bar-frac, 0.02);
             property <length> bar-y: self.height - self.bar-h;
             property <length> bar-w: self.width * 0.7;
@@ -1033,6 +1052,7 @@ component SettingsSection {
 }
 
 component SettingsPanel {
+    in property <bool> is-mobile: false;
     in-out property <bool> startup-enabled: false;
     in-out property <int> idle-threshold-minutes: 60;
     in-out property <bool> target-wake-enabled: false;
@@ -1083,8 +1103,8 @@ component SettingsPanel {
             spacing: 20px;
             alignment: start;
 
-            // ── 起動設定 ──
-            SettingsSection {
+            // ── 起動設定（PC自動起動・デスクトップショートカットはWindows専用の概念のため、Androidでは非表示） ──
+            if !root.is-mobile: SettingsSection {
                 title: "起動設定";
                 CheckRow { checked: root.startup-enabled; label: "PC 起動時に自動起動する"; toggled => { root.toggle-startup(!root.startup-enabled); } }
                 HorizontalLayout {
@@ -1249,6 +1269,10 @@ export component MainWindow inherits Window {
     background: #1e1e2e;
 
     in property <string> app-version: "";
+    // Android実機ではステータスバー（電池残量等）とアプリ本体の描画領域が
+    // 分離されておらず、トップバーがステータスバーと重なって見えてしまう
+    // ため、モバイル時だけ上に余白を足す。
+    in property <bool> is-mobile: false;
 
     // 統計ストリップ用のプロパティ（main.rsから設定される）
     in property <string> period-key: "month";
@@ -1367,8 +1391,25 @@ export component MainWindow inherits Window {
     callback toggle-add-session();
     callback add-session();
 
+    // Android実機のOS標準の戻るボタン（Key.Backにマップされる）で、設定タブに
+    // いる時だけホームタブへ戻る。NumSpin等の内側のFocusScopeがBackキーを
+    // 処理しない（reject）場合はここまでイベントが伝播してくる。
+    backFs := FocusScope {
+        init => { backFs.focus(); }
+        key-pressed(event) => {
+            if (event.text == Key.Back && root.tab == "settings") {
+                root.tab = "home";
+                accept
+            } else {
+                reject
+            }
+        }
+
     VerticalLayout {
         spacing: 0;
+
+        // ── ステータスバー避けの余白（Androidのみ） ──
+        if root.is-mobile: Rectangle { background: #11111b; height: 32px; }
 
         // ── トップバー（エッジツーエッジ、Tauri版のcrust色） ──
         Rectangle {
@@ -1461,6 +1502,7 @@ export component MainWindow inherits Window {
 
         if root.tab == "settings": SettingsPanel {
             vertical-stretch: 1;
+            is-mobile: root.is-mobile;
             startup-enabled: root.startup-enabled;
             idle-threshold-minutes: root.idle-threshold-minutes;
             target-wake-enabled: root.target-wake-enabled;
@@ -1716,10 +1758,13 @@ export component MainWindow inherits Window {
                     bedtime-curve: root.bedtime-curve;
                     waketime-curve: root.waketime-curve;
                     day-clicked(d) => { root.day-clicked(d); }
+                    swipe-prev => { root.prev-week(); }
+                    swipe-next => { root.next-week(); }
                 }
             }
             }
         }
+    }
     }
 
     if root.cal-open: TouchArea {

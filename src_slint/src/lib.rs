@@ -134,6 +134,8 @@ pub fn run() {
 
     let window = MainWindow::new().expect("ウィンドウの作成に失敗しました");
     window.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    #[cfg(target_os = "android")]
+    window.set_is_mobile(true);
 
     // 睡眠予測カードの初期入眠時刻 = 現在時刻（PredictionCard.tsx の currentHHMM 相当）。
     // 「今すぐ」ボタンを押したのと同じ状態なので、起動時からbedtime-sourceも"now"にして
