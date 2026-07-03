@@ -97,6 +97,33 @@ pub fn wake_event_signaled(handle: isize) -> bool {
     }
 }
 
+// slintの`Window::show()`は非表示から可視化するだけで、最前面に持ってきたり
+// フォーカスを与えたりはしない。そのためトレイの「開く」や二重起動の
+// 「表示して」通知でshow()だけ呼んでも、他のウィンドウの裏に隠れたままで
+// 「反応していないように見える」ことがあった。raw-window-handle経由で実際の
+// HWNDを取得し、SetForegroundWindowで確実に前面へ出す。
+// show()を先に呼んでSlint側の表示状態を正しくした後にこれを呼ぶこと。
+pub fn bring_to_foreground(window: &slint::Window) {
+    #[cfg(windows)] {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+
+        let slint_handle = window.window_handle();
+        let Ok(handle) = slint_handle.window_handle() else { return };
+        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+            let hwnd: isize = h.hwnd.into();
+            unsafe {
+                ShowWindow(hwnd, SW_RESTORE);
+                SetForegroundWindow(hwnd);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+    }
+}
+
 pub fn get_startup_enabled() -> bool {
     #[cfg(windows)] {
         use winreg::{RegKey, enums::HKEY_CURRENT_USER};

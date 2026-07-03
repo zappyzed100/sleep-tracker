@@ -57,11 +57,15 @@ pub fn setup(window: &MainWindow) {
         while let Ok(event) = tray_rx.try_recv() {
             if matches!(event, TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }) {
                 let _ = w.window().show();
+                win::bring_to_foreground(w.window());
             }
         }
         while let Ok(event) = menu_rx.try_recv() {
             match event.id.0.as_str() {
-                "open" => { let _ = w.window().show(); }
+                "open" => {
+                    let _ = w.window().show();
+                    win::bring_to_foreground(w.window());
+                }
                 "quit" => { let _ = slint::quit_event_loop(); }
                 _ => {}
             }
@@ -69,8 +73,10 @@ pub fn setup(window: &MainWindow) {
         // 二重起動されたときに他プロセスから送られる「表示して」通知。
         // トレイに隠れている状態でOSのShowWindowを直接呼ぶとSlint内部の表示状態と
         // 食い違い真っ白な画面になっていたため、必ず自分自身のwindow().show()経由で表示する。
+        // show()だけでは最前面に来ずフォーカスも取れないため、続けてbring_to_foregroundも呼ぶ。
         if win::wake_event_signaled(wake_event) {
             let _ = w.window().show();
+            win::bring_to_foreground(w.window());
         }
     });
     // timer をリークして保持する（main() のスコープを抜けても動き続けるように）。
