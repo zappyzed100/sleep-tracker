@@ -18,16 +18,26 @@ const STARTUP_REG_VALUE: &str = "SleepTracker";
 #[cfg(windows)]
 const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\SleepTrackerSingleInstanceMutex";
 
+#[cfg(windows)]
+const WAKE_EVENT_NAME: &str = "Local\\SleepTrackerWakeEvent";
+
 // アプリの多重起動を防ぐ。名前付きMutexが既に存在する（＝他のインスタンスが
-// 起動済み）場合は、既存ウィンドウをフォアグラウンドに呼び出してfalseを返す。
-// 呼び出し側はfalseが返ったら即座にプロセスを終了すること。
+// 起動済み）場合はfalseを返す。呼び出し側はfalseが返ったら即座にプロセスを
+// 終了すること。
+//
+// 既存インスタンスの呼び出しには、以前はFindWindowW+ShowWindow+SetForegroundWindow
+// を直接使っていたが、このアプリはトレイに閉じるとSlintの`HideWindow`でウィンドウを
+// 隠すため、Win32のShowWindowだけで無理やり表示するとSlint内部の表示状態と
+// 食い違い、真っ白なウィンドウになる不具合があった。名前付きイベントで既存プロセス
+// 自身に「表示して」と伝え、既存プロセスが自分の`window().show()`を呼ぶ方式にする
+// （tray.rsのポーリングタイマーで受信）。
+//
 // Mutexハンドルはプロセス終了までホールドし続ける必要があるため、
 // 意図的にリーク（forget）する — 通常のOSはプロセス終了時に自動で解放する。
 pub fn ensure_single_instance() -> bool {
     #[cfg(windows)] {
         use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
-        use windows_sys::Win32::System::Threading::CreateMutexW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
+        use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, SetEvent};
 
         let name: Vec<u16> = SINGLE_INSTANCE_MUTEX_NAME.encode_utf16().chain(std::iter::once(0)).collect();
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
@@ -37,12 +47,12 @@ pub fn ensure_single_instance() -> bool {
             if handle != 0 {
                 unsafe { CloseHandle(handle); }
             }
-            let title: Vec<u16> = "睡眠トラッカー".encode_utf16().chain(std::iter::once(0)).collect();
-            unsafe {
-                let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-                if hwnd != 0 {
-                    ShowWindow(hwnd, SW_RESTORE);
-                    SetForegroundWindow(hwnd);
+            let ev_name: Vec<u16> = WAKE_EVENT_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+            let ev = unsafe { CreateEventW(std::ptr::null(), 0, 0, ev_name.as_ptr()) };
+            if ev != 0 {
+                unsafe {
+                    SetEvent(ev);
+                    CloseHandle(ev);
                 }
             }
             return false;
@@ -54,6 +64,37 @@ pub fn ensure_single_instance() -> bool {
     }
     #[allow(unreachable_code)]
     true
+}
+
+// 「表示して」通知を受け取るためのイベントハンドルを作る（プライマリインスタンス側
+// で起動時に1回呼ぶ）。CreateEventWは名前が既存でも成功して同じオブジェクトの
+// ハンドルを返すため、作成順は問わない。戻り値はtray.rsのポーリングタイマーに
+// 渡してwake_event_signaledで監視する。
+pub fn create_wake_event() -> isize {
+    #[cfg(windows)] {
+        use windows_sys::Win32::System::Threading::CreateEventW;
+        let ev_name: Vec<u16> = WAKE_EVENT_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+        return unsafe { CreateEventW(std::ptr::null(), 0, 0, ev_name.as_ptr()) };
+    }
+    #[allow(unreachable_code)]
+    {
+        0
+    }
+}
+
+// 他プロセスがensure_single_instance()経由でイベントをSetした直後かどうかを
+// 非ブロッキングで確認する（自動リセットイベントなので成功したら次はfalseに戻る）。
+pub fn wake_event_signaled(handle: isize) -> bool {
+    #[cfg(windows)] {
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        const WAIT_OBJECT_0: u32 = 0;
+        return handle != 0 && unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0;
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = handle;
+        false
+    }
 }
 
 pub fn get_startup_enabled() -> bool {

@@ -4,10 +4,13 @@
 //!        プロセスを終了せずトレイに隠す。tray-iconクレートはwinitイベントループに
 //!        依存しないポーリング用チャンネル（TrayIconEvent::receiver / MenuEvent::receiver）
 //!        を提供しているため、SlintのTimerで定期的にポーリングして処理する。
+//!        同じタイマーで、二重起動時に他プロセスから送られる「表示して」通知
+//!        （platform::windows::ensure_single_instance）も監視する。
 //!        Tauri版のトレイ機能（開く/終了メニュー、閉じるボタンで最小化）の移植。
 //!
 //! 公開 : `setup(window: &MainWindow)`
 
+use crate::platform::windows as win;
 use crate::MainWindow;
 use slint::ComponentHandle;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
@@ -45,6 +48,7 @@ pub fn setup(window: &MainWindow) {
     // （winitイベントループに直接フックしない、Slintの標準runループと共存させるため）。
     let tray_rx = TrayIconEvent::receiver();
     let menu_rx = MenuEvent::receiver();
+    let wake_event = win::create_wake_event();
     let weak = window.as_weak();
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(150), move || {
@@ -61,6 +65,12 @@ pub fn setup(window: &MainWindow) {
                 "quit" => { let _ = slint::quit_event_loop(); }
                 _ => {}
             }
+        }
+        // 二重起動されたときに他プロセスから送られる「表示して」通知。
+        // トレイに隠れている状態でOSのShowWindowを直接呼ぶとSlint内部の表示状態と
+        // 食い違い真っ白な画面になっていたため、必ず自分自身のwindow().show()経由で表示する。
+        if win::wake_event_signaled(wake_event) {
+            let _ = w.window().show();
         }
     });
     // timer をリークして保持する（main() のスコープを抜けても動き続けるように）。
