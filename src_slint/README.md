@@ -31,9 +31,35 @@ cargo build --release
 
 ### Android（2種類のビルド経路がある）
 
-#### ① cargo-apk（純Rust、素早い反復用）
+#### ① Gradle + cargo-ndk（`android/`、真バックグラウンド同期あり・配布用に推奨）
 
-WorkManagerが必要ないUI/ロジック側の動作確認はこちらが手早い。Kotlinコードは含まれない。
+WorkManagerで15分ごとにDrive宛シグナルを送信するKotlin製 `DriveSignalWorker` を含み、
+アプリがバックグラウンド／終了後でも動作する。実機に配布する場合はこちらを使う。
+
+```bash
+# 1. RustのcdylibをNDK向けにビルドし、android/app/src/main/jniLibs/ に配置
+export ANDROID_HOME=... ANDROID_NDK_HOME=...
+cargo ndk -t arm64-v8a -P 34 -o android/app/src/main/jniLibs build --release
+
+# 2. Gradleでapkをビルド（毎回 clean を挟むこと。増分ビルドだと過去のjniLibsが
+#    zipの空き領域に残り、apkサイズが異常に膨らむことがある）
+cd android
+export ANDROID_HOME=... JAVA_HOME=...
+./gradlew.bat clean assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+`-P 34`（プラットフォームAPIレベル）は、インストール済みのAndroid SDKに存在するレベルを指定する
+必要がある（`sdkmanager --list` や `platforms/` ディレクトリで確認）。指定しないとデフォルトの21が
+使われ、21のSDKプラットフォームが未インストールだと "No Android platforms found" で失敗する。
+
+`android/local.properties`（sdk.dir）と `app/src/main/jniLibs/`（cargo-ndkの出力）はビルド生成物
+のためgitignore対象。
+
+#### ② cargo-apk（純Rust、素早い反復用）
+
+WorkManagerが不要なUI/ロジック側の動作確認はこちらが手早い。Kotlinコードは含まれないため、
+真のバックグラウンド同期（15分ごとのDEVICE_ON送信）は動かない。
 
 ```bash
 # 初回のみ: cargo install cargo-apk
@@ -43,37 +69,13 @@ cargo apk build --target x86_64-linux-android --lib    # エミュレータ
 adb install target/debug/apk/sleep_tracker.apk
 ```
 
-#### ② Gradle + cargo-ndk（`android/`、真バックグラウンド同期あり）
-
-Tauri版の `DriveSignalWorker`（WorkManagerで15分ごとにDrive宛シグナル送信、アプリ終了後も動く）
-をほぼそのまま移植したKotlinコードを含む。cargo-apkは純Rust（NativeActivity）構成のため
-Kotlin/Javaソースを同梱できず、この経路が必要になった。
-
-```bash
-# 1. RustのcdylibをNDK向けにビルドし、android/app/src/main/jniLibs/ に配置
-export ANDROID_HOME=... ANDROID_NDK_HOME=...
-cargo ndk -t arm64-v8a -t x86_64 -o android/app/src/main/jniLibs build --release
-
-# 2. Gradleでapkをビルド
-cd android
-export ANDROID_HOME=... JAVA_HOME=...
-./gradlew.bat assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-`android/local.properties`（sdk.dir）と `app/src/main/jniLibs/`（cargo-ndkの出力）はビルド生成物
-のためgitignore対象。`android/README.md`（未整備）に詳細を追記予定。
-
 ## 開発中の暫定事項
 
-- `data_dir()` はデスクトップ版では `../src_tauri/data/` を共有している（実データでの検証用）。
-  Tauri版を廃止する際は独立したデータディレクトリに切り替える必要がある。
 - Windowsインストーラー（MSI/NSIS）は未整備（`cargo-wix` で原因不明のエラーが発生中、保留）。
 - CSVインポート機能は対象外（意図的にスコープ外）。
 - Android版のCSVエクスポート/バックアップ/リストアは実装済み（rfdクレートがAndroidバックエンドを
   持たないため、外部ストレージ固定パスへの読み書きで代替）。
-- Android版の真のバックグラウンド同期（`android/` のGradle+WorkManagerビルド）は実装済み。
-  ただしcargo-apk版（①）はKotlinを含められないため、アプリ起動中のみの5分ごとタイマー同期のまま。
+- Android版のリリース署名（keystore）は未整備。配布中のapkはdebug署名。
 
 ## 依存関係
 
