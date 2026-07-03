@@ -3,7 +3,71 @@
 // 役割 : ホーム画面（睡眠予測カード・統計ストリップ）を表示する。
 //        Catppuccin Mocha風の配色。Tauri版 App.css の配色変数を踏襲。
 
-import { SpinBox, LineEdit } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
+
+// 標準SpinBoxは常に上下ボタンが横に並んで表示され幅を取るため、
+// ホバー時だけ縦積みの上下ボタンを右側に出す自作の数値スピナー。
+component NumSpin {
+    in property <int> value;
+    in property <int> minimum: 0;
+    in property <int> maximum: 99;
+    in property <bool> zero-pad: false;
+    in property <length> spin-width: 60px;
+    callback edited(int);
+
+    width: root.spin-width;
+    height: 34px;
+
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+
+        Rectangle {
+            background: #313244;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: ta.has-hover ? #45475a : transparent;
+
+            Text {
+                x: 10px;
+                width: parent.width - 10px;
+                text: (root.zero-pad && root.value < 10) ? "0\{root.value}" : "\{root.value}";
+                color: #cdd6f4;
+                font-size: 15px;
+                font-weight: 700;
+                horizontal-alignment: left;
+                vertical-alignment: center;
+            }
+
+            if ta.has-hover: Rectangle {
+                x: parent.width - 20px;
+                width: 20px;
+                height: 100%;
+
+                upTa := TouchArea {
+                    y: 0px;
+                    height: parent.height / 2;
+                    width: 100%;
+                    clicked => { root.edited(min(root.value + 1, root.maximum)); }
+                    Rectangle {
+                        background: upTa.has-hover ? #45475a : transparent;
+                        Text { text: "▲"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                downTa := TouchArea {
+                    y: parent.height / 2;
+                    height: parent.height / 2;
+                    width: 100%;
+                    clicked => { root.edited(max(root.value - 1, root.minimum)); }
+                    Rectangle {
+                        background: downTa.has-hover ? #45475a : transparent;
+                        Text { text: "▼"; font-size: 8px; color: #a6adc8; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+}
 
 export struct SessionVM {
     start: string,
@@ -172,28 +236,28 @@ component DayDetailModal {
                         Text { width: 100%; text: "🌙 入眠"; color: #f9e2af; font-size: 13px; horizontal-alignment: left; }
                         HorizontalLayout {
                             spacing: 4px;
-                            SpinBox { width: 70px; minimum: 2020; maximum: 2035; value: root.add-start-y; edited(v) => { root.add-start-y = v; } }
+                            NumSpin { spin-width: 66px; minimum: 2020; maximum: 2035; value: root.add-start-y; edited(v) => { root.add-start-y = v; } }
                             Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { width: 56px; minimum: 1; maximum: 12; value: root.add-start-mo; edited(v) => { root.add-start-mo = v; } }
+                            NumSpin { spin-width: 50px; zero-pad: true; minimum: 1; maximum: 12; value: root.add-start-mo; edited(v) => { root.add-start-mo = v; } }
                             Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { width: 56px; minimum: 1; maximum: 31; value: root.add-start-d; edited(v) => { root.add-start-d = v; } }
-                            SpinBox { width: 70px; minimum: 0; maximum: 23; value: root.add-start-h; edited(v) => { root.add-start-h = v; } }
+                            NumSpin { spin-width: 50px; zero-pad: true; minimum: 1; maximum: 31; value: root.add-start-d; edited(v) => { root.add-start-d = v; } }
+                            NumSpin { spin-width: 56px; zero-pad: true; minimum: 0; maximum: 23; value: root.add-start-h; edited(v) => { root.add-start-h = v; } }
                             Text { text: "時"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { width: 70px; minimum: 0; maximum: 59; value: root.add-start-m; edited(v) => { root.add-start-m = v; } }
+                            NumSpin { spin-width: 56px; zero-pad: true; minimum: 0; maximum: 59; value: root.add-start-m; edited(v) => { root.add-start-m = v; } }
                             Text { text: "分"; color: #cdd6f4; vertical-alignment: center; }
                         }
 
                         Text { width: 100%; text: "☀️ 起床"; color: #a6e3a1; font-size: 13px; horizontal-alignment: left; }
                         HorizontalLayout {
                             spacing: 4px;
-                            SpinBox { width: 70px; minimum: 2020; maximum: 2035; value: root.add-end-y; edited(v) => { root.add-end-y = v; } }
+                            NumSpin { spin-width: 66px; minimum: 2020; maximum: 2035; value: root.add-end-y; edited(v) => { root.add-end-y = v; } }
                             Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { width: 56px; minimum: 1; maximum: 12; value: root.add-end-mo; edited(v) => { root.add-end-mo = v; } }
+                            NumSpin { spin-width: 50px; zero-pad: true; minimum: 1; maximum: 12; value: root.add-end-mo; edited(v) => { root.add-end-mo = v; } }
                             Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { width: 56px; minimum: 1; maximum: 31; value: root.add-end-d; edited(v) => { root.add-end-d = v; } }
-                            SpinBox { width: 70px; minimum: 0; maximum: 23; value: root.add-end-h; edited(v) => { root.add-end-h = v; } }
+                            NumSpin { spin-width: 50px; zero-pad: true; minimum: 1; maximum: 31; value: root.add-end-d; edited(v) => { root.add-end-d = v; } }
+                            NumSpin { spin-width: 56px; zero-pad: true; minimum: 0; maximum: 23; value: root.add-end-h; edited(v) => { root.add-end-h = v; } }
                             Text { text: "時"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { width: 70px; minimum: 0; maximum: 59; value: root.add-end-m; edited(v) => { root.add-end-m = v; } }
+                            NumSpin { spin-width: 56px; zero-pad: true; minimum: 0; maximum: 59; value: root.add-end-m; edited(v) => { root.add-end-m = v; } }
                             Text { text: "分"; color: #cdd6f4; vertical-alignment: center; }
                         }
 
@@ -644,16 +708,18 @@ component PredictionCard {
 
             HorizontalLayout {
                 spacing: 4px;
-                SpinBox {
-                    width: 84px;
+                NumSpin {
+                    spin-width: 60px;
+                    zero-pad: true;
                     minimum: 0;
                     maximum: 23;
                     value: root.bed-hour;
                     edited(v) => { root.bedtime-edited(v, root.bed-minute); }
                 }
                 Text { text: ":"; color: #cdd6f4; font-size: 20px; vertical-alignment: center; }
-                SpinBox {
-                    width: 84px;
+                NumSpin {
+                    spin-width: 60px;
+                    zero-pad: true;
                     minimum: 0;
                     maximum: 59;
                     value: root.bed-minute;
@@ -848,8 +914,8 @@ component SettingsPanel {
                     spacing: 8px;
                     alignment: start;
                     Text { text: "キーボード / マウス操作がない状態が"; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
-                    SpinBox {
-                        width: 110px;
+                    NumSpin {
+                        spin-width: 74px;
                         minimum: 5; maximum: 300;
                         value: root.idle-threshold-minutes;
                         edited(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
@@ -870,9 +936,9 @@ component SettingsPanel {
                 if root.target-wake-enabled: HorizontalLayout {
                     alignment: start;
                     spacing: 4px;
-                    SpinBox { minimum: 0; maximum: 23; value: root.target-wake-h; edited(v) => { root.target-wake-h = v; root.target-wake-changed(v, root.target-wake-m); } }
+                    NumSpin { spin-width: 60px; zero-pad: true; minimum: 0; maximum: 23; value: root.target-wake-h; edited(v) => { root.target-wake-h = v; root.target-wake-changed(v, root.target-wake-m); } }
                     Text { text: ":"; color: #cdd6f4; vertical-alignment: center; }
-                    SpinBox { minimum: 0; maximum: 59; value: root.target-wake-m; edited(v) => { root.target-wake-m = v; root.target-wake-changed(root.target-wake-h, v); } }
+                    NumSpin { spin-width: 60px; zero-pad: true; minimum: 0; maximum: 59; value: root.target-wake-m; edited(v) => { root.target-wake-m = v; root.target-wake-changed(root.target-wake-h, v); } }
                 }
                 if !root.target-wake-enabled: SettingsNote { text: "未指定の場合、過去の起床時刻の中央値を自動で使用します"; }
                 HorizontalLayout {
