@@ -116,6 +116,16 @@ pub fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
 }
 
 pub fn run() {
+    // 多重起動防止（デスクトップのみ）。監視スレッド(monitor)もこのプロセス内でしか
+    // 動かないため、ここで弾けばアプリ本体・監視の両方が二重起動されなくなる。
+    // 既に起動済みの場合は既存ウィンドウをフォアグラウンドに出して即終了する。
+    #[cfg(not(target_os = "android"))]
+    {
+        if !platform::windows::ensure_single_instance() {
+            return;
+        }
+    }
+
     // 起動時初期化: config.jsonからTHRESHOLD_SECSを読み込み
     let cfg = config::load_config_inner();
     if let Some(m) = cfg.idle_threshold_minutes {

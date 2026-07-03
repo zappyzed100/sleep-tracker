@@ -78,7 +78,8 @@ pub fn toggle_startup(window: &MainWindow, enable: bool) {
 pub fn create_shortcut(window: &MainWindow) {
     let t0 = Instant::now();
     match platform::create_desktop_shortcut() {
-        Ok(()) => window.set_shortcut_message(format!("デスクトップにショートカットを作成しました ({})", fmt_secs(t0)).into()),
+        Ok(true) => window.set_shortcut_message(format!("✓ デスクトップにショートカットを作成しました ({})", fmt_secs(t0)).into()),
+        Ok(false) => window.set_shortcut_message(format!("既にショートカットが作成されています（上書きしました） ({})", fmt_secs(t0)).into()),
         Err(e) => window.set_shortcut_message(format!("作成失敗: {} ({})", e, fmt_secs(t0)).into()),
     }
 }
@@ -139,8 +140,8 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    None => {} // ダイアログをキャンセルした場合はメッセージなし
-                    Some(Ok(())) => w.set_data_message(format!("CSVエクスポート完了 ({})", fmt_secs(t0)).into()),
+                    None => w.set_data_message("キャンセルしました".into()),
+                    Some(Ok(())) => w.set_data_message(format!("✓ CSVエクスポート完了 ({})", fmt_secs(t0)).into()),
                     Some(Err(e)) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, fmt_secs(t0)).into()),
                 }
                 w.set_export_in_progress(false);
@@ -191,8 +192,8 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    None => {} // ダイアログをキャンセルした場合はメッセージなし
-                    Some(Ok(path)) => w.set_data_message(format!("バックアップを保存しました → {} ({})", path, fmt_secs(t0)).into()),
+                    None => w.set_data_message("キャンセルしました".into()),
+                    Some(Ok(path)) => w.set_data_message(format!("✓ バックアップを保存しました → {} ({})", path, fmt_secs(t0)).into()),
                     Some(Err(e)) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, fmt_secs(t0)).into()),
                 }
                 w.set_backup_in_progress(false);
@@ -250,9 +251,9 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    None => {} // ファイル選択をキャンセルした場合はメッセージなし
+                    None => w.set_data_message("キャンセルしました".into()),
                     Some(Ok(())) => {
-                        w.set_data_message(format!("バックアップから復元しました ({})", fmt_secs(t0)).into());
+                        w.set_data_message(format!("✓ バックアップから復元しました ({})", fmt_secs(t0)).into());
                         crate::ui::home::refresh_all(&w, &state);
                     }
                     Some(Err(e)) => w.set_data_message(format!("復元失敗: {} ({})", e, fmt_secs(t0)).into()),

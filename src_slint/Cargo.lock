@@ -5302,6 +5302,7 @@ dependencies = [
  "slint-build",
  "smartcore",
  "tray-icon",
+ "windows-sys 0.48.0",
  "winreg",
  "winresource",
 ]
