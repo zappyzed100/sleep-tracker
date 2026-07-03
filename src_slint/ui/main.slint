@@ -990,11 +990,28 @@ component CheckRow {
 // wrap:word-wrapを使うとwidth:100%の解決前に高さが計算され、
 // 「カードは少し大きくなるのに文字が見えない」不具合になっていたため、
 // ステータス表示は折り返しなしの1行に変更し、高さも明示する。
+// kind（"success"|"warn"|"error"|"info"）で色と太さを変え、目立たせる。
 component SettingsNote {
     in property <string> text;
+    in property <string> kind: "info";
     width: 100%;
-    height: 20px;
-    TextInput { width: 100%; height: 100%; text: root.text; color: #a6adc8; font-size: 13px; horizontal-alignment: left; vertical-alignment: center; single-line: true; read-only: true; }
+    height: 22px;
+    property <color> note-color: root.kind == "success" ? #a6e3a1
+        : root.kind == "warn" ? #f9e2af
+        : root.kind == "error" ? #f38ba8
+        : #89b4fa;
+    TextInput {
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        color: root.note-color;
+        font-size: 15px;
+        font-weight: 700;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+        single-line: true;
+        read-only: true;
+    }
 }
 
 component SettingsSection {
@@ -1026,9 +1043,19 @@ component SettingsPanel {
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
     in property <string> shortcut-message: "";
+    in property <string> shortcut-kind: "info";
     in property <string> save-message: "";
+    in property <string> save-kind: "info";
     in property <string> sync-message: "";
-    in property <string> data-message: "";
+    in property <string> sync-kind: "info";
+    in property <string> export-message: "";
+    in property <string> export-kind: "info";
+    in property <string> backup-message: "";
+    in property <string> backup-kind: "info";
+    in property <string> restore-message: "";
+    in property <string> restore-kind: "info";
+    in property <string> clear-message: "";
+    in property <string> clear-kind: "info";
     in-out property <bool> show-secret: false;
     in property <bool> test-in-progress: false;
     in property <bool> sync-in-progress: false;
@@ -1064,7 +1091,7 @@ component SettingsPanel {
                     alignment: start;
                     SettingsBtn { text: "デスクトップにショートカットを作成"; btn-width: 230px; clicked => { root.create-shortcut(); } }
                 }
-                if root.shortcut-message != "": SettingsNote { text: root.shortcut-message; }
+                if root.shortcut-message != "": SettingsNote { text: root.shortcut-message; kind: root.shortcut-kind; }
             }
 
             // ── 睡眠判定時間 ──
@@ -1086,7 +1113,7 @@ component SettingsPanel {
                     alignment: start;
                     SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
                 }
-                if root.save-message != "": SettingsNote { text: root.save-message; }
+                if root.save-message != "": SettingsNote { text: root.save-message; kind: root.save-kind; }
             }
 
             // ── 目標起床時刻 ──
@@ -1105,7 +1132,7 @@ component SettingsPanel {
                     alignment: start;
                     SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
                 }
-                if root.save-message != "": SettingsNote { text: root.save-message; }
+                if root.save-message != "": SettingsNote { text: root.save-message; kind: root.save-kind; }
             }
 
             // ── クラウド連携 ──
@@ -1152,15 +1179,18 @@ component SettingsPanel {
                         clicked => { root.sync-now(); }
                     }
                 }
-                if root.test-in-progress: SettingsNote { text: "接続をテストしています…"; }
-                if root.sync-in-progress: SettingsNote { text: "同期しています…"; }
-                if !root.test-in-progress && root.connection-status != "": SettingsNote { text: (root.connection-ok ? "✓ " : "✗ ") + root.connection-status; }
-                if root.save-message != "": SettingsNote { text: root.save-message; }
-                if !root.sync-in-progress && root.sync-message != "": SettingsNote { text: root.sync-message; }
+                if root.test-in-progress: SettingsNote { text: "接続をテストしています…"; kind: "info"; }
+                if root.sync-in-progress: SettingsNote { text: "同期しています…"; kind: "info"; }
+                if !root.test-in-progress && root.connection-status != "": SettingsNote { text: (root.connection-ok ? "✓ " : "✗ ") + root.connection-status; kind: root.connection-ok ? "success" : "error"; }
+                if root.save-message != "": SettingsNote { text: root.save-message; kind: root.save-kind; }
+                if !root.sync-in-progress && root.sync-message != "": SettingsNote { text: root.sync-message; kind: root.sync-kind; }
                 SettingsNote { text: "設定は config.json にローカル保存されます"; }
             }
 
             // ── データ管理 ──
+            // 各ボタンの直下に、そのボタン自身の結果メッセージだけを表示する
+            // （以前は4つのボタンで1つのメッセージ欄を共有しており、一番上の
+            // CSVエクスポートを押しても一番下にしかメッセージが出ず分かりにくかった）。
             SettingsSection {
                 title: "データ管理";
                 HorizontalLayout {
@@ -1172,9 +1202,9 @@ component SettingsPanel {
                         clicked => { root.export-csv(); }
                     }
                 }
+                if root.export-message != "": SettingsNote { text: root.export-message; kind: root.export-kind; }
                 SettingsNote { text: "Excel等で分析用。就寝・起床・睡眠時間・種別の4列。"; }
                 HorizontalLayout {
-                    spacing: 8px;
                     alignment: start;
                     SettingsBtn {
                         text: root.backup-in-progress ? "保存中…" : "バックアップ";
@@ -1182,6 +1212,10 @@ component SettingsPanel {
                         busy: root.backup-in-progress;
                         clicked => { root.backup(); }
                     }
+                }
+                if root.backup-message != "": SettingsNote { text: root.backup-message; kind: root.backup-kind; }
+                HorizontalLayout {
+                    alignment: start;
                     SettingsBtn {
                         text: root.restore-in-progress ? "復元中…" : "バックアップから復元";
                         btn-width: 170px;
@@ -1189,6 +1223,7 @@ component SettingsPanel {
                         clicked => { root.restore(); }
                     }
                 }
+                if root.restore-message != "": SettingsNote { text: root.restore-message; kind: root.restore-kind; }
                 SettingsNote { text: "生データをそのまま保存・復元。別PCへの移行や完全バックアップに。"; }
                 HorizontalLayout {
                     alignment: start;
@@ -1200,7 +1235,7 @@ component SettingsPanel {
                         clicked => { root.clear-all-data(); }
                     }
                 }
-                if root.data-message != "": SettingsNote { text: root.data-message; }
+                if root.clear-message != "": SettingsNote { text: root.clear-message; kind: root.clear-kind; }
             }
         }
     }
@@ -1281,9 +1316,19 @@ export component MainWindow inherits Window {
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
     in property <string> shortcut-message: "";
+    in-out property <string> shortcut-kind: "info";
     in property <string> save-message: "";
+    in-out property <string> save-kind: "info";
     in property <string> sync-message: "";
-    in property <string> data-message: "";
+    in-out property <string> sync-kind: "info";
+    in-out property <string> export-message: "";
+    in-out property <string> export-kind: "info";
+    in-out property <string> backup-message: "";
+    in-out property <string> backup-kind: "info";
+    in-out property <string> restore-message: "";
+    in-out property <string> restore-kind: "info";
+    in-out property <string> clear-message: "";
+    in-out property <string> clear-kind: "info";
     in-out property <bool> test-in-progress: false;
     in-out property <bool> sync-in-progress: false;
     in-out property <bool> export-in-progress: false;
@@ -1426,9 +1471,19 @@ export component MainWindow inherits Window {
             connection-status: root.connection-status;
             connection-ok: root.connection-ok;
             shortcut-message: root.shortcut-message;
+            shortcut-kind: root.shortcut-kind;
             save-message: root.save-message;
+            save-kind: root.save-kind;
             sync-message: root.sync-message;
-            data-message: root.data-message;
+            sync-kind: root.sync-kind;
+            export-message: root.export-message;
+            export-kind: root.export-kind;
+            backup-message: root.backup-message;
+            backup-kind: root.backup-kind;
+            restore-message: root.restore-message;
+            restore-kind: root.restore-kind;
+            clear-message: root.clear-message;
+            clear-kind: root.clear-kind;
             test-in-progress: root.test-in-progress;
             sync-in-progress: root.sync-in-progress;
             export-in-progress: root.export-in-progress;

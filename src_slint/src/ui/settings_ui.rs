@@ -4,7 +4,8 @@
 //!        読み込み/保存/操作をまとめる。CSVエクスポートはrfdのネイティブ
 //!        保存ダイアログを使用する。ファイルダイアログを伴う操作（エクスポート・
 //!        バックアップ・復元）と全データ削除は別スレッドで実行し、UIスレッドを
-//!        ブロックしない。完了メッセージには必ずボタンを押した時刻を付ける。
+//!        ブロックしない。完了メッセージには必ずボタンを押した時刻を付け、
+//!        成功/警告/失敗を色分けできるよう種別（kind）も一緒に設定する。
 //!
 //! 依存 : crate::{MainWindow}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
@@ -19,6 +20,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // プロセスグローバルなフラグで十分。
 static CLEAR_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
+
+// メッセージの種別。SettingsNote側でこの文字列を見て色を変える
+// （成功=緑・警告=黄・失敗=赤・それ以外=青）。
+const KIND_SUCCESS: &str = "success";
+const KIND_WARN: &str = "warn";
+const KIND_ERROR: &str = "error";
+const KIND_INFO: &str = "info";
 
 // 完了メッセージに付ける「今の時刻」（HH:MM:SS）。処理の所要時間ではなく、
 // ボタンを押した操作が完了した時刻を表示する。
@@ -56,8 +64,14 @@ pub fn save(window: &MainWindow) {
     let secret = window.get_mobile_secret().to_string();
     let target = current_target_wake(window);
     match config::save_config(idle, url, secret, target, None) {
-        Ok(()) => window.set_save_message(format!("✓ 保存しました ({})", now_hms()).into()),
-        Err(e) => window.set_save_message(format!("保存失敗: {} ({})", e, now_hms()).into()),
+        Ok(()) => {
+            window.set_save_message(format!("✓ 保存しました ({})", now_hms()).into());
+            window.set_save_kind(KIND_SUCCESS.into());
+        }
+        Err(e) => {
+            window.set_save_message(format!("保存失敗: {} ({})", e, now_hms()).into());
+            window.set_save_kind(KIND_ERROR.into());
+        }
     }
 }
 
@@ -66,9 +80,11 @@ pub fn toggle_startup(window: &MainWindow, enable: bool) {
         Ok(()) => {
             let msg = if enable { "✓ 自動起動をONにしました" } else { "✓ 自動起動をOFFにしました" };
             window.set_shortcut_message(format!("{} ({})", msg, now_hms()).into());
+            window.set_shortcut_kind(KIND_SUCCESS.into());
         }
         Err(e) => {
             window.set_shortcut_message(format!("スタートアップ設定失敗: {} ({})", e, now_hms()).into());
+            window.set_shortcut_kind(KIND_ERROR.into());
             window.set_startup_enabled(!enable);
         }
     }
@@ -76,9 +92,18 @@ pub fn toggle_startup(window: &MainWindow, enable: bool) {
 
 pub fn create_shortcut(window: &MainWindow) {
     match platform::create_desktop_shortcut() {
-        Ok(true) => window.set_shortcut_message(format!("✓ デスクトップにショートカットを作成しました ({})", now_hms()).into()),
-        Ok(false) => window.set_shortcut_message(format!("既にショートカットが作成されています（上書きしました） ({})", now_hms()).into()),
-        Err(e) => window.set_shortcut_message(format!("作成失敗: {} ({})", e, now_hms()).into()),
+        Ok(true) => {
+            window.set_shortcut_message(format!("✓ デスクトップにショートカットを作成しました ({})", now_hms()).into());
+            window.set_shortcut_kind(KIND_SUCCESS.into());
+        }
+        Ok(false) => {
+            window.set_shortcut_message(format!("既にショートカットが作成されています（上書きしました） ({})", now_hms()).into());
+            window.set_shortcut_kind(KIND_WARN.into());
+        }
+        Err(e) => {
+            window.set_shortcut_message(format!("作成失敗: {} ({})", e, now_hms()).into());
+            window.set_shortcut_kind(KIND_ERROR.into());
+        }
     }
 }
 
@@ -91,8 +116,14 @@ pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: Strin
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    Ok(msg) => { w.set_connection_ok(true); w.set_connection_status(format!("{} ({})", msg, now_hms()).into()); }
-                    Err(e) => { w.set_connection_ok(false); w.set_connection_status(format!("{} ({})", e, now_hms()).into()); }
+                    Ok(msg) => {
+                        w.set_connection_ok(true);
+                        w.set_connection_status(format!("{} ({})", msg, now_hms()).into());
+                    }
+                    Err(e) => {
+                        w.set_connection_ok(false);
+                        w.set_connection_status(format!("{} ({})", e, now_hms()).into());
+                    }
                 }
                 w.set_test_in_progress(false);
             }
@@ -111,8 +142,14 @@ pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedSta
                 // 同期成功時の詳細（モバイル/Driveの内訳など）はログにだけ残し、
                 // UI表示は「同期完了」と完了時刻だけのシンプルな表示にする。
                 match msg {
-                    Ok(_) => w.set_sync_message(format!("✓ 同期完了 ({})", now_hms()).into()),
-                    Err(e) => w.set_sync_message(format!("同期失敗: {} ({})", e, now_hms()).into()),
+                    Ok(_) => {
+                        w.set_sync_message(format!("✓ 同期完了 ({})", now_hms()).into());
+                        w.set_sync_kind(KIND_SUCCESS.into());
+                    }
+                    Err(e) => {
+                        w.set_sync_message(format!("同期失敗: {} ({})", e, now_hms()).into());
+                        w.set_sync_kind(KIND_ERROR.into());
+                    }
                 }
                 w.set_sync_in_progress(false);
             }
@@ -137,9 +174,18 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    None => w.set_data_message("キャンセルしました".into()),
-                    Some(Ok(())) => w.set_data_message(format!("✓ CSVエクスポート完了 ({})", now_hms()).into()),
-                    Some(Err(e)) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, now_hms()).into()),
+                    None => {
+                        w.set_export_message("キャンセルしました".into());
+                        w.set_export_kind(KIND_INFO.into());
+                    }
+                    Some(Ok(())) => {
+                        w.set_export_message(format!("✓ CSVエクスポート完了 ({})", now_hms()).into());
+                        w.set_export_kind(KIND_SUCCESS.into());
+                    }
+                    Some(Err(e)) => {
+                        w.set_export_message(format!("エクスポート失敗: {} ({})", e, now_hms()).into());
+                        w.set_export_kind(KIND_ERROR.into());
+                    }
                 }
                 w.set_export_in_progress(false);
             }
@@ -154,7 +200,8 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
 pub fn export_csv(weak: slint::Weak<MainWindow>) {
     let Some(w) = weak.upgrade() else { return };
     let Some(dir) = crate::android_external_dir() else {
-        w.set_data_message("外部ストレージが利用できません".into());
+        w.set_export_message("外部ストレージが利用できません".into());
+        w.set_export_kind(KIND_ERROR.into());
         w.set_export_in_progress(false);
         return;
     };
@@ -162,8 +209,14 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
     let csv = events::export_csv(&sessions);
     let path = dir.join("sleep_sessions.csv");
     match events::write_csv_file(path.to_string_lossy().to_string(), csv) {
-        Ok(()) => w.set_data_message(format!("CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{} ({})", path.file_name().unwrap().to_string_lossy(), now_hms()).into()),
-        Err(e) => w.set_data_message(format!("エクスポート失敗: {} ({})", e, now_hms()).into()),
+        Ok(()) => {
+            w.set_export_message(format!("✓ CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{} ({})", path.file_name().unwrap().to_string_lossy(), now_hms()).into());
+            w.set_export_kind(KIND_SUCCESS.into());
+        }
+        Err(e) => {
+            w.set_export_message(format!("エクスポート失敗: {} ({})", e, now_hms()).into());
+            w.set_export_kind(KIND_ERROR.into());
+        }
     }
     w.set_export_in_progress(false);
 }
@@ -187,9 +240,18 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    None => w.set_data_message("キャンセルしました".into()),
-                    Some(Ok(path)) => w.set_data_message(format!("✓ バックアップを保存しました → {} ({})", path, now_hms()).into()),
-                    Some(Err(e)) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into()),
+                    None => {
+                        w.set_backup_message("キャンセルしました".into());
+                        w.set_backup_kind(KIND_INFO.into());
+                    }
+                    Some(Ok(path)) => {
+                        w.set_backup_message(format!("✓ バックアップを保存しました → {} ({})", path, now_hms()).into());
+                        w.set_backup_kind(KIND_SUCCESS.into());
+                    }
+                    Some(Err(e)) => {
+                        w.set_backup_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into());
+                        w.set_backup_kind(KIND_ERROR.into());
+                    }
                 }
                 w.set_backup_in_progress(false);
             }
@@ -201,14 +263,16 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
 pub fn backup(weak: slint::Weak<MainWindow>) {
     let Some(w) = weak.upgrade() else { return };
     let Some(dir) = crate::android_external_dir() else {
-        w.set_data_message("外部ストレージが利用できません".into());
+        w.set_backup_message("外部ストレージが利用できません".into());
+        w.set_backup_kind(KIND_ERROR.into());
         w.set_backup_in_progress(false);
         return;
     };
     let content = match events::get_events_content() {
         Ok(c) => c,
         Err(e) => {
-            w.set_data_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into());
+            w.set_backup_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into());
+            w.set_backup_kind(KIND_ERROR.into());
             w.set_backup_in_progress(false);
             return;
         }
@@ -216,8 +280,14 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
     let name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
     let path = dir.join(&name);
     match events::write_csv_file(path.to_string_lossy().to_string(), content) {
-        Ok(()) => w.set_data_message(format!("バックアップ完了 → Android/data/com.sleeptracker.app/files/{} ({})", name, now_hms()).into()),
-        Err(e) => w.set_data_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into()),
+        Ok(()) => {
+            w.set_backup_message(format!("✓ バックアップ完了 → Android/data/com.sleeptracker.app/files/{} ({})", name, now_hms()).into());
+            w.set_backup_kind(KIND_SUCCESS.into());
+        }
+        Err(e) => {
+            w.set_backup_message(format!("バックアップ失敗: {} ({})", e, now_hms()).into());
+            w.set_backup_kind(KIND_ERROR.into());
+        }
     }
     w.set_backup_in_progress(false);
 }
@@ -228,7 +298,8 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
 pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_data_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
+        window.set_restore_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
+        window.set_restore_kind(KIND_WARN.into());
         window.set_restore_in_progress(false);
         return;
     }
@@ -244,12 +315,19 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
-                    None => w.set_data_message("キャンセルしました".into()),
+                    None => {
+                        w.set_restore_message("キャンセルしました".into());
+                        w.set_restore_kind(KIND_INFO.into());
+                    }
                     Some(Ok(())) => {
-                        w.set_data_message(format!("✓ バックアップから復元しました ({})", now_hms()).into());
+                        w.set_restore_message(format!("✓ バックアップから復元しました ({})", now_hms()).into());
+                        w.set_restore_kind(KIND_SUCCESS.into());
                         crate::ui::home::refresh_all(&w, &state);
                     }
-                    Some(Err(e)) => w.set_data_message(format!("復元失敗: {} ({})", e, now_hms()).into()),
+                    Some(Err(e)) => {
+                        w.set_restore_message(format!("復元失敗: {} ({})", e, now_hms()).into());
+                        w.set_restore_kind(KIND_ERROR.into());
+                    }
                 }
                 w.set_restore_in_progress(false);
             }
@@ -263,15 +341,17 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
 pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
     let Some(dir) = crate::android_external_dir() else {
-        window.set_data_message("外部ストレージが利用できません".into());
+        window.set_restore_message("外部ストレージが利用できません".into());
+        window.set_restore_kind(KIND_ERROR.into());
         window.set_restore_in_progress(false);
         return;
     };
     let path = dir.join("restore.txt");
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_data_message(
+        window.set_restore_message(
             "Android/data/com.sleeptracker.app/files/restore.txt にバックアップファイルを配置してから、もう一度クリックしてください".into()
         );
+        window.set_restore_kind(KIND_WARN.into());
         window.set_restore_in_progress(false);
         return;
     }
@@ -280,17 +360,22 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
-            window.set_data_message(format!("restore.txt の読み込み失敗: {} ({})", e, now_hms()).into());
+            window.set_restore_message(format!("restore.txt の読み込み失敗: {} ({})", e, now_hms()).into());
+            window.set_restore_kind(KIND_ERROR.into());
             window.set_restore_in_progress(false);
             return;
         }
     };
     match events::restore_events(content) {
         Ok(()) => {
-            window.set_data_message(format!("バックアップから復元しました ({})", now_hms()).into());
+            window.set_restore_message(format!("✓ バックアップから復元しました ({})", now_hms()).into());
+            window.set_restore_kind(KIND_SUCCESS.into());
             crate::ui::home::refresh_all(&window, &state);
         }
-        Err(e) => window.set_data_message(format!("復元失敗: {} ({})", e, now_hms()).into()),
+        Err(e) => {
+            window.set_restore_message(format!("復元失敗: {} ({})", e, now_hms()).into());
+            window.set_restore_kind(KIND_ERROR.into());
+        }
     }
     window.set_restore_in_progress(false);
 }
@@ -298,7 +383,8 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
 pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
     if !CLEAR_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_data_message("もう一度クリックすると全データを削除します".into());
+        window.set_clear_message("もう一度クリックすると全データを削除します".into());
+        window.set_clear_kind(KIND_WARN.into());
         window.set_clear_in_progress(false);
         return;
     }
@@ -310,10 +396,14 @@ pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Sha
             if let Some(w) = weak.upgrade() {
                 match result {
                     Ok(()) => {
-                        w.set_data_message(format!("全データを削除しました ({})", now_hms()).into());
+                        w.set_clear_message(format!("✓ 全データを削除しました ({})", now_hms()).into());
+                        w.set_clear_kind(KIND_SUCCESS.into());
                         crate::ui::home::refresh_all(&w, &state);
                     }
-                    Err(e) => w.set_data_message(format!("削除失敗: {} ({})", e, now_hms()).into()),
+                    Err(e) => {
+                        w.set_clear_message(format!("削除失敗: {} ({})", e, now_hms()).into());
+                        w.set_clear_kind(KIND_ERROR.into());
+                    }
                 }
                 w.set_clear_in_progress(false);
             }
