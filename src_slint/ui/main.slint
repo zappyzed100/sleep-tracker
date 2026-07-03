@@ -18,8 +18,14 @@ component DayDetailModal {
     in property <string> total-label;
     in property <[SessionVM]> sessions;
     in property <bool> add-open;
+    in-out property <int> add-start-y: 2026;
+    in-out property <int> add-start-mo: 1;
+    in-out property <int> add-start-d: 1;
     in-out property <int> add-start-h: 23;
     in-out property <int> add-start-m: 0;
+    in-out property <int> add-end-y: 2026;
+    in-out property <int> add-end-mo: 1;
+    in-out property <int> add-end-d: 2;
     in-out property <int> add-end-h: 7;
     in-out property <int> add-end-m: 0;
     in property <string> error-text: "";
@@ -80,19 +86,28 @@ component DayDetailModal {
                     spacing: 8px;
 
                     if root.sessions.length > 0: Text {
+                        width: 100%;
                         text: "合計 " + root.total-label;
                         color: #89b4fa;
                         font-size: 15px;
                         font-weight: 700;
+                        height: 20px;
+                        vertical-stretch: 0;
+                        horizontal-alignment: left;
                     }
 
                     if root.sessions.length == 0: Text {
+                        width: 100%;
                         text: "この日の記録なし";
+                        horizontal-alignment: left;
                         color: #a6adc8;
                         font-size: 14px;
+                        height: 20px;
+                        vertical-stretch: 0;
                     }
 
                     for s in root.sessions: Rectangle {
+                        vertical-stretch: 0;
                         background: #181825;
                         border-radius: 8px;
                         height: 40px;
@@ -133,6 +148,7 @@ component DayDetailModal {
 
                     addToggleBtn := TouchArea {
                         height: 32px;
+                        vertical-stretch: 0;
                         clicked => { root.toggle-add(); }
                         Rectangle {
                             background: addToggleBtn.has-hover ? #313244 : transparent;
@@ -150,23 +166,34 @@ component DayDetailModal {
                     }
 
                     if root.add-open: VerticalLayout {
+                        vertical-stretch: 0;
                         spacing: 10px;
 
-                        Text { text: "🌙 入眠"; color: #f9e2af; font-size: 13px; }
+                        Text { width: 100%; text: "🌙 入眠"; color: #f9e2af; font-size: 13px; horizontal-alignment: left; }
                         HorizontalLayout {
                             spacing: 4px;
-                            SpinBox { minimum: 0; maximum: 23; value: root.add-start-h; edited(v) => { root.add-start-h = v; } }
+                            SpinBox { width: 70px; minimum: 2020; maximum: 2035; value: root.add-start-y; edited(v) => { root.add-start-y = v; } }
+                            Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
+                            SpinBox { width: 56px; minimum: 1; maximum: 12; value: root.add-start-mo; edited(v) => { root.add-start-mo = v; } }
+                            Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
+                            SpinBox { width: 56px; minimum: 1; maximum: 31; value: root.add-start-d; edited(v) => { root.add-start-d = v; } }
+                            SpinBox { width: 70px; minimum: 0; maximum: 23; value: root.add-start-h; edited(v) => { root.add-start-h = v; } }
                             Text { text: "時"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { minimum: 0; maximum: 59; value: root.add-start-m; edited(v) => { root.add-start-m = v; } }
+                            SpinBox { width: 70px; minimum: 0; maximum: 59; value: root.add-start-m; edited(v) => { root.add-start-m = v; } }
                             Text { text: "分"; color: #cdd6f4; vertical-alignment: center; }
                         }
 
-                        Text { text: "☀️ 起床"; color: #a6e3a1; font-size: 13px; }
+                        Text { width: 100%; text: "☀️ 起床"; color: #a6e3a1; font-size: 13px; horizontal-alignment: left; }
                         HorizontalLayout {
                             spacing: 4px;
-                            SpinBox { minimum: 0; maximum: 23; value: root.add-end-h; edited(v) => { root.add-end-h = v; } }
+                            SpinBox { width: 70px; minimum: 2020; maximum: 2035; value: root.add-end-y; edited(v) => { root.add-end-y = v; } }
+                            Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
+                            SpinBox { width: 56px; minimum: 1; maximum: 12; value: root.add-end-mo; edited(v) => { root.add-end-mo = v; } }
+                            Text { text: "/"; color: #cdd6f4; vertical-alignment: center; }
+                            SpinBox { width: 56px; minimum: 1; maximum: 31; value: root.add-end-d; edited(v) => { root.add-end-d = v; } }
+                            SpinBox { width: 70px; minimum: 0; maximum: 23; value: root.add-end-h; edited(v) => { root.add-end-h = v; } }
                             Text { text: "時"; color: #cdd6f4; vertical-alignment: center; }
-                            SpinBox { minimum: 0; maximum: 59; value: root.add-end-m; edited(v) => { root.add-end-m = v; } }
+                            SpinBox { width: 70px; minimum: 0; maximum: 59; value: root.add-end-m; edited(v) => { root.add-end-m = v; } }
                             Text { text: "分"; color: #cdd6f4; vertical-alignment: center; }
                         }
 
@@ -182,10 +209,13 @@ component DayDetailModal {
                     }
 
                     if root.error-text != "": Text {
+                        width: 100%;
                         text: root.error-text;
                         color: #f38ba8;
                         font-size: 13px;
                         wrap: word-wrap;
+                        horizontal-alignment: left;
+                        vertical-stretch: 0;
                     }
                 }
             }
@@ -200,43 +230,326 @@ export struct DaySummaryVM {
     bar-frac: float,       // 0.0〜1.0（その週の最大値に対する比率）
     has-data: bool,
     active: bool,           // 選択中の日
+    bedtime-y: float,       // 0.0(上端)〜1.0(下端)。入眠時刻の折れ線位置
+    bedtime-has: bool,
+    waketime-y: float,      // 起床時刻の折れ線位置
+    waketime-has: bool,
+}
+
+export struct CalendarDayVM {
+    day: int,
+    date: string,       // ISO日付
+    in-month: bool,
+    is-today: bool,
+    in-week: bool,       // 現在選択中の週に含まれるか
+}
+
+component LegendItem {
+    in property <color> swatch-color;
+    in property <string> label;
+    HorizontalLayout {
+        spacing: 6px;
+        Rectangle {
+            width: 12px; height: 12px;
+            y: 2px;
+            background: root.swatch-color;
+            border-radius: 2px;
+        }
+        Text { text: root.label; color: #cdd6f4; font-size: 12px; vertical-alignment: center; }
+    }
+}
+
+// 2点間を、小さな正方形を等間隔に並べて繋ぐ「ドット連結」方式の線分。
+// Slintの回転プロパティ（rotation-angle等）はコンポーネントのルート要素に
+// 適用できない・原点の挙動が分かりにくいなどの理由で正しい位置に描画できな
+// かったため、確実に動作するx/y直接指定のみで完結するこの方式に切り替えた。
+component LineSeg {
+    in property <float> x1;
+    in property <float> y1;
+    in property <float> x2;
+    in property <float> y2;
+    in property <color> seg-color;
+
+    // 自分自身の原点をWeeklyChart側の座標系と揃えておかないと、子のドットの
+    // 相対座標がLineSegの暗黙の配置位置ぶんだけズレてしまう
+    // （PeriodTab/SettingsBtn等でも踏んだ「コンポーネント直下に明示ジオメトリが
+    // 必要」というのと同種の問題）。
+    x: 0px;
+    y: 0px;
+
+    for step in 25: Rectangle {
+        x: (root.x1 + (step / 24.0) * (root.x2 - root.x1)) * 1px - 2px;
+        y: (root.y1 + (step / 24.0) * (root.y2 - root.y1)) * 1px - 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 2px;
+        background: root.seg-color;
+    }
+}
+
+component LineDot inherits Rectangle {
+    in property <float> cx;
+    in property <float> cy;
+    x: cx * 1px - 3px;
+    y: cy * 1px - 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
 }
 
 component WeeklyChart {
     in property <[DaySummaryVM]> week;
+    in property <[string]> y-labels;
+    in property <[string]> y2-labels;
     callback day-clicked(string);
 
     height: 260px;
 
+    property <length> axis-l: 34px;
+    property <length> axis-r: 46px;
+    property <length> legend-h: 22px;
+    property <length> daylabel-h: 22px;
+    property <length> bars-h: root.height - root.legend-h - root.daylabel-h;
+
+    // ── 凡例 ──
     HorizontalLayout {
-        spacing: 10px;
-        for day[i] in root.week: VerticalLayout {
-            spacing: 6px;
-            Text {
+        x: root.axis-l;
+        y: 0;
+        width: root.width - root.axis-l - root.axis-r;
+        height: root.legend-h;
+        spacing: 18px;
+        alignment: center;
+        LegendItem { swatch-color: #f9e2af; label: "入眠"; }
+        LegendItem { swatch-color: #a6e3a1; label: "起床"; }
+        LegendItem { swatch-color: #89b4fa; label: "睡眠時間"; }
+    }
+
+    // ── 左Y軸ラベル・グリッド線 ──
+    for lbl[i] in root.y-labels: Text {
+        x: 0;
+        width: root.axis-l - 6px;
+        y: root.legend-h + root.bars-h * i / max(root.y-labels.length - 1, 1) - 7px;
+        text: lbl;
+        color: #a6adc8;
+        font-size: 11px;
+        horizontal-alignment: right;
+    }
+    for lbl[i] in root.y-labels: Rectangle {
+        x: root.axis-l;
+        y: root.legend-h + root.bars-h * i / max(root.y-labels.length - 1, 1);
+        width: root.width - root.axis-l - root.axis-r;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    // ── 右Y軸ラベル ──
+    for lbl[i] in root.y2-labels: Text {
+        x: root.width - root.axis-r + 6px;
+        width: root.axis-r - 6px;
+        y: root.legend-h + root.bars-h * i / max(root.y2-labels.length - 1, 1) - 7px;
+        text: lbl;
+        color: #a6adc8;
+        font-size: 11px;
+        horizontal-alignment: left;
+    }
+
+    // ── 棒グラフ ──
+    HorizontalLayout {
+        x: root.axis-l;
+        y: root.legend-h;
+        width: root.width - root.axis-l - root.axis-r;
+        height: root.bars-h;
+        spacing: 4px;
+        for day[i] in root.week: col := TouchArea {
+            clicked => { root.day-clicked(day.date); }
+            property <length> bar-h: parent.height * max(day.bar-frac, 0.02);
+            property <length> bar-y: parent.height - self.bar-h;
+            Rectangle {
+                y: col.bar-y;
+                height: col.bar-h;
+                width: 100%;
+                background: day.has-data ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.45)) : #313244;
+                border-radius: 4px;
+                animate y, height { duration: 150ms; easing: ease-out; }
+            }
+            if day.has-data && col.bar-h > 28px: Text {
+                y: col.bar-y + 6px;
+                width: 100%;
+                text: day.duration-label;
+                color: #11111b;
+                font-size: 12px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            if day.has-data && col.bar-h <= 28px: Text {
+                y: col.bar-y - 17px;
+                width: 100%;
                 text: day.duration-label;
                 color: #cdd6f4;
                 font-size: 12px;
+                font-weight: 700;
                 horizontal-alignment: center;
-                height: 16px;
             }
-            col := TouchArea {
-                clicked => { root.day-clicked(day.date); }
-                Rectangle {
+        }
+    }
+
+    // ── 入眠・起床の折れ線（棒グラフの上に重ねる） ──
+    // SlintのPath要素はviewboxをwidget寸法へ均一スケール（アスペクト比維持）で
+    // マッピングするため、横長の描画領域では線が中央に圧縮されたり範囲外に
+    // クリップされたりして正しく描画できなかった。回転させた細いRectangleを
+    // 点と点の間に配置する方式に切り替えて、この問題を回避する。
+    property <float> chart-w-px: (root.width - root.axis-l - root.axis-r) / 1px;
+    property <float> bars-h-px: root.bars-h / 1px;
+    property <float> axis-l-px: root.axis-l / 1px;
+    property <float> legend-h-px: root.legend-h / 1px;
+
+    function day-cx(idx: int) -> float {
+        root.axis-l-px + (idx + 0.5) / 7 * root.chart-w-px
+    }
+
+    for i in 6: LineSeg {
+        x1: root.day-cx(i);
+        y1: root.legend-h-px + root.week[i].bedtime-y * root.bars-h-px;
+        x2: root.day-cx(i + 1);
+        y2: root.legend-h-px + root.week[i + 1].bedtime-y * root.bars-h-px;
+        seg-color: (root.week[i].bedtime-has && root.week[i + 1].bedtime-has) ? #f9e2af : transparent;
+    }
+    for i in 6: LineSeg {
+        x1: root.day-cx(i);
+        y1: root.legend-h-px + root.week[i].waketime-y * root.bars-h-px;
+        x2: root.day-cx(i + 1);
+        y2: root.legend-h-px + root.week[i + 1].waketime-y * root.bars-h-px;
+        seg-color: (root.week[i].waketime-has && root.week[i + 1].waketime-has) ? #a6e3a1 : transparent;
+    }
+    for day[i] in root.week: LineDot {
+        cx: root.day-cx(i);
+        cy: root.legend-h-px + day.bedtime-y * root.bars-h-px;
+        background: day.bedtime-has ? #f9e2af : transparent;
+    }
+    for day[i] in root.week: LineDot {
+        cx: root.day-cx(i);
+        cy: root.legend-h-px + day.waketime-y * root.bars-h-px;
+        background: day.waketime-has ? #a6e3a1 : transparent;
+    }
+
+    // ── 曜日ラベル ──
+    HorizontalLayout {
+        x: root.axis-l;
+        y: root.legend-h + root.bars-h;
+        width: root.width - root.axis-l - root.axis-r;
+        height: root.daylabel-h;
+        spacing: 10px;
+        for day[i] in root.week: Text {
+            text: day.day-label;
+            color: #cdd6f4;
+            font-size: 13px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component CalendarPicker {
+    in property <string> month-label;
+    in property <[CalendarDayVM]> days;
+    callback prev-month();
+    callback next-month();
+    callback day-clicked(string);
+
+    // 日付セルは固定px幅で配置する。ヘッダー行とグリッド行を別々の
+    // HorizontalLayoutでstretch分配すると、行ごとに端数の丸め方が変わり
+    // 列がずれて見えることがあったため、単一のfor文＋固定px座標で統一する。
+    property <length> cell: 34px;
+    property <length> grid-w: root.cell * 7;
+
+    width: root.grid-w + 32px;
+    height: root.cell * 6 + 90px;
+
+    Rectangle {
+        background: #181825;
+        border-radius: 12px;
+        border-width: 2px;
+        border-color: #45475a;
+
+        cardBlock := TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        VerticalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 14px;
+            padding-bottom: 14px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                height: 20px;
+                prevM := TouchArea {
+                    width: 26px;
+                    clicked => { root.prev-month(); }
                     Rectangle {
-                        y: parent.height * (1.0 - max(day.bar-frac, 0.02));
-                        height: parent.height * max(day.bar-frac, 0.02);
-                        width: 100%;
-                        background: day.has-data ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.45)) : #313244;
+                        background: prevM.has-hover ? #313244 : transparent;
                         border-radius: 4px;
-                        animate y, height { duration: 150ms; easing: ease-out; }
+                        Text { text: "◀"; color: #a6adc8; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                Text {
+                    text: root.month-label;
+                    color: #cdd6f4;
+                    font-size: 15px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                nextM := TouchArea {
+                    width: 26px;
+                    clicked => { root.next-month(); }
+                    Rectangle {
+                        background: nextM.has-hover ? #313244 : transparent;
+                        border-radius: 4px;
+                        Text { text: "▶"; color: #a6adc8; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }
-            Text {
-                text: day.day-label;
-                color: #cdd6f4;
-                font-size: 13px;
-                horizontal-alignment: center;
+
+            Rectangle {
+                height: 22px;
+                for d[i] in ["月", "火", "水", "木", "金", "土", "日"]: Text {
+                    x: root.cell * i;
+                    width: root.cell;
+                    y: 0;
+                    height: 22px;
+                    text: d;
+                    color: #585b70;
+                    font-size: 12px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                height: root.cell * 6;
+                for day[i] in root.days: dayTa := TouchArea {
+                    x: root.cell * mod(i, 7);
+                    y: root.cell * floor(i / 7);
+                    width: root.cell;
+                    height: root.cell;
+                    clicked => { root.day-clicked(day.date); }
+                    Rectangle {
+                        background: dayTa.has-hover ? #313244 : (day.in-week ? #313244 : transparent);
+                        border-radius: 6px;
+                        Text {
+                            text: day.day;
+                            color: day.is-today ? #89b4fa : (day.in-month ? #cdd6f4 : #585b70);
+                            font-size: 13px;
+                            font-weight: day.is-today ? 700 : 400;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
         }
     }
@@ -271,9 +584,37 @@ component Divider {
     }
 }
 
+component PeriodTab {
+    in property <string> text;
+    in property <bool> active;
+    in property <length> tab-width: 50px;
+    callback clicked();
+    width: root.tab-width;
+    height: 28px;
+    horizontal-stretch: 0;
+    ta := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.clicked(); }
+        Rectangle {
+            background: root.active ? #89b4fa : (ta.has-hover ? #313244 : transparent);
+            border-radius: 6px;
+            Text {
+                text: root.text;
+                color: root.active ? #1e1e2e : #cdd6f4;
+                font-size: 12px;
+                font-weight: root.active ? 700 : 400;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 component PredictionCard {
     in property <int> bed-hour;
     in property <int> bed-minute;
+    in property <string> bed-time-label: "--:--";
     in property <string> predicted-duration: "—";
     in property <string> predicted-wake-time: "--:--";
     in property <string> predicted-method: "";
@@ -303,8 +644,8 @@ component PredictionCard {
 
             HorizontalLayout {
                 spacing: 4px;
-                width: 160px;
                 SpinBox {
+                    width: 84px;
                     minimum: 0;
                     maximum: 23;
                     value: root.bed-hour;
@@ -312,6 +653,7 @@ component PredictionCard {
                 }
                 Text { text: ":"; color: #cdd6f4; font-size: 20px; vertical-alignment: center; }
                 SpinBox {
+                    width: 84px;
                     minimum: 0;
                     maximum: 59;
                     value: root.bed-minute;
@@ -344,7 +686,18 @@ component PredictionCard {
 
             if root.has-data: VerticalLayout {
                 alignment: center;
-                Text { text: root.predicted-wake-time; color: #cdd6f4; font-size: 18px; font-weight: 700; }
+                Text {
+                    text: root.bed-time-label + " 入眠 → " + root.predicted-wake-time + " 起床";
+                    color: #cdd6f4;
+                    font-size: 18px;
+                    font-weight: 700;
+                }
+            }
+
+            if root.has-data: Divider { }
+
+            if root.has-data: VerticalLayout {
+                alignment: center;
                 Text { text: root.predicted-method; color: #a6adc8; font-size: 11px; }
             }
 
@@ -360,28 +713,84 @@ component PredictionCard {
 
 component SectionTitle {
     in property <string> text;
-    Text { text: root.text; color: #f9e2af; font-size: 14px; font-weight: 700; }
+    width: 100%;
+    Text { width: 100%; text: root.text; color: #cdd6f4; font-size: 15px; font-weight: 700; horizontal-alignment: left; }
 }
 
 component SettingsBtn {
     in property <string> text;
     in property <bool> danger: false;
+    in property <bool> primary: false;
+    in property <length> btn-width: 100px;
     callback clicked();
+    width: root.btn-width;
+    height: 34px;
     ta := TouchArea {
-        height: 34px;
+        width: 100%;
+        height: 100%;
         clicked => { root.clicked(); }
         Rectangle {
             background: root.danger
                 ? (ta.has-hover ? #f38ba8 : rgba(243, 139, 168, 0.2))
-                : (ta.has-hover ? #45475a : #313244);
+                : root.primary
+                    ? (ta.has-hover ? #74c7ec : #89b4fa)
+                    : (ta.has-hover ? #45475a : #313244);
             border-radius: 6px;
             Text {
                 text: root.text;
-                color: root.danger ? (ta.has-hover ? #1e1e2e : #f38ba8) : #cdd6f4;
+                color: root.danger ? (ta.has-hover ? #1e1e2e : #f38ba8) : root.primary ? #1e1e2e : #cdd6f4;
                 font-size: 13px;
+                font-weight: root.primary ? 700 : 400;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
+        }
+    }
+}
+
+component CheckRow {
+    in property <bool> checked;
+    in property <string> label;
+    callback toggled();
+    ck := TouchArea {
+        height: 30px;
+        clicked => { root.toggled(); }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            Rectangle {
+                width: 18px; height: 18px;
+                border-width: 1px;
+                border-color: #89b4fa;
+                border-radius: 4px;
+                background: root.checked ? #89b4fa : transparent;
+                Text { text: root.checked ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            Text { text: root.label; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
+        }
+    }
+}
+
+component SettingsNote {
+    in property <string> text;
+    width: 100%;
+    Text { width: 100%; text: root.text; color: #a6adc8; font-size: 12px; wrap: word-wrap; horizontal-alignment: left; }
+}
+
+component SettingsSection {
+    in property <string> title;
+    width: 100%;
+    Rectangle {
+        width: 100%;
+        background: #181825;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #313244;
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            SectionTitle { text: root.title; }
+            @children
         }
     }
 }
@@ -396,7 +805,11 @@ component SettingsPanel {
     in-out property <string> mobile-secret: "";
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
-    in property <string> settings-message: "";
+    in property <string> shortcut-message: "";
+    in property <string> save-message: "";
+    in property <string> sync-message: "";
+    in property <string> data-message: "";
+    in-out property <bool> show-secret: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -413,118 +826,122 @@ component SettingsPanel {
 
     Flickable {
         VerticalLayout {
-            padding: 20px;
+            padding: 24px;
             spacing: 20px;
             alignment: start;
 
             // ── 起動設定 ──
-            SectionTitle { text: "起動設定"; }
-            HorizontalLayout {
-                spacing: 12px;
-                startCk := TouchArea {
-                    width: 200px;
-                    height: 30px;
-                    clicked => { root.toggle-startup(!root.startup-enabled); }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Rectangle {
-                            width: 18px; height: 18px;
-                            border-width: 1px;
-                            border-color: #89b4fa;
-                            border-radius: 4px;
-                            background: root.startup-enabled ? #89b4fa : transparent;
-                            Text { text: root.startup-enabled ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
-                        }
-                        Text { text: "PC起動時に自動起動"; color: #cdd6f4; font-size: 13px; vertical-alignment: center; }
-                    }
+            SettingsSection {
+                title: "起動設定";
+                CheckRow { checked: root.startup-enabled; label: "PC 起動時に自動起動する"; toggled => { root.toggle-startup(!root.startup-enabled); } }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "デスクトップにショートカットを作成"; btn-width: 230px; clicked => { root.create-shortcut(); } }
                 }
-                SettingsBtn { text: "デスクトップショートカット作成"; clicked => { root.create-shortcut(); } }
+                if root.shortcut-message != "": SettingsNote { text: root.shortcut-message; }
             }
 
             // ── 睡眠判定時間 ──
-            SectionTitle { text: "睡眠判定時間"; }
-            HorizontalLayout {
-                spacing: 8px;
-                SpinBox {
-                    width: 120px;
-                    minimum: 5; maximum: 300;
-                    value: root.idle-threshold-minutes;
-                    edited(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
+            SettingsSection {
+                title: "睡眠判定時間";
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text { text: "キーボード / マウス操作がない状態が"; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
+                    SpinBox {
+                        width: 110px;
+                        minimum: 5; maximum: 300;
+                        value: root.idle-threshold-minutes;
+                        edited(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
+                    }
+                    Text { text: "分以上続いたら睡眠と判定"; color: #cdd6f4; font-size: 14px; vertical-alignment: center; }
                 }
-                Text { text: "分以上操作がなければ睡眠と判定"; color: #a6adc8; font-size: 12px; vertical-alignment: center; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
+                }
+                if root.save-message != "": SettingsNote { text: root.save-message; }
             }
 
             // ── 目標起床時刻 ──
-            SectionTitle { text: "目標起床時刻"; }
-            HorizontalLayout {
-                spacing: 12px;
-                wakeCk := TouchArea {
-                    width: 200px;
-                    height: 30px;
-                    clicked => { root.toggle-target-wake(!root.target-wake-enabled); }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Rectangle {
-                            width: 18px; height: 18px;
-                            border-width: 1px;
-                            border-color: #89b4fa;
-                            border-radius: 4px;
-                            background: root.target-wake-enabled ? #89b4fa : transparent;
-                            Text { text: root.target-wake-enabled ? "✓" : ""; color: #1e1e2e; horizontal-alignment: center; vertical-alignment: center; }
-                        }
-                        Text { text: "目標起床時刻を指定する"; color: #cdd6f4; font-size: 13px; vertical-alignment: center; }
-                    }
-                }
+            SettingsSection {
+                title: "目標起床時刻";
+                CheckRow { checked: root.target-wake-enabled; label: "目標起床時刻を指定する"; toggled => { root.toggle-target-wake(!root.target-wake-enabled); } }
                 if root.target-wake-enabled: HorizontalLayout {
+                    alignment: start;
                     spacing: 4px;
                     SpinBox { minimum: 0; maximum: 23; value: root.target-wake-h; edited(v) => { root.target-wake-h = v; root.target-wake-changed(v, root.target-wake-m); } }
                     Text { text: ":"; color: #cdd6f4; vertical-alignment: center; }
                     SpinBox { minimum: 0; maximum: 59; value: root.target-wake-m; edited(v) => { root.target-wake-m = v; root.target-wake-changed(root.target-wake-h, v); } }
                 }
+                if !root.target-wake-enabled: SettingsNote { text: "未指定の場合、過去の起床時刻の中央値を自動で使用します"; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
+                }
+                if root.save-message != "": SettingsNote { text: root.save-message; }
             }
 
             // ── クラウド連携 ──
-            SectionTitle { text: "クラウド連携"; }
-            VerticalLayout {
-                spacing: 8px;
-                Text { text: "Apps Script URL"; color: #a6adc8; font-size: 12px; }
+            SettingsSection {
+                title: "クラウド連携";
+                Text { width: 100%; text: "Apps Script URL"; color: #a6adc8; font-size: 12px; font-weight: 700; horizontal-alignment: left; }
                 urlEdit := LineEdit {
                     text: root.mobile-url;
                     edited(t) => { root.mobile-url = t; }
                 }
-                Text { text: "シークレット"; color: #a6adc8; font-size: 12px; }
-                secretEdit := LineEdit {
-                    text: root.mobile-secret;
-                    input-type: password;
-                    edited(t) => { root.mobile-secret = t; }
+                Text { width: 100%; text: "シークレット"; color: #a6adc8; font-size: 12px; font-weight: 700; horizontal-alignment: left; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    secretEdit := LineEdit {
+                        text: root.mobile-secret;
+                        input-type: root.show-secret ? text : password;
+                        edited(t) => { root.mobile-secret = t; }
+                    }
+                    eyeBtn := TouchArea {
+                        width: 34px;
+                        height: 26px;
+                        clicked => { root.show-secret = !root.show-secret; }
+                        Rectangle {
+                            background: eyeBtn.has-hover ? #45475a : #313244;
+                            border-radius: 6px;
+                            Text { text: root.show-secret ? "🙈" : "👁"; horizontal-alignment: center; vertical-alignment: center; font-size: 12px; }
+                        }
+                    }
                 }
                 HorizontalLayout {
                     spacing: 8px;
-                    SettingsBtn { text: "保存"; clicked => { root.save-settings(); } }
-                    SettingsBtn { text: "接続テスト"; clicked => { root.test-connection(); } }
-                    SettingsBtn { text: "今すぐ同期"; clicked => { root.sync-now(); } }
+                    alignment: start;
+                    SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
+                    SettingsBtn { text: "接続テスト"; btn-width: 100px; clicked => { root.test-connection(); } }
+                    SettingsBtn { text: "今すぐ同期"; btn-width: 100px; clicked => { root.sync-now(); } }
                 }
-                if root.connection-status != "": Text {
-                    text: root.connection-status;
-                    color: root.connection-ok ? #a6e3a1 : #f38ba8;
-                    font-size: 12px;
-                }
+                if root.connection-status != "": SettingsNote { text: (root.connection-ok ? "✓ " : "✗ ") + root.connection-status; }
+                if root.save-message != "": SettingsNote { text: root.save-message; }
+                if root.sync-message != "": SettingsNote { text: root.sync-message; }
+                SettingsNote { text: "設定は config.json にローカル保存されます"; }
             }
 
             // ── データ管理 ──
-            SectionTitle { text: "データ管理"; }
-            HorizontalLayout {
-                spacing: 8px;
-                SettingsBtn { text: "CSVエクスポート"; clicked => { root.export-csv(); } }
-                SettingsBtn { text: "バックアップ"; clicked => { root.backup(); } }
-                SettingsBtn { text: "復元"; clicked => { root.restore(); } }
-                SettingsBtn { text: "全データ削除"; danger: true; clicked => { root.clear-all-data(); } }
-            }
-
-            if root.settings-message != "": Text {
-                text: root.settings-message;
-                color: #a6adc8;
-                font-size: 12px;
+            SettingsSection {
+                title: "データ管理";
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "CSVエクスポート"; btn-width: 130px; clicked => { root.export-csv(); } }
+                }
+                SettingsNote { text: "Excel等で分析用。就寝・起床・睡眠時間・種別の4列。"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    SettingsBtn { text: "バックアップ"; btn-width: 110px; clicked => { root.backup(); } }
+                    SettingsBtn { text: "バックアップから復元"; btn-width: 170px; clicked => { root.restore(); } }
+                }
+                SettingsNote { text: "生データをそのまま保存・復元。別PCへの移行や完全バックアップに。"; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "全データを削除"; btn-width: 130px; danger: true; clicked => { root.clear-all-data(); } }
+                }
+                if root.data-message != "": SettingsNote { text: root.data-message; }
             }
         }
     }
@@ -536,9 +953,10 @@ export component MainWindow inherits Window {
     height: 750px;
     background: #1e1e2e;
 
-    in property <string> greeting: "起動確認中...";
+    in property <string> app-version: "";
 
     // 統計ストリップ用のプロパティ（main.rsから設定される）
+    in property <string> period-key: "month";
     in property <string> days-recorded: "—";
     in property <string> avg-sleep: "—";
     in property <string> last-sleep: "—";
@@ -549,6 +967,7 @@ export component MainWindow inherits Window {
     // 睡眠予測カード用のプロパティ
     in-out property <int> bed-hour: 22;
     in-out property <int> bed-minute: 0;
+    in property <string> bed-time-label: "--:--";
     in property <string> predicted-duration: "—";
     in property <string> predicted-wake-time: "--:--";
     in property <string> predicted-method: "";
@@ -557,6 +976,13 @@ export component MainWindow inherits Window {
     // 週間チャート用のプロパティ
     in property <[DaySummaryVM]> week: [];
     in property <string> week-range-label: "";
+    in property <[string]> y-labels: [];
+    in property <[string]> y2-labels: [];
+
+    // カレンダーピッカー用のプロパティ
+    in property <bool> cal-open: false;
+    in property <string> cal-month-label: "";
+    in property <[CalendarDayVM]> cal-days: [];
 
     // 日別詳細モーダル用のプロパティ
     in property <bool> show-detail: false;
@@ -564,8 +990,14 @@ export component MainWindow inherits Window {
     in property <string> detail-total-label: "";
     in property <[SessionVM]> detail-sessions: [];
     in property <bool> detail-add-open: false;
+    in-out property <int> detail-add-start-y: 2026;
+    in-out property <int> detail-add-start-mo: 1;
+    in-out property <int> detail-add-start-d: 1;
     in-out property <int> detail-add-start-h: 23;
     in-out property <int> detail-add-start-m: 0;
+    in-out property <int> detail-add-end-y: 2026;
+    in-out property <int> detail-add-end-mo: 1;
+    in-out property <int> detail-add-end-d: 2;
     in-out property <int> detail-add-end-h: 7;
     in-out property <int> detail-add-end-m: 0;
     in property <string> detail-error: "";
@@ -583,7 +1015,10 @@ export component MainWindow inherits Window {
     in-out property <string> mobile-secret: "";
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
-    in property <string> settings-message: "";
+    in property <string> shortcut-message: "";
+    in property <string> save-message: "";
+    in property <string> sync-message: "";
+    in property <string> data-message: "";
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -598,7 +1033,7 @@ export component MainWindow inherits Window {
     callback restore();
     callback clear-all-data();
 
-    callback sync-clicked();
+    callback period-changed(string);
     callback bedtime-edited(int, int);
     callback set-bedtime-now();
     callback set-bedtime-optimal();
@@ -606,6 +1041,11 @@ export component MainWindow inherits Window {
     callback prev-week();
     callback next-week();
     callback this-week();
+    callback open-calendar();
+    callback close-calendar();
+    callback cal-prev-month();
+    callback cal-next-month();
+    callback cal-day-clicked(string);
     callback close-detail();
     callback delete-session(string, string);
     callback toggle-add-session();
@@ -617,49 +1057,55 @@ export component MainWindow inherits Window {
 
         // ── トップバー ──
         HorizontalLayout {
+            height: 40px;
             spacing: 12px;
-            Text {
-                text: "睡眠トラッカー";
-                color: #cdd6f4;
-                font-size: 22px;
-                font-weight: 700;
-            }
-            homeTabBtn := TouchArea {
-                width: 60px;
-                clicked => { root.tab = "home"; }
-                Rectangle {
-                    background: root.tab == "home" ? #313244 : transparent;
-                    border-radius: 6px;
-                    Text { text: "ホーム"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: "睡眠トラッカー";
+                    color: #cdd6f4;
+                    font-size: 22px;
+                    font-weight: 700;
+                    vertical-alignment: center;
                 }
-            }
-            settingsTabBtn := TouchArea {
-                width: 60px;
-                clicked => { root.tab = "settings"; }
-                Rectangle {
-                    background: root.tab == "settings" ? #313244 : transparent;
-                    border-radius: 6px;
-                    Text { text: "設定"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                Text {
+                    text: root.app-version;
+                    color: #a6adc8;
+                    font-size: 13px;
+                    vertical-alignment: center;
                 }
             }
             Rectangle { horizontal-stretch: 1; }
-            Text {
-                text: root.greeting;
-                color: #a6adc8;
-                font-size: 13px;
-                vertical-alignment: center;
-            }
-            syncBtn := TouchArea {
-                width: 80px;
-                clicked => { root.sync-clicked(); }
-                Rectangle {
-                    background: syncBtn.has-hover ? #45475a : #313244;
-                    border-radius: 6px;
-                    Text {
-                        text: "同期";
-                        color: #cdd6f4;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+            HorizontalLayout {
+                spacing: 4px;
+                homeTabBtn := TouchArea {
+                    width: 60px;
+                    clicked => { root.tab = "home"; }
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: "ホーム";
+                            color: root.tab == "home" ? #89b4fa : #cdd6f4;
+                            horizontal-alignment: center;
+                            font-size: 14px;
+                            font-weight: root.tab == "home" ? 700 : 400;
+                        }
+                        Rectangle { height: 2px; background: root.tab == "home" ? #89b4fa : transparent; }
+                    }
+                }
+                settingsTabBtn := TouchArea {
+                    width: 60px;
+                    clicked => { root.tab = "settings"; }
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text {
+                            text: "設定";
+                            color: root.tab == "settings" ? #89b4fa : #cdd6f4;
+                            horizontal-alignment: center;
+                            font-size: 14px;
+                            font-weight: root.tab == "settings" ? 700 : 400;
+                        }
+                        Rectangle { height: 2px; background: root.tab == "settings" ? #89b4fa : transparent; }
                     }
                 }
             }
@@ -676,7 +1122,10 @@ export component MainWindow inherits Window {
             mobile-secret <=> root.mobile-secret;
             connection-status: root.connection-status;
             connection-ok: root.connection-ok;
-            settings-message: root.settings-message;
+            shortcut-message: root.shortcut-message;
+            save-message: root.save-message;
+            sync-message: root.sync-message;
+            data-message: root.data-message;
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
             threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
@@ -698,6 +1147,7 @@ export component MainWindow inherits Window {
             PredictionCard {
                 bed-hour: root.bed-hour;
                 bed-minute: root.bed-minute;
+                bed-time-label: root.bed-time-label;
                 predicted-duration: root.predicted-duration;
                 predicted-wake-time: root.predicted-wake-time;
                 predicted-method: root.predicted-method;
@@ -719,9 +1169,21 @@ export component MainWindow inherits Window {
 
                 HorizontalLayout {
                     padding: 20px;
-                    spacing: 24px;
+                    spacing: 18px;
                     alignment: start;
 
+                    Text { text: "統計"; color: #a6adc8; font-size: 12px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 0; }
+
+                    HorizontalLayout {
+                        horizontal-stretch: 0;
+                        spacing: 6px;
+                        PeriodTab { text: "先週"; active: root.period-key == "week"; clicked => { root.period-changed("week"); } }
+                        PeriodTab { text: "先月"; active: root.period-key == "month"; clicked => { root.period-changed("month"); } }
+                        PeriodTab { text: "1年"; active: root.period-key == "year"; clicked => { root.period-changed("year"); } }
+                        PeriodTab { text: "全期間"; tab-width: 62px; active: root.period-key == "all"; clicked => { root.period-changed("all"); } }
+                    }
+
+                    Divider { }
                     StatCol { value: root.days-recorded; label: "記録日数"; }
                     Divider { }
                     StatCol { value: root.avg-sleep; label: "平均睡眠"; value-color: #89b4fa; }
@@ -739,12 +1201,12 @@ export component MainWindow inherits Window {
                 spacing: 12px;
                 height: 32px;
                 prevBtn := TouchArea {
-                    width: 32px;
+                    width: 82px;
                     clicked => { root.prev-week(); }
                     Rectangle {
                         background: prevBtn.has-hover ? #313244 : transparent;
                         border-radius: 6px;
-                        Text { text: "◀"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "◀ 前の週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
                     }
                 }
                 Text {
@@ -753,13 +1215,14 @@ export component MainWindow inherits Window {
                     font-size: 14px;
                     vertical-alignment: center;
                 }
-                nextBtn := TouchArea {
+                calBtn := TouchArea {
                     width: 32px;
-                    clicked => { root.next-week(); }
+                    height: 32px;
+                    clicked => { root.open-calendar(); }
                     Rectangle {
-                        background: nextBtn.has-hover ? #313244 : transparent;
+                        background: calBtn.has-hover ? #313244 : transparent;
                         border-radius: 6px;
-                        Text { text: "▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "📅"; horizontal-alignment: center; vertical-alignment: center; font-size: 14px; }
                     }
                 }
                 todayBtn := TouchArea {
@@ -769,6 +1232,15 @@ export component MainWindow inherits Window {
                         background: todayBtn.has-hover ? #45475a : #313244;
                         border-radius: 6px;
                         Text { text: "今週"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
+                    }
+                }
+                nextBtn := TouchArea {
+                    width: 82px;
+                    clicked => { root.next-week(); }
+                    Rectangle {
+                        background: nextBtn.has-hover ? #313244 : transparent;
+                        border-radius: 6px;
+                        Text { text: "次の週 ▶"; color: #cdd6f4; horizontal-alignment: center; vertical-alignment: center; font-size: 13px; }
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -784,10 +1256,26 @@ export component MainWindow inherits Window {
                     width: parent.width - 40px;
                     height: parent.height - 32px;
                     week: root.week;
+                    y-labels: root.y-labels;
+                    y2-labels: root.y2-labels;
                     day-clicked(d) => { root.day-clicked(d); }
                 }
             }
         }
+    }
+
+    if root.cal-open: TouchArea {
+        x: 0; y: 0; width: 100%; height: 100%;
+        clicked => { root.close-calendar(); }
+    }
+    if root.cal-open: CalendarPicker {
+        x: 356px;
+        y: 324px;
+        month-label: root.cal-month-label;
+        days: root.cal-days;
+        prev-month => { root.cal-prev-month(); }
+        next-month => { root.cal-next-month(); }
+        day-clicked(d) => { root.cal-day-clicked(d); }
     }
 
     if root.show-detail: DayDetailModal {
@@ -797,8 +1285,14 @@ export component MainWindow inherits Window {
         total-label: root.detail-total-label;
         sessions: root.detail-sessions;
         add-open: root.detail-add-open;
+        add-start-y: root.detail-add-start-y;
+        add-start-mo: root.detail-add-start-mo;
+        add-start-d: root.detail-add-start-d;
         add-start-h: root.detail-add-start-h;
         add-start-m: root.detail-add-start-m;
+        add-end-y: root.detail-add-end-y;
+        add-end-mo: root.detail-add-end-mo;
+        add-end-d: root.detail-add-end-d;
         add-end-h: root.detail-add-end-h;
         add-end-m: root.detail-add-end-m;
         error-text: root.detail-error;

@@ -47,8 +47,8 @@ pub fn save(window: &MainWindow) {
     let secret = window.get_mobile_secret().to_string();
     let target = current_target_wake(window);
     match config::save_config(idle, url, secret, target, None) {
-        Ok(()) => window.set_settings_message("保存しました".into()),
-        Err(e) => window.set_settings_message(format!("保存失敗: {}", e).into()),
+        Ok(()) => window.set_save_message("✓ 保存しました".into()),
+        Err(e) => window.set_save_message(format!("保存失敗: {}", e).into()),
     }
 }
 
@@ -56,7 +56,7 @@ pub fn toggle_startup(window: &MainWindow, enable: bool) {
     match platform::set_startup(enable) {
         Ok(()) => {}
         Err(e) => {
-            window.set_settings_message(format!("スタートアップ設定失敗: {}", e).into());
+            window.set_shortcut_message(format!("スタートアップ設定失敗: {}", e).into());
             window.set_startup_enabled(!enable);
         }
     }
@@ -64,8 +64,8 @@ pub fn toggle_startup(window: &MainWindow, enable: bool) {
 
 pub fn create_shortcut(window: &MainWindow) {
     match platform::create_desktop_shortcut() {
-        Ok(()) => window.set_settings_message("デスクトップショートカットを作成しました".into()),
-        Err(e) => window.set_settings_message(format!("ショートカット作成失敗: {}", e).into()),
+        Ok(()) => window.set_shortcut_message("デスクトップにショートカットを作成しました".into()),
+        Err(e) => window.set_shortcut_message(format!("作成失敗: {}", e).into()),
     }
 }
 
@@ -92,8 +92,8 @@ pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedSta
             if let Some(w) = weak.upgrade() {
                 crate::ui::home::refresh_all(&w, &state);
                 match msg {
-                    Ok(m) => w.set_settings_message(m.into()),
-                    Err(e) => w.set_settings_message(format!("同期失敗: {}", e).into()),
+                    Ok(m) => w.set_sync_message(m.into()),
+                    Err(e) => w.set_sync_message(format!("同期失敗: {}", e).into()),
                 }
             }
         });
@@ -112,8 +112,8 @@ pub fn export_csv(window: &MainWindow) {
         .save_file();
     let Some(path) = path else { return };
     match events::write_csv_file(path.to_string_lossy().to_string(), csv) {
-        Ok(()) => window.set_settings_message("CSVエクスポート完了".into()),
-        Err(e) => window.set_settings_message(format!("エクスポート失敗: {}", e).into()),
+        Ok(()) => window.set_data_message("CSVエクスポート完了".into()),
+        Err(e) => window.set_data_message(format!("エクスポート失敗: {}", e).into()),
     }
 }
 
@@ -123,15 +123,15 @@ pub fn export_csv(window: &MainWindow) {
 #[cfg(target_os = "android")]
 pub fn export_csv(window: &MainWindow) {
     let Some(dir) = crate::android_external_dir() else {
-        window.set_settings_message("外部ストレージが利用できません".into());
+        window.set_data_message("外部ストレージが利用できません".into());
         return;
     };
     let sessions = events::get_sessions().unwrap_or_default();
     let csv = events::export_csv(&sessions);
     let path = dir.join("sleep_sessions.csv");
     match events::write_csv_file(path.to_string_lossy().to_string(), csv) {
-        Ok(()) => window.set_settings_message(format!("CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{}", path.file_name().unwrap().to_string_lossy()).into()),
-        Err(e) => window.set_settings_message(format!("エクスポート失敗: {}", e).into()),
+        Ok(()) => window.set_data_message(format!("CSVエクスポート完了 → Android/data/com.sleeptracker.app/files/{}", path.file_name().unwrap().to_string_lossy()).into()),
+        Err(e) => window.set_data_message(format!("エクスポート失敗: {}", e).into()),
     }
 }
 
@@ -140,7 +140,7 @@ pub fn export_csv(window: &MainWindow) {
 pub fn backup(window: &MainWindow) {
     let content = match events::get_events_content() {
         Ok(c) => c,
-        Err(e) => { window.set_settings_message(format!("バックアップ失敗: {}", e).into()); return; }
+        Err(e) => { window.set_data_message(format!("バックアップ失敗: {}", e).into()); return; }
     };
     let default_name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
     let path = rfd::FileDialog::new()
@@ -149,26 +149,26 @@ pub fn backup(window: &MainWindow) {
         .save_file();
     let Some(path) = path else { return };
     match events::write_csv_file(path.to_string_lossy().to_string(), content) {
-        Ok(()) => window.set_settings_message(format!("バックアップを保存しました → {}", path.display()).into()),
-        Err(e) => window.set_settings_message(format!("バックアップ失敗: {}", e).into()),
+        Ok(()) => window.set_data_message(format!("バックアップを保存しました → {}", path.display()).into()),
+        Err(e) => window.set_data_message(format!("バックアップ失敗: {}", e).into()),
     }
 }
 
 #[cfg(target_os = "android")]
 pub fn backup(window: &MainWindow) {
     let Some(dir) = crate::android_external_dir() else {
-        window.set_settings_message("外部ストレージが利用できません".into());
+        window.set_data_message("外部ストレージが利用できません".into());
         return;
     };
     let content = match events::get_events_content() {
         Ok(c) => c,
-        Err(e) => { window.set_settings_message(format!("バックアップ失敗: {}", e).into()); return; }
+        Err(e) => { window.set_data_message(format!("バックアップ失敗: {}", e).into()); return; }
     };
     let name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
     let path = dir.join(&name);
     match events::write_csv_file(path.to_string_lossy().to_string(), content) {
-        Ok(()) => window.set_settings_message(format!("バックアップ完了 → Android/data/com.sleeptracker.app/files/{}", name).into()),
-        Err(e) => window.set_settings_message(format!("バックアップ失敗: {}", e).into()),
+        Ok(()) => window.set_data_message(format!("バックアップ完了 → Android/data/com.sleeptracker.app/files/{}", name).into()),
+        Err(e) => window.set_data_message(format!("バックアップ失敗: {}", e).into()),
     }
 }
 
@@ -179,7 +179,7 @@ static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(target_os = "android"))]
 pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_settings_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
+        window.set_data_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
         return;
     }
     RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
@@ -190,14 +190,14 @@ pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
     let Some(path) = path else { return };
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(e) => { window.set_settings_message(format!("読み込み失敗: {}", e).into()); return; }
+        Err(e) => { window.set_data_message(format!("読み込み失敗: {}", e).into()); return; }
     };
     match events::restore_events(content) {
         Ok(()) => {
-            window.set_settings_message("バックアップから復元しました".into());
+            window.set_data_message("バックアップから復元しました".into());
             crate::ui::home::refresh_all(window, state);
         }
-        Err(e) => window.set_settings_message(format!("復元失敗: {}", e).into()),
+        Err(e) => window.set_data_message(format!("復元失敗: {}", e).into()),
     }
 }
 
@@ -209,12 +209,12 @@ static RESTORE_CONFIRM_PENDING: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "android")]
 pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
     let Some(dir) = crate::android_external_dir() else {
-        window.set_settings_message("外部ストレージが利用できません".into());
+        window.set_data_message("外部ストレージが利用できません".into());
         return;
     };
     let path = dir.join("restore.txt");
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_settings_message(format!(
+        window.set_data_message(format!(
             "Android/data/com.sleeptracker.app/files/restore.txt にバックアップファイルを配置してから、もう一度クリックしてください"
         ).into());
         return;
@@ -223,28 +223,28 @@ pub fn restore(window: &MainWindow, state: &crate::ui::home::SharedState) {
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(e) => { window.set_settings_message(format!("restore.txt の読み込み失敗: {}", e).into()); return; }
+        Err(e) => { window.set_data_message(format!("restore.txt の読み込み失敗: {}", e).into()); return; }
     };
     match events::restore_events(content) {
         Ok(()) => {
-            window.set_settings_message("バックアップから復元しました".into());
+            window.set_data_message("バックアップから復元しました".into());
             crate::ui::home::refresh_all(window, state);
         }
-        Err(e) => window.set_settings_message(format!("復元失敗: {}", e).into()),
+        Err(e) => window.set_data_message(format!("復元失敗: {}", e).into()),
     }
 }
 
 pub fn clear_all_data(window: &MainWindow, state: &crate::ui::home::SharedState) {
     if !CLEAR_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_settings_message("もう一度クリックすると全データを削除します".into());
+        window.set_data_message("もう一度クリックすると全データを削除します".into());
         return;
     }
     CLEAR_CONFIRM_PENDING.store(false, Ordering::SeqCst);
     match events::clear_all_data() {
         Ok(()) => {
-            window.set_settings_message("全データを削除しました".into());
+            window.set_data_message("全データを削除しました".into());
             crate::ui::home::refresh_all(window, state);
         }
-        Err(e) => window.set_settings_message(format!("削除失敗: {}", e).into()),
+        Err(e) => window.set_data_message(format!("削除失敗: {}", e).into()),
     }
 }

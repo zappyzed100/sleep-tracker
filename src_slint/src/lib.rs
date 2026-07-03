@@ -18,7 +18,6 @@ use ui::{home, settings_ui};
 
 pub use core::Session;
 
-use chrono::NaiveDate;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -124,7 +123,7 @@ pub fn run() {
     }
 
     let window = MainWindow::new().expect("ウィンドウの作成に失敗しました");
-    window.set_greeting("Rust + Slint 起動成功".into());
+    window.set_app_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
 
     // 睡眠予測カードの初期入眠時刻 = 現在時刻（PredictionCard.tsx の currentHHMM 相当）
     {
@@ -178,6 +177,15 @@ pub fn run() {
         });
     }
 
+    // ── 統計期間タブ ──
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_period_changed(move |key| {
+            if let Some(w) = weak.upgrade() { home::set_period(&w, &s, &key); }
+        });
+    }
+
     // ── 週ナビゲーション ──
     {
         let weak = window.as_weak();
@@ -198,6 +206,42 @@ pub fn run() {
         let s = state.clone();
         window.on_this_week(move || {
             if let Some(w) = weak.upgrade() { home::reset_week_to_today(&s); home::update_chart(&w, &s); }
+        });
+    }
+
+    // ── カレンダーピッカー ──
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_open_calendar(move || {
+            if let Some(w) = weak.upgrade() { home::open_calendar(&w, &s); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_close_calendar(move || {
+            if let Some(w) = weak.upgrade() { home::close_calendar(&w); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_cal_prev_month(move || {
+            if let Some(w) = weak.upgrade() { home::cal_prev_month(&w, &s); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_cal_next_month(move || {
+            if let Some(w) = weak.upgrade() { home::cal_next_month(&w, &s); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_cal_day_clicked(move |date| {
+            if let Some(w) = weak.upgrade() { home::cal_select_day(&w, &s, &date); }
         });
     }
 
@@ -246,10 +290,16 @@ pub fn run() {
         window.on_add_session(move || {
             if let Some(w) = weak.upgrade() {
                 let Some(date) = home::selected_date(&s) else { return };
-                let Ok(d) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else { return };
-                let next = d + chrono::Duration::days(1);
-                let start = format!("{} {:02}:{:02}:00", d.format("%Y-%m-%d"), w.get_detail_add_start_h(), w.get_detail_add_start_m());
-                let end = format!("{} {:02}:{:02}:00", next.format("%Y-%m-%d"), w.get_detail_add_end_h(), w.get_detail_add_end_m());
+                let start = format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:00",
+                    w.get_detail_add_start_y(), w.get_detail_add_start_mo(), w.get_detail_add_start_d(),
+                    w.get_detail_add_start_h(), w.get_detail_add_start_m(),
+                );
+                let end = format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:00",
+                    w.get_detail_add_end_y(), w.get_detail_add_end_mo(), w.get_detail_add_end_d(),
+                    w.get_detail_add_end_h(), w.get_detail_add_end_m(),
+                );
                 if start >= end {
                     w.set_detail_error("起床時刻は入眠時刻より後にしてください".into());
                     return;
@@ -332,15 +382,6 @@ pub fn run() {
         let s = state.clone();
         timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || {
             if let Some(w) = weak.upgrade() { home::apply_tick(&w, &s); }
-        });
-    }
-
-    // 同期ボタン（トップバー）: 別スレッドでsync_gistを実行し、完了後にUIスレッドで再読み込み
-    {
-        let weak = window.as_weak();
-        let s = state.clone();
-        window.on_sync_clicked(move || {
-            settings_ui::sync_now(weak.clone(), s.clone());
         });
     }
 

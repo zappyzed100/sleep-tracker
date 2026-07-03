@@ -4,18 +4,57 @@
 //!        表示更新ロジックをまとめる。main.rsのmain()から呼ばれるコールバック
 //!        本体はここに集約し、main.rsは配線のみを担当する。
 //!
-//! 依存 : crate::{MainWindow, DaySummaryVM, SessionVM}, events, prediction, utils
+//! 依存 : crate::{MainWindow, DaySummaryVM, SessionVM, CalendarDayVM}, events, prediction, utils
 //! 公開 : `AppState`, `SharedState`, `new_shared_state`, `refresh_all`,
 //!        `compute_stats`, `apply_tick`, `recompute_prediction`, `update_chart`,
-//!        `open_day_detail`, `close_day_detail`, `now_iso`
+//!        `open_day_detail`, `close_day_detail`, `now_iso`, `set_period`,
+//!        `open_calendar`, `close_calendar`, `cal_prev_month`, `cal_next_month`, `cal_select_day`
 
 use crate::core::{events, prediction, utils, Session};
-use crate::{DaySummaryVM, MainWindow, SessionVM};
+use crate::{CalendarDayVM, DaySummaryVM, MainWindow, SessionVM};
 use chrono::{Datelike, NaiveDate};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const DAYS_JA: [&str; 7] = ["月", "火", "水", "木", "金", "土", "日"];
+
+// StatsCard.tsx の期間タブ（先週=7日・先月=30日・1年=365日・全期間）相当。
+#[derive(Clone, Copy, PartialEq)]
+pub enum Period {
+    Week,
+    Month,
+    Year,
+    All,
+}
+
+impl Period {
+    fn from_key(key: &str) -> Self {
+        match key {
+            "week" => Period::Week,
+            "year" => Period::Year,
+            "all" => Period::All,
+            _ => Period::Month,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Period::Week => "week",
+            Period::Month => "month",
+            Period::Year => "year",
+            Period::All => "all",
+        }
+    }
+
+    fn days(self) -> Option<i64> {
+        match self {
+            Period::Week => Some(7),
+            Period::Month => Some(30),
+            Period::Year => Some(365),
+            Period::All => None,
+        }
+    }
+}
 
 fn awake_color(h: f64) -> slint::Color {
     if h > 16.0 { slint::Color::from_rgb_u8(0xf3, 0x8b, 0xa8) }      // --red
@@ -53,31 +92,46 @@ pub struct AppState {
     baseline: Option<StatsBaseline>,
     week_base: NaiveDate,
     selected_date: Option<String>,
+    period: Period,
+    cal_view: NaiveDate,
 }
 
 pub type SharedState = Arc<Mutex<AppState>>;
 
 pub fn new_shared_state() -> SharedState {
     use chrono::Local;
+    let today = Local::now().date_naive();
     Arc::new(Mutex::new(AppState {
         baseline: None,
-        week_base: Local::now().date_naive(),
+        week_base: today,
         selected_date: None,
+        period: Period::Month,
+        cal_view: NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap(),
     }))
 }
 
 // ── 統計ストリップ（StatsCard.tsx 相当）────────────────────────────────────────
-// StatsCard.tsx の期間タブ「先月」(30日) 相当をデフォルトとして使用。
+
+pub fn set_period(window: &MainWindow, state: &SharedState, key: &str) {
+    let period = Period::from_key(key);
+    state.lock().unwrap().period = period;
+    window.set_period_key(period.key().into());
+    compute_stats(window, state);
+}
 
 pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     let sessions = events::get_sessions().unwrap_or_default();
+    let period = state.lock().unwrap().period;
 
     let now = now_iso();
-    let thirty_days_ago_ts = {
-        use chrono::{Local, Duration};
-        (Local::now() - Duration::days(30)).format("%Y-%m-%d %H:%M:%S").to_string()
+    let recent: Vec<&Session> = match period.days() {
+        Some(days) => {
+            use chrono::{Duration, Local};
+            let cutoff_ts = (Local::now() - Duration::days(days)).format("%Y-%m-%d %H:%M:%S").to_string();
+            sessions.iter().filter(|s| s.start.as_str() >= cutoff_ts.as_str()).collect()
+        }
+        None => sessions.iter().collect(),
     };
-    let recent: Vec<&Session> = sessions.iter().filter(|s| s.start.as_str() >= thirty_days_ago_ts.as_str()).collect();
 
     let mut unique_days: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for s in &recent {
@@ -114,13 +168,15 @@ pub fn apply_tick(window: &MainWindow, state: &SharedState) {
 // ── 睡眠予測カード（PredictionCard.tsx 相当）───────────────────────────────────
 
 pub fn recompute_prediction(window: &MainWindow) {
+    let h = window.get_bed_hour();
+    let m = window.get_bed_minute();
+    window.set_bed_time_label(format!("{:02}:{:02}", h, m).into());
+
     let sessions = events::get_sessions().unwrap_or_default();
     if sessions.is_empty() {
         window.set_has_prediction(false);
         return;
     }
-    let h = window.get_bed_hour();
-    let m = window.get_bed_minute();
     let now_at_bedtime = bed_time_to_iso(h, m);
     let pred = prediction::predict(&sessions, &now_at_bedtime);
 
@@ -136,6 +192,19 @@ pub fn recompute_prediction(window: &MainWindow) {
 
 // ── 週間チャート（WeeklyChart.tsx 相当）────────────────────────────────────────
 
+// WeeklyChart.tsx の durations/y軸目盛り相当。左軸は0h〜(最大値+1)h、7段階で均等割り。
+fn build_y_labels(y_max: f64) -> Vec<slint::SharedString> {
+    (0..=6).map(|i| format!("{}h", (y_max * (6 - i) as f64 / 6.0).round() as i64).into()).collect()
+}
+
+// WeeklyChart.tsx のy2軸（入眠・起床の時刻軸）相当。7段階で均等割りし、時刻ラベルに変換する。
+fn build_y2_labels(y2_min: f64, y2_max: f64) -> Vec<slint::SharedString> {
+    (0..=6).map(|i| {
+        let v = y2_max - (y2_max - y2_min) * i as f64 / 6.0;
+        format!("{:02}:00", (v.floor() as i64).rem_euclid(24)).into()
+    }).collect()
+}
+
 pub fn update_chart(window: &MainWindow, state: &SharedState) {
     let (week_base, selected) = {
         let s = state.lock().unwrap();
@@ -143,7 +212,20 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
     };
     let sessions = events::get_sessions().unwrap_or_default();
     let days = utils::build_week(&sessions, week_base);
-    let max_hours = days.iter().map(|d| d.total_hours).fold(0.0_f64, f64::max).max(6.0);
+    let raw_max = days.iter().map(|d| d.total_hours).fold(0.0_f64, f64::max).max(6.0);
+    let y_max = raw_max.ceil() + 1.0;
+
+    let all_y2: Vec<f64> = days.iter().flat_map(|d| [d.bedtime_h, d.waketime_h]).flatten().collect();
+    let (y2_min, y2_max) = if all_y2.is_empty() {
+        (20.0, 32.0)
+    } else {
+        let lo = all_y2.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = all_y2.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        (lo.floor() - 1.0, hi.ceil() + 1.0)
+    };
+    let y2_range = (y2_max - y2_min).max(0.001);
+    // 折れ線グラフ用: 0.0(上端)〜1.0(下端)の縦位置に正規化する
+    let y_frac = |v: f64| (1.0 - ((v - y2_min) / y2_range).clamp(0.0, 1.0)) as f32;
 
     let vm: Vec<DaySummaryVM> = days.iter().enumerate().map(|(i, d)| {
         let date_str = d.date.format("%Y-%m-%d").to_string();
@@ -152,12 +234,19 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
             date: date_str.into(),
             day_label: format!("{}\n{}/{}", DAYS_JA[i], d.date.month(), d.date.day()).into(),
             duration_label: if d.total_hours > 0.0 { utils::format_duration(d.total_hours).into() } else { "".into() },
-            bar_frac: (d.total_hours / max_hours) as f32,
+            bar_frac: (d.total_hours / y_max) as f32,
             has_data: d.total_hours > 0.0,
             active: is_active,
+            bedtime_y: d.bedtime_h.map(y_frac).unwrap_or(0.0),
+            bedtime_has: d.bedtime_h.is_some(),
+            waketime_y: d.waketime_h.map(y_frac).unwrap_or(0.0),
+            waketime_has: d.waketime_h.is_some(),
         }
     }).collect();
     window.set_week(slint::ModelRc::new(slint::VecModel::from(vm)));
+
+    window.set_y_labels(slint::ModelRc::new(slint::VecModel::from(build_y_labels(y_max))));
+    window.set_y2_labels(slint::ModelRc::new(slint::VecModel::from(build_y2_labels(y2_min, y2_max))));
 
     let fmt = |d: NaiveDate| format!("{}/{:02}/{:02} ({})", d.year(), d.month(), d.day(), DAYS_JA[d.weekday().num_days_from_monday() as usize]);
     let end = week_base + chrono::Duration::days(6 - week_base.weekday().num_days_from_monday() as i64);
@@ -182,6 +271,75 @@ pub fn reset_week_to_today(state: &SharedState) {
 
 pub fn selected_date(state: &SharedState) -> Option<String> {
     state.lock().unwrap().selected_date.clone()
+}
+
+// ── カレンダーピッカー（CalendarPicker.tsx 相当）───────────────────────────────
+
+fn shift_month(d: NaiveDate, delta: i32) -> NaiveDate {
+    let total = d.year() * 12 + d.month() as i32 - 1 + delta;
+    let y = total.div_euclid(12);
+    let m = total.rem_euclid(12) + 1;
+    NaiveDate::from_ymd_opt(y, m as u32, 1).unwrap()
+}
+
+fn build_calendar_days(view: NaiveDate, week_base: NaiveDate) -> Vec<CalendarDayVM> {
+    use chrono::Local;
+    let today = Local::now().date_naive();
+    let first_of_month = NaiveDate::from_ymd_opt(view.year(), view.month(), 1).unwrap();
+    let grid_start = utils::week_start(first_of_month);
+    let ws = utils::week_start(week_base);
+    let we = ws + chrono::Duration::days(6);
+
+    (0..42).map(|i| {
+        let d = grid_start + chrono::Duration::days(i);
+        CalendarDayVM {
+            day: d.day() as i32,
+            date: d.format("%Y-%m-%d").to_string().into(),
+            in_month: d.month() == view.month(),
+            is_today: d == today,
+            in_week: d >= ws && d <= we,
+        }
+    }).collect()
+}
+
+fn refresh_calendar(window: &MainWindow, state: &SharedState) {
+    let (view, week_base) = {
+        let s = state.lock().unwrap();
+        (s.cal_view, s.week_base)
+    };
+    window.set_cal_month_label(format!("{}年{}月", view.year(), view.month()).into());
+    window.set_cal_days(slint::ModelRc::new(slint::VecModel::from(build_calendar_days(view, week_base))));
+}
+
+pub fn open_calendar(window: &MainWindow, state: &SharedState) {
+    {
+        let week_base = state.lock().unwrap().week_base;
+        state.lock().unwrap().cal_view = NaiveDate::from_ymd_opt(week_base.year(), week_base.month(), 1).unwrap();
+    }
+    refresh_calendar(window, state);
+    window.set_cal_open(true);
+}
+
+pub fn close_calendar(window: &MainWindow) {
+    window.set_cal_open(false);
+}
+
+pub fn cal_prev_month(window: &MainWindow, state: &SharedState) {
+    { let mut s = state.lock().unwrap(); s.cal_view = shift_month(s.cal_view, -1); }
+    refresh_calendar(window, state);
+}
+
+pub fn cal_next_month(window: &MainWindow, state: &SharedState) {
+    { let mut s = state.lock().unwrap(); s.cal_view = shift_month(s.cal_view, 1); }
+    refresh_calendar(window, state);
+}
+
+pub fn cal_select_day(window: &MainWindow, state: &SharedState, date: &str) {
+    if let Ok(d) = NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+        state.lock().unwrap().week_base = d;
+    }
+    window.set_cal_open(false);
+    update_chart(window, state);
 }
 
 // ── 日別詳細モーダル（DayDetail.tsx 相当）──────────────────────────────────────
@@ -218,13 +376,20 @@ pub fn open_day_detail(window: &MainWindow, state: &SharedState, date: &str) {
     }).collect();
 
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap_or_else(|_| chrono::Local::now().date_naive());
+    let next = d + chrono::Duration::days(1);
     window.set_detail_date_label(date_label_ja(d).into());
     window.set_detail_total_label(utils::format_duration(total).into());
     window.set_detail_sessions(slint::ModelRc::new(slint::VecModel::from(vm)));
     window.set_detail_add_open(false);
     window.set_detail_error("".into());
+    window.set_detail_add_start_y(d.year());
+    window.set_detail_add_start_mo(d.month() as i32);
+    window.set_detail_add_start_d(d.day() as i32);
     window.set_detail_add_start_h(23);
     window.set_detail_add_start_m(0);
+    window.set_detail_add_end_y(next.year());
+    window.set_detail_add_end_mo(next.month() as i32);
+    window.set_detail_add_end_d(next.day() as i32);
     window.set_detail_add_end_h(7);
     window.set_detail_add_end_m(0);
     window.set_show_detail(true);
