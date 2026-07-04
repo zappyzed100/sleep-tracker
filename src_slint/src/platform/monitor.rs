@@ -7,9 +7,11 @@
 //!        `app.emit("sleep-session-recorded")` は Slint の `invoke_from_event_loop` +
 //!        ウィンドウコールバック呼び出しに置き換えている。
 //!
-//! 依存 : crate::THRESHOLD_SECS（閾値の共有アトミック）
-//! 公開 : `start(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static)`
+//! 依存 : crate::THRESHOLD_SECS（閾値の共有アトミック）、crate::ui::sync_status
+//! 公開 : `start(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: impl Fn() + Send + 'static)`
 
+use crate::ui::sync_status;
+use crate::MainWindow;
 use chrono::{Duration as CDur, Local};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -194,14 +196,19 @@ fn maybe_in_house(events_path: &PathBuf, ts: &str) {
 
 /// `on_session_recorded` は IDLE_RESUME（起床検知）のたびに UI スレッドで呼ばれる。
 /// Slint 側では `slint::invoke_from_event_loop` でラップしたクロージャを渡すこと。
-pub fn start(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
+/// `weak` は同期中インジケーター(sync_status)の更新に使う。
+pub fn start(
+    data_dir: PathBuf,
+    weak: slint::Weak<MainWindow>,
+    on_session_recorded: impl Fn() + Send + 'static,
+) {
     thread::Builder::new()
         .name("sleep-monitor".into())
-        .spawn(move || run(data_dir, on_session_recorded))
+        .spawn(move || run(data_dir, weak, on_session_recorded))
         .expect("failed to spawn monitor thread");
 }
 
-fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
+fn run(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: impl Fn() + Send + 'static) {
     let events_path    = data_dir.join("sleep_events.txt");
     let heartbeat_path = data_dir.join("sleep_heartbeat.txt");
     let pause_flag     = data_dir.join("monitor_paused");
@@ -305,6 +312,8 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
         if last_pull.elapsed() >= PULL_INTERVAL {
             last_pull = Instant::now();
             let ep = events_path.clone();
+            let w = weak.clone();
+            sync_status::begin(&w);
             thread::spawn(move || {
                 let msg = crate::core::cloud::pull_mobile_events_inner();
                 eprintln!("{} periodic pull: {}", TAG, msg);
@@ -315,6 +324,7 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
                     let push_msg = crate::core::cloud::backup_to_drive(&content);
                     eprintln!("{} periodic push: {}", TAG, push_msg);
                 }
+                sync_status::end(&w, None);
             });
         }
 
@@ -328,7 +338,12 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
             sleeping = true;
             // Back up to Drive so Android can see the new session immediately
             let ep = events_path.clone();
-            thread::spawn(move || { crate::core::cloud::auto_backup_after_event(&ep); });
+            let w = weak.clone();
+            sync_status::begin(&w);
+            thread::spawn(move || {
+                crate::core::cloud::auto_backup_after_event(&ep);
+                sync_status::end(&w, None);
+            });
         } else if sleeping && idle < WAKE_SECS {
             maybe_in_house(&events_path, &now_str());
             append_event(&events_path, &now_str(), "IDLE_RESUME");
@@ -336,11 +351,14 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
             sleeping = false;
             // Driveからモバイルイベント(DEVICE_ON等)を即座にpull → キャッシュ無効化 → push
             let ep = events_path.clone();
+            let w = weak.clone();
+            sync_status::begin(&w);
             thread::spawn(move || {
                 let msg = crate::core::cloud::pull_mobile_events_inner();
                 eprintln!("{} IDLE_RESUME pull: {}", TAG, msg);
                 *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
                 crate::core::cloud::auto_backup_after_event(&ep);
+                sync_status::end(&w, None);
             });
             // Notify UI immediately so sessions panel refreshes without polling delay.
             on_session_recorded();

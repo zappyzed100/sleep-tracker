@@ -421,18 +421,22 @@ pub fn run() {
         });
     }
 
-    // Drive → ローカルへの起動時同期（別スレッド、完了後にUI再読み込み）
+    // Drive → ローカルへの起動時同期（別スレッド、完了後にUI再読み込み）。
+    // 同期アイコン(sync-in-progress)も手動同期ボタンと同じ見た目で回転させる
+    // （起動時に実際に同期しているのにアイコンが動かず不安、という指摘への対応）。
     {
         let weak = window.as_weak();
+        ui::sync_status::begin(&weak);
         let s = state.clone();
         std::thread::spawn(move || {
             cloud::ensure_events_from_drive();
             let _ = cloud::pull_mobile_events_inner();
-            let weak = weak.clone();
-            let s = s.clone();
+            let now = chrono::Local::now().format("%H:%M:%S").to_string();
+            let weak2 = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() { home::refresh_all(&w, &s); }
+                if let Some(w) = weak2.upgrade() { home::refresh_all(&w, &s); }
             });
+            ui::sync_status::end(&weak, Some((format!("✓ 同期完了 ({})", now), "success")));
         });
     }
 
@@ -441,7 +445,7 @@ pub fn run() {
     {
         let weak = window.as_weak();
         let s = state.clone();
-        platform::monitor::start(data_dir(), move || {
+        platform::monitor::start(data_dir(), window.as_weak(), move || {
             let weak = weak.clone();
             let s = s.clone();
             let _ = slint::invoke_from_event_loop(move || {

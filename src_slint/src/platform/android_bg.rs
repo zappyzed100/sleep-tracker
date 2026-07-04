@@ -10,15 +10,21 @@
 //!        フォアグラウンド中のみの判定になる（アプリを開いた時に前回から
 //!        24時間経過していれば取る）。
 //!
-//! 依存 : crate::{events, cloud, home}
+//! 依存 : crate::{events, cloud, home, sync_status}
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`
 
 use crate::ui::home::{self, SharedState};
+use crate::ui::sync_status;
 use crate::core::{cloud, events};
 use crate::MainWindow;
 use slint::ComponentHandle;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+// 起動時同期と5分ごとの定期同期が重複起動しないようにするためだけのガード
+// （sync-in-progressは他の同期要因とも共有する参照カウントのため、これとは別に持つ）。
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub fn setup(window: &MainWindow, state: &SharedState) {
     // 起動時: アプリを開いたことを記録（Tauri版のrecord_device_on相当）
@@ -26,24 +32,37 @@ pub fn setup(window: &MainWindow, state: &SharedState) {
     // 起動時: 前回から24時間経っていればローカルバックアップを取る
     events::maybe_auto_backup(&crate::data_dir());
 
+    // 起動直後に1回、即座にバックグラウンド同期する。Slintのリピートタイマーは
+    // 最初の発火まで1周期分待つ仕様のため、これが無いと起動から5分間は
+    // 同期されず、同期アイコンも動かないままになる。
+    run_sync(window.as_weak(), state.clone());
+
     // 5分ごとにバックグラウンド同期（アプリが存命中のみ）
-    let timer = slint::Timer::default();
     let weak = window.as_weak();
     let s = state.clone();
+    let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, SYNC_INTERVAL, move || {
-        let weak = weak.clone();
-        let s = s.clone();
-        std::thread::spawn(move || {
-            let sessions = cloud::sync_mobile_inner();
-            eprintln!("[app] android periodic sync: {} sessions", sessions.len());
-            events::maybe_auto_backup(&crate::data_dir());
-            let weak = weak.clone();
-            let s = s.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() { home::refresh_all(&w, &s); }
-            });
-        });
+        run_sync(weak.clone(), s.clone());
     });
     // Timerをリークして保持する（run()のスコープを抜けても動き続けるように）。
     std::mem::forget(timer);
+}
+
+// バックグラウンド同期を1回実行する。同期中は同期アイコン(sync-in-progress)を
+// 手動同期ボタンと同じ見た目で回転させ、完了後は設定タブの同期メッセージも更新する。
+fn run_sync(weak: slint::Weak<MainWindow>, state: SharedState) {
+    if RUNNING.swap(true, Ordering::SeqCst) { return; }
+    sync_status::begin(&weak);
+    std::thread::spawn(move || {
+        let sessions = cloud::sync_mobile_inner();
+        eprintln!("[app] android sync: {} sessions", sessions.len());
+        events::maybe_auto_backup(&crate::data_dir());
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        let weak2 = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak2.upgrade() { home::refresh_all(&w, &state); }
+        });
+        RUNNING.store(false, Ordering::SeqCst);
+        sync_status::end(&weak, Some((format!("✓ 同期完了 ({})", now), "success")));
+    });
 }
