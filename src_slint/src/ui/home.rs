@@ -167,10 +167,13 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
         None
     };
     let last = sessions.last().map(|s| s.duration_hours);
+    // "YYYY-MM-DD HH:MM:SS" の HH:MM 部分だけを取り出す。
+    let wake_time = sessions.last().and_then(|s| s.end.get(11..16));
 
     window.set_days_recorded(format!("{}日", per_day.len()).into());
     window.set_avg_sleep(avg.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
     window.set_last_sleep(last.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
+    window.set_wake_time(wake_time.unwrap_or("—").into());
 
     let pred = prediction::predict(&sessions, &now);
 

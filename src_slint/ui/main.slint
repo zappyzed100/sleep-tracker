@@ -1324,6 +1324,7 @@ export component MainWindow inherits Window {
     in property <string> days-recorded: "—";
     in property <string> avg-sleep: "—";
     in property <string> last-sleep: "—";
+    in property <string> wake-time: "—";
     in property <string> current-time: "—";
     in property <string> awake-since: "—";
     in property <color> awake-color: #a6e3a1;
@@ -1788,6 +1789,8 @@ export component MainWindow inherits Window {
                     StatCol { value: root.last-sleep; label: "最後の睡眠"; }
                     Divider { }
                     StatCol { value: root.current-time; label: "現在時刻"; }
+                    Divider { }
+                    StatCol { value: root.wake-time; label: "起床時刻"; }
                     Divider { }
                     StatCol { value: root.awake-since; label: "起きてから"; value-color: root.awake-color; }
                 }
