@@ -1327,6 +1327,10 @@ export component MainWindow inherits Window {
     in property <string> current-time: "—";
     in property <string> awake-since: "—";
     in property <color> awake-color: #a6e3a1;
+    // 暫定睡眠時間（進行中でまだ閉じていない睡眠セッションがある場合のみ表示）。
+    // 寝ている最中に一瞬起きてタブレットで確認する用途。
+    in property <bool> has-open-sleep: false;
+    in property <string> open-sleep-elapsed: "—";
 
     // 睡眠予測カード用のプロパティ
     in-out property <int> bed-hour: 22;
@@ -1545,12 +1549,23 @@ export component MainWindow inherits Window {
                             root.sync-now();
                         }
                     }
+                    property <angle> spin-angle: 0deg;
+                    // 同期中は回転させ続けて「動いている」ことを一目で分かるようにする
+                    // （色だけの変化は気付きにくいというフィードバックへの対応）。
+                    Timer {
+                        interval: 16ms;
+                        running: root.sync-in-progress;
+                        triggered() => {
+                            syncBtn.spin-angle = mod(syncBtn.spin-angle / 1deg + 6, 360) * 1deg;
+                        }
+                    }
                     Text {
                         text: "🔄";
                         color: root.sync-in-progress ? #89b4fa : (syncBtn.has-hover ? #cdd6f4 : #a6adc8);
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         font-size: 18px;
+                        transform-rotation: syncBtn.spin-angle;
                     }
                 }
             }
@@ -1711,6 +1726,30 @@ export component MainWindow inherits Window {
                     optimal-clicked => {
                         root.bedtime-source = "optimal";
                         root.set-bedtime-optimal();
+                    }
+                }
+            }
+
+            if root.has-open-sleep: Rectangle {
+                background: #181825;
+                height: 34px;
+                HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    alignment: start;
+                    spacing: 8px;
+                    Text {
+                        text: "🌙 進行中の睡眠（暫定）";
+                        color: #a6adc8;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.open-sleep-elapsed;
+                        color: #89b4fa;
+                        font-size: 15px;
+                        font-weight: 700;
+                        vertical-alignment: center;
                     }
                 }
             }

@@ -90,6 +90,11 @@ struct StatsBaseline {
 
 pub struct AppState {
     baseline: Option<StatsBaseline>,
+    // 進行中（まだIDLE_RESUMEが来ていない）睡眠セッションの開始時刻。
+    // 暫定睡眠時間の表示用（寝ている最中に一瞬起きて確認する用途）。
+    // 絶対時刻で持っているので、tickごとに Local::now() との差分を取り直すだけでよい
+    // （awake_hoursのようにInstant経過分を毎回加算する必要がない）。
+    open_sleep_start: Option<chrono::NaiveDateTime>,
     week_base: NaiveDate,
     selected_date: Option<String>,
     period: Period,
@@ -103,6 +108,7 @@ pub fn new_shared_state() -> SharedState {
     let today = Local::now().date_naive();
     Arc::new(Mutex::new(AppState {
         baseline: None,
+        open_sleep_start: None,
         week_base: today,
         selected_date: None,
         period: Period::Month,
@@ -167,19 +173,39 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     window.set_last_sleep(last.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
 
     let pred = prediction::predict(&sessions, &now);
-    state.lock().unwrap().baseline = Some(StatsBaseline { awake_hours: pred.awake_hours, computed_at: Instant::now() });
+
+    // 進行中（まだ閉じていない）睡眠セッションがあれば、暫定睡眠時間表示のために
+    // 開始時刻を保持する。寝ている最中に一瞬起きてタブレットを確認する用途。
+    let open_sleep_start = events::current_sleep_start()
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok());
+
+    {
+        let mut st = state.lock().unwrap();
+        st.baseline = Some(StatsBaseline { awake_hours: pred.awake_hours, computed_at: Instant::now() });
+        st.open_sleep_start = open_sleep_start;
+    }
 
     apply_tick(window, state);
 }
 
-// 現在時刻・起きてから経過時間だけを軽量に更新する（10秒ごと）。
+// 現在時刻・起きてから経過時間・暫定睡眠時間だけを軽量に更新する（10秒ごと）。
 pub fn apply_tick(window: &MainWindow, state: &SharedState) {
     window.set_current_time(now_hhmm().into());
-    if let Some(b) = state.lock().unwrap().baseline.as_ref() {
+    let st = state.lock().unwrap();
+    if let Some(b) = st.baseline.as_ref() {
         let elapsed_h = b.computed_at.elapsed().as_secs_f64() / 3600.0;
         let awake = b.awake_hours + elapsed_h;
         window.set_awake_since(utils::format_duration(awake).into());
         window.set_awake_color(awake_color(awake));
+    }
+
+    if let Some(start) = st.open_sleep_start {
+        use chrono::Local;
+        let elapsed_h = (Local::now().naive_local() - start).num_seconds() as f64 / 3600.0;
+        window.set_has_open_sleep(true);
+        window.set_open_sleep_elapsed(utils::format_duration(elapsed_h.max(0.0)).into());
+    } else {
+        window.set_has_open_sleep(false);
     }
 }
 

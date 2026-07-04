@@ -9,7 +9,7 @@
 //! 公開 : `Session`, `SessionCache`, `SESSION_CACHE`, `parse_sessions_rust`,
 //!        `sort_events_file`, `get_sessions`, `add_session`, `delete_session`,
 //!        `get_events_content`, `restore_events`, `clear_all_data`, `compact_data`,
-//!        `maybe_auto_backup`, `clear_backups`,
+//!        `current_sleep_start`, `maybe_auto_backup`, `clear_backups`,
 //!        `export_csv`, `write_csv_file`, `import_csv`,
 //!        `is_out_from_content`, `apply_mobile_event_line`
 
@@ -704,22 +704,10 @@ pub fn clear_all_data() -> Result<(), String> {
     Ok(())
 }
 
-// sleep_events.txt / sleep_manual.txt を、実際にセッションとしてパースされている
-// 内容だけの最小構成に作り直す（不要な生イベント・削除済みマーカーなどを一掃する）。
-// 手順：一度セッションリストを構築し、それをIDLE_START/IDLE_RESUMEペアとして再構築する
-// （sleep_manual.txtの内容もここに統合されるため、sleep_manual.txt自体は空にする）。
-// 現在進行中で閉じていないIDLE_START・OUT_STARTがあれば、それだけは生イベントとして
-// そのまま残す（削除すると進行中の睡眠/外出状態を見失うため）。
-// 戻り値: 再構築後のsleep_events.txtの内容（Driveへの直接pushに再利用するため）。
-pub fn compact_data() -> Result<String, String> {
-    let events_path = crate::data_dir().join("sleep_events.txt");
-    let manual_path = crate::data_dir().join("sleep_manual.txt");
-
-    let sessions = parse_sessions_rust()?;
-
-    // 現在進行中で閉じていないIDLE_START/OUT_STARTのタイムスタンプを検出する。
-    // ファイルを時刻順に走査し、START系イベントで開き、対応するEND系イベントで閉じる。
-    let raw = std::fs::read_to_string(&events_path).unwrap_or_default();
+// ファイルを時刻順に走査し、START系イベントで開き、対応するEND系イベントで閉じる。
+// 現在進行中で閉じていない IDLE_START / OUT_START のタイムスタンプを検出する
+// （compact_data と current_sleep_start の両方から使う共通ロジック）。
+fn detect_open_idle_and_out(raw: &str) -> (Option<String>, Option<String>) {
     let mut open_idle: Option<String> = None;
     let mut open_out: Option<String> = None;
     for line in raw.lines() {
@@ -734,6 +722,38 @@ pub fn compact_data() -> Result<String, String> {
             _ => {}
         }
     }
+    (open_idle, open_out)
+}
+
+// 現在進行中（まだ IDLE_RESUME が来ていない）の睡眠セッションの開始時刻を返す。
+// 暫定睡眠時間の表示用（タブレットで寝ている最中に一瞬起きて確認する用途）。
+// 外出中(OUT_START)にIDLE_STARTが来た場合は「起きている」ままなので None を返す
+// （現状のセッション判定ロジックと同じ考え方：外出中はPC放置を睡眠とみなさない）。
+pub fn current_sleep_start() -> Option<String> {
+    let events_path = crate::data_dir().join("sleep_events.txt");
+    let raw = std::fs::read_to_string(&events_path).ok()?;
+    let (open_idle, open_out) = detect_open_idle_and_out(&raw);
+    if open_out.is_some() {
+        return None;
+    }
+    open_idle
+}
+
+// sleep_events.txt / sleep_manual.txt を、実際にセッションとしてパースされている
+// 内容だけの最小構成に作り直す（不要な生イベント・削除済みマーカーなどを一掃する）。
+// 手順：一度セッションリストを構築し、それをIDLE_START/IDLE_RESUMEペアとして再構築する
+// （sleep_manual.txtの内容もここに統合されるため、sleep_manual.txt自体は空にする）。
+// 現在進行中で閉じていないIDLE_START・OUT_STARTがあれば、それだけは生イベントとして
+// そのまま残す（削除すると進行中の睡眠/外出状態を見失うため）。
+// 戻り値: 再構築後のsleep_events.txtの内容（Driveへの直接pushに再利用するため）。
+pub fn compact_data() -> Result<String, String> {
+    let events_path = crate::data_dir().join("sleep_events.txt");
+    let manual_path = crate::data_dir().join("sleep_manual.txt");
+
+    let sessions = parse_sessions_rust()?;
+
+    let raw = std::fs::read_to_string(&events_path).unwrap_or_default();
+    let (open_idle, open_out) = detect_open_idle_and_out(&raw);
 
     let mut lines: Vec<String> = Vec::with_capacity(sessions.len() * 2 + 2);
     for s in &sessions {

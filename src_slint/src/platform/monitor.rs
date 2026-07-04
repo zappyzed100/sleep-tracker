@@ -297,14 +297,23 @@ fn run(data_dir: PathBuf, on_session_recorded: impl Fn() + Send + 'static) {
             continue;
         }
 
-        // ── Periodic Drive/Sheet pull (モバイルイベントをPC側に取り込む) ────────
+        // ── Periodic Drive/Sheet pull + push (双方向で毎回同期する) ──────────────
+        // pullだけだとIDLE_START時の一回限りのpush（auto_backup_after_event）が
+        // 何らかの理由（ネットワーク瞬断等）で失敗した場合にリトライされず、
+        // タブレット側が進行中セッションを見られないままになる。そのため周期処理でも
+        // 毎回ローカルの内容をDriveへpushし直し、初回push失敗からの自動復旧を保証する。
         if last_pull.elapsed() >= PULL_INTERVAL {
             last_pull = Instant::now();
-            thread::spawn(|| {
+            let ep = events_path.clone();
+            thread::spawn(move || {
                 let msg = crate::core::cloud::pull_mobile_events_inner();
                 eprintln!("{} periodic pull: {}", TAG, msg);
                 if msg.starts_with("追加") || msg.contains("件処理") {
                     *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
+                }
+                if let Ok(content) = fs::read_to_string(&ep) {
+                    let push_msg = crate::core::cloud::backup_to_drive(&content);
+                    eprintln!("{} periodic push: {}", TAG, push_msg);
                 }
             });
         }
