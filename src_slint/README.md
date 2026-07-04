@@ -18,7 +18,7 @@ WebViewを使わないため、Tauri版で問題になっていたAndroidのWebV
 | `assets/` | トレイアイコン等の画像アセット |
 | `build.rs` | ビルド時に `ui/main.slint` をコンパイルする |
 | `Cargo.toml` | lib+bin構成。`[lib]` は cdylib+rlib（Android用）、デスクトップは `src/main.rs` |
-| `android/` | Gradle + cargo-ndk 構成のAndroidプロジェクト（WorkManager真バックグラウンド同期用、後述） |
+| `android/` | Gradle + cargo-ndk 構成のAndroidプロジェクト（Kotlin側でUsageStatsManager連携・DEVICE_ON即時送信を実装、後述） |
 
 ## ビルド方法
 
@@ -31,10 +31,11 @@ cargo build --release
 
 ### Android（2種類のビルド経路がある）
 
-#### ① Gradle + cargo-ndk（`android/`、真バックグラウンド同期あり・配布用に推奨）
+#### ① Gradle + cargo-ndk（`android/`、配布用に推奨）
 
-WorkManagerで15分ごとにDrive宛シグナルを送信するKotlin製 `DriveSignalWorker` を含み、
-アプリがバックグラウンド／終了後でも動作する。実機に配布する場合はこちらを使う。
+Kotlin製の `MainActivity.kt`（アプリ起動・再開時にDEVICE_ON即時送信＋`UsageReporter`によるタブレット
+利用区間の検出・送信）と `DriveSignalWorker.kt`（WorkManager経由のDEVICE_ON即時送信の実行本体）を含む。
+実機に配布する場合はこちらを使う。
 
 ```bash
 # 1. RustのcdylibをNDK向けにビルドし、android/app/src/main/jniLibs/ に配置
@@ -58,8 +59,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 #### ② cargo-apk（純Rust、素早い反復用）
 
-WorkManagerが不要なUI/ロジック側の動作確認はこちらが手早い。Kotlinコードは含まれないため、
-真のバックグラウンド同期（15分ごとのDEVICE_ON送信）は動かない。
+Kotlinが不要なUI/ロジック側の動作確認はこちらが手早い。Kotlinコードは含まれないため、
+DEVICE_ON即時送信・`UsageReporter`によるタブレット利用区間の検出は動かない。
 
 ```bash
 # 初回のみ: cargo install cargo-apk

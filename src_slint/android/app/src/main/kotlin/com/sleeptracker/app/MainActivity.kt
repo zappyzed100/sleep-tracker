@@ -8,17 +8,20 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import java.util.concurrent.TimeUnit
 
 // android-activity（Slintのbackend-android-activity）はNativeActivityそのままでも動くが、
-// WorkManagerによる真のバックグラウンド同期（DriveSignalWorker）を登録するために
-// カスタムサブクラスにしている。Tauri版 MainActivity.kt のWorkManager登録部分を移植。
+// WorkManagerによるDEVICE_ON即時送信（DriveSignalWorker）を登録するためにカスタム
+// サブクラスにしている。
+//
+// 旧: 15分ごとの定期バックグラウンド送信（PeriodicWorkRequestBuilder）は廃止した。
+// 「タブレットの電源が入っているか」しか分からず「実際に使っていたか」の証拠に
+// ならないため、睡眠判定の材料としては信頼できないと判断した
+// （scratchpad/sync_design_testでの検証・議論を参照）。代わりにUsageReporterが
+// UsageStatsManager由来の実際のアプリ利用区間を送信する。
 class MainActivity : NativeActivity() {
     private val networkConstraints = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -28,20 +31,7 @@ class MainActivity : NativeActivity() {
         super.onCreate(savedInstanceState)
 
         requestIgnoreBatteryOptimizations()
-
-        // WorkManagerの初期化はディスクI/O（Room DB作成）を伴いメインスレッドを
-        // 数秒ブロックすることがあるためバックグラウンドスレッドで行う。
-        val appCtx = applicationContext
-        Thread {
-            val workRequest = PeriodicWorkRequestBuilder<DriveSignalWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(networkConstraints)
-                .build()
-            WorkManager.getInstance(appCtx).enqueueUniquePeriodicWork(
-                "drive_signal",
-                ExistingPeriodicWorkPolicy.KEEP,
-                workRequest
-            )
-        }.start()
+        UsageReporter.requestUsageAccess(this)
     }
 
     // Dozeモード（画面OFF・静止状態が続くと入る省電力モード）に入ると、WorkManagerの
@@ -76,6 +66,12 @@ class MainActivity : NativeActivity() {
                 ExistingWorkPolicy.REPLACE,
                 request
             )
+        }.start()
+
+        // 前回開いてから今回開くまでのタブレット利用区間をUsageStatsManagerから
+        // 回収してDriveへ送信する（ネットワークI/Oを含むためバックグラウンドスレッドで）。
+        Thread {
+            UsageReporter.reportSinceLastCheck(appCtx)
         }.start()
     }
 }
