@@ -568,46 +568,6 @@ pub fn delete_session(start: String, _end: String) -> Result<(), String> {
     Ok(())
 }
 
-// Android: write DEVICE_ON (+ IN_HOUSE if out-state) when user opens the app.
-pub fn record_device_on() {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed) + 1;
-
-    let _lock = EVENTS_FILE_LOCK.lock().unwrap();
-    use chrono::Local;
-    let ts = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let path = crate::data_dir().join("sleep_events.txt");
-    let existing = if path.exists() {
-        std::fs::read_to_string(&path).unwrap_or_default()
-    } else {
-        String::new()
-    };
-
-    let lines_before = existing.lines().filter(|l| !l.trim().is_empty()).count();
-    let is_out = is_out_from_content(&existing);
-    eprintln!("{} record_device_on #{}: ts={} is_out={} lines_before={}", TAG, n, ts, is_out, lines_before);
-
-    // IN_HOUSE と DEVICE_ON を1回のファイルオープンで書き込む（競合防止）
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        if is_out {
-            let _ = writeln!(f, "{},IN_HOUSE", ts);
-            eprintln!("{} record_device_on #{}: wrote IN_HOUSE", TAG, n);
-        }
-        let _ = writeln!(f, "{},DEVICE_ON", ts);
-    }
-    let _ = std::fs::write(crate::data_dir().join("device_heartbeat.txt"), format!("{}\n", ts));
-    *SESSION_CACHE.lock().unwrap() = None;
-
-    let lines_after = std::fs::read_to_string(&path)
-        .unwrap_or_default()
-        .lines().filter(|l| !l.trim().is_empty()).count();
-    eprintln!("{} record_device_on #{}: done lines_after={} (+{})", TAG, n, lines_after, lines_after.saturating_sub(lines_before));
-
-    if n > 10 {
-        eprintln!("{} record_device_on #{}: WARN called {} times — possible visibilitychange loop", TAG, n, n);
-    }
-}
-
 pub fn get_events_content() -> Result<String, String> {
     let path = crate::data_dir().join("sleep_events.txt");
     if !path.exists() { return Ok(String::new()); }

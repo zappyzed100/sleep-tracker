@@ -2,7 +2,6 @@
 //!
 //! 役割 : Google Apps Script 経由でモバイルデバイスのイベントを取得し
 //!        sleep_events.txt に書き込む。Drive へのバックアップも担当する。
-//!        SCREEN_ON はDEVICE_ONに統合済み（Android側はDriveSignalWorker経由でDEVICE_ONを送信）。
 //!        Tauri版 src-tauri/src/cloud.rs の移植。
 //!        `#[tauri::command] async fn` + `spawn_blocking` は同期関数に変更し、
 //!        UIスレッドをブロックしないための非同期呼び出しは呼び出し側（main.rs）の
@@ -457,7 +456,7 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         }
     }
 
-    // 3. Pull mobile events from Sheet (DEVICE_ON / LEAVE_HOME / ARRIVE_HOME)
+    // 3. Pull mobile events from Sheet (LEAVE_HOME / ARRIVE_HOME / APP_USAGE_START / APP_USAGE_END)
     pull_mobile_events_inner();
 
     // 4. Sort + dedup

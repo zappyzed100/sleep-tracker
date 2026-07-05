@@ -348,6 +348,12 @@ export struct DaySummaryVM {
     bedtime-has: bool,
     waketime-y: float,      // 起床時刻の折れ線位置
     waketime-has: bool,
+    // まだIDLE_RESUMEが来ていない進行中の睡眠セッションがこの日にある場合の
+    // 経過時間（暫定）。就寝中に一瞬起きて確認する用途で、完了済みバーとは
+    // 別に、伸び続ける「進行中」バーとしてグラフ上に表示する。
+    in-progress-frac: float,
+    in-progress-has: bool,
+    in-progress-label: string,
 }
 
 // 折れ線グラフの曲線をなめらかに描くためのサンプル点。
@@ -520,7 +526,12 @@ component WeeklyChart {
                     }
                 }
             }
-            property <length> bar-h: self.height * max(day.bar-frac, 0.02);
+            // 完了済みセッションが無く、進行中（暫定）のセッションだけがある日は、
+            // 通常のバーの代わりに伸び続ける「進行中」バーを表示する
+            // （以前は文字だけの別枠表示だったが、グラフに統合してほしいという
+            // フィードバックへの対応）。
+            property <bool> is-in-progress: day.in-progress-has && !day.has-data;
+            property <length> bar-h: self.height * max(day.has-data ? day.bar-frac : (col.is-in-progress ? day.in-progress-frac : 0.0), 0.02);
             property <length> bar-y: self.height - self.bar-h;
             property <length> bar-w: self.width * 0.7;
             Rectangle {
@@ -528,7 +539,9 @@ component WeeklyChart {
                 y: col.bar-y;
                 height: col.bar-h;
                 width: col.bar-w;
-                background: day.has-data ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.55)) : #313244;
+                background: day.has-data
+                    ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.55))
+                    : (col.is-in-progress ? rgba(249, 226, 175, 0.65) : #313244);
                 border-radius: 4px;
                 animate y, height { duration: 150ms; easing: ease-out; }
             }
@@ -536,6 +549,15 @@ component WeeklyChart {
                 y: col.bar-y + (col.bar-h - self.preferred-height) / 2;
                 width: 100%;
                 text: day.duration-label;
+                color: #11111b;
+                font-size: 15px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            if col.is-in-progress: Text {
+                y: col.bar-y + (col.bar-h - self.preferred-height) / 2;
+                width: 100%;
+                text: day.in-progress-label;
                 color: #11111b;
                 font-size: 15px;
                 font-weight: 700;
@@ -1328,10 +1350,6 @@ export component MainWindow inherits Window {
     in property <string> current-time: "—";
     in property <string> awake-since: "—";
     in property <color> awake-color: #a6e3a1;
-    // 暫定睡眠時間（進行中でまだ閉じていない睡眠セッションがある場合のみ表示）。
-    // 寝ている最中に一瞬起きてタブレットで確認する用途。
-    in property <bool> has-open-sleep: false;
-    in property <string> open-sleep-elapsed: "—";
 
     // 睡眠予測カード用のプロパティ
     in-out property <int> bed-hour: 22;
@@ -1737,30 +1755,6 @@ export component MainWindow inherits Window {
                     optimal-clicked => {
                         root.bedtime-source = "optimal";
                         root.set-bedtime-optimal();
-                    }
-                }
-            }
-
-            if root.has-open-sleep: Rectangle {
-                background: #181825;
-                height: 34px;
-                HorizontalLayout {
-                    padding-left: 20px;
-                    padding-right: 20px;
-                    alignment: start;
-                    spacing: 8px;
-                    Text {
-                        text: "🌙 進行中の睡眠（暫定）";
-                        color: #a6adc8;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.open-sleep-elapsed;
-                        color: #89b4fa;
-                        font-size: 15px;
-                        font-weight: 700;
-                        vertical-alignment: center;
                     }
                 }
             }

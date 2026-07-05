@@ -482,7 +482,7 @@ pub fn run() {
     #[cfg(windows)]
     platform::tray::setup(&window);
 
-    // フォアグラウンド定期同期・起動時DEVICE_ON記録（Androidのみ）
+    // フォアグラウンド定期同期・onResume()経由の同期キック（Androidのみ）
     #[cfg(target_os = "android")]
     platform::android_bg::setup(&window, &state);
 

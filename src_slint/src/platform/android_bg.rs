@@ -1,4 +1,4 @@
-//! android_bg.rs — Androidフォアグラウンド中の定期同期・起動時DEVICE_ON記録
+//! android_bg.rs — Androidフォアグラウンド中の定期同期
 //!
 //! 役割 : Tauri版のvisibilitychange同期・30分ごとの定期同期に相当する処理を、
 //!        プロセス生存中に限り純Rustで実現する。
@@ -9,6 +9,9 @@
 //!        日次ローカル自動バックアップ（events::maybe_auto_backup）も同様に
 //!        フォアグラウンド中のみの判定になる（アプリを開いた時に前回から
 //!        24時間経過していれば取る）。
+//!        起動時のDEVICE_ON記録は廃止した（睡眠判定には使っておらず、夜中に
+//!        何度も確認する使い方だとログが無駄に増えるだけだったため）。
+//!        在宅解除はAPP_USAGE_START（実際にアプリを使った証拠）だけに一本化する。
 //!
 //! 依存 : crate::{events, cloud, home, sync_status}
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`,
@@ -35,8 +38,6 @@ static HANDLE: OnceLock<(slint::Weak<MainWindow>, SharedState)> = OnceLock::new(
 pub fn setup(window: &MainWindow, state: &SharedState) {
     let _ = HANDLE.set((window.as_weak(), state.clone()));
 
-    // 起動時: アプリを開いたことを記録（Tauri版のrecord_device_on相当）
-    events::record_device_on();
     // 起動時: 前回から24時間経っていればローカルバックアップを取る
     events::maybe_auto_backup(&crate::data_dir());
 

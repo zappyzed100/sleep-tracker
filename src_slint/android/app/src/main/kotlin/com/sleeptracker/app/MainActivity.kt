@@ -7,21 +7,17 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
-import androidx.work.Constraints
-import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 
 // android-activity（Slintのbackend-android-activity）はNativeActivityそのままでも動くが、
-// WorkManagerによるDEVICE_ON即時送信（DriveSignalWorker）を登録するためにカスタム
-// サブクラスにしている。
+// nativeOnResume()のJNI呼び出しを行うためカスタムサブクラスにしている。
 //
-// 旧: 15分ごとの定期バックグラウンド送信（PeriodicWorkRequestBuilder）は廃止した。
+// 旧: 15分ごとの定期バックグラウンド送信（PeriodicWorkRequestBuilder）、および
+// アプリを開くたびのDEVICE_ON即時送信（DriveSignalWorker）はどちらも廃止した。
 // 「タブレットの電源が入っているか」しか分からず「実際に使っていたか」の証拠に
 // ならないため、睡眠判定の材料としては信頼できないと判断した
-// （scratchpad/sync_design_testでの検証・議論を参照）。代わりにUsageReporterが
-// UsageStatsManager由来の実際のアプリ利用区間を送信する。
+// （scratchpad/sync_design_testでの検証・議論、および実際にDEVICE_ONが
+// 睡眠セッションを誤って短く打ち切るバグを引き起こした件を参照）。
+// 代わりにUsageReporterがUsageStatsManager由来の実際のアプリ利用区間を送信する。
 class MainActivity : NativeActivity() {
     companion object {
         // NativeActivity自体はandroid.app.lib_name（sleep_tracker）をフレームワーク内部で
@@ -35,10 +31,6 @@ class MainActivity : NativeActivity() {
             System.loadLibrary("sleep_tracker")
         }
     }
-
-    private val networkConstraints = Constraints.Builder()
-        .setRequiredNetworkType(NetworkType.CONNECTED)
-        .build()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,16 +63,6 @@ class MainActivity : NativeActivity() {
     override fun onResume() {
         super.onResume()
         val appCtx = applicationContext
-        Thread {
-            val request = OneTimeWorkRequestBuilder<DriveSignalWorker>()
-                .setConstraints(networkConstraints)
-                .build()
-            WorkManager.getInstance(appCtx).enqueueUniqueWork(
-                "drive_signal_immediate",
-                ExistingWorkPolicy.REPLACE,
-                request
-            )
-        }.start()
 
         // 前回開いてから今回開くまでのタブレット利用区間をUsageStatsManagerから
         // 回収してDriveへ送信する（ネットワークI/Oを含むためバックグラウンドスレッドで）。

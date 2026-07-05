@@ -191,25 +191,28 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     apply_tick(window, state);
 }
 
-// 現在時刻・起きてから経過時間・暫定睡眠時間だけを軽量に更新する（10秒ごと）。
+// 現在時刻・起きてから経過時間だけを軽量に更新する（10秒ごと）。
+// 進行中の睡眠セッションがある間は「起きてから」は意味を持たない（既に
+// 寝ているのに古い起床時刻からの経過時間を表示し続けるとおかしく見える、
+// というフィードバックへの対応）ため、その場合は表示しない。
+// 進行中セッションの経過時間そのものはグラフ側のバーで表示する
+// （update_chartが担当、apply_tickからも再計算のため呼び出す）。
 pub fn apply_tick(window: &MainWindow, state: &SharedState) {
     window.set_current_time(now_hhmm().into());
     let st = state.lock().unwrap();
-    if let Some(b) = st.baseline.as_ref() {
+    let is_sleeping = st.open_sleep_start.is_some();
+    if is_sleeping {
+        window.set_awake_since("—".into());
+        window.set_awake_color(slint::Color::from_rgb_u8(0xa6, 0xad, 0xc8));
+    } else if let Some(b) = st.baseline.as_ref() {
         let elapsed_h = b.computed_at.elapsed().as_secs_f64() / 3600.0;
         let awake = b.awake_hours + elapsed_h;
         window.set_awake_since(utils::format_duration(awake).into());
         window.set_awake_color(awake_color(awake));
     }
+    drop(st);
 
-    if let Some(start) = st.open_sleep_start {
-        use chrono::Local;
-        let elapsed_h = (Local::now().naive_local() - start).num_seconds() as f64 / 3600.0;
-        window.set_has_open_sleep(true);
-        window.set_open_sleep_elapsed(utils::format_duration(elapsed_h.max(0.0)).into());
-    } else {
-        window.set_has_open_sleep(false);
-    }
+    update_chart(window, state);
 }
 
 // ── 睡眠予測カード（PredictionCard.tsx 相当）───────────────────────────────────
@@ -309,13 +312,25 @@ fn build_curve(values: &[Option<f32>]) -> Vec<CurvePointVM> {
 }
 
 pub fn update_chart(window: &MainWindow, state: &SharedState) {
-    let (week_base, selected) = {
+    let (week_base, selected, open_sleep_start) = {
         let s = state.lock().unwrap();
-        (s.week_base, s.selected_date.clone())
+        (s.week_base, s.selected_date.clone(), s.open_sleep_start)
     };
     let sessions = events::get_sessions().unwrap_or_default();
     let days = utils::build_week(&sessions, week_base);
-    let raw_max = days.iter().map(|d| d.total_hours).fold(0.0_f64, f64::max).max(6.0);
+
+    // 進行中（まだIDLE_RESUMEが来ていない）セッションがこの週のどこかにあれば、
+    // その開始日のバーとして扱う（完了済みセッションの日付バケット判定と同じ、
+    // 開始時刻が属する暦日で決める）。
+    let in_progress_hours = open_sleep_start.map(|start| {
+        let elapsed_h = (chrono::Local::now().naive_local() - start).num_seconds() as f64 / 3600.0;
+        (start.date(), elapsed_h.max(0.0))
+    });
+
+    let raw_max = days.iter().map(|d| d.total_hours)
+        .chain(in_progress_hours.map(|(_, h)| h))
+        .fold(0.0_f64, f64::max)
+        .max(6.0);
     let y_max = raw_max.ceil() + 1.0;
 
     let all_y2: Vec<f64> = days.iter().flat_map(|d| [d.bedtime_h, d.waketime_h]).flatten().collect();
@@ -333,6 +348,7 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
     let vm: Vec<DaySummaryVM> = days.iter().enumerate().map(|(i, d)| {
         let date_str = d.date.format("%Y-%m-%d").to_string();
         let is_active = selected.as_deref() == Some(date_str.as_str());
+        let in_progress = in_progress_hours.filter(|(day, _)| *day == d.date).map(|(_, h)| h);
         DaySummaryVM {
             date: date_str.into(),
             day_label: format!("{} {}/{}", DAYS_JA[i], d.date.month(), d.date.day()).into(),
@@ -344,6 +360,9 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
             bedtime_has: d.bedtime_h.is_some(),
             waketime_y: d.waketime_h.map(y_frac).unwrap_or(0.0),
             waketime_has: d.waketime_h.is_some(),
+            in_progress_frac: (in_progress.unwrap_or(0.0) / y_max) as f32,
+            in_progress_has: in_progress.is_some(),
+            in_progress_label: in_progress.map(utils::format_duration).unwrap_or_default().into(),
         }
     }).collect();
     let bedtime_ys: Vec<Option<f32>> = vm.iter().zip(days.iter()).map(|(v, d)| d.bedtime_h.map(|_| v.bedtime_y)).collect();
