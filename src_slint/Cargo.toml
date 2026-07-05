@@ -36,6 +36,10 @@ rfd = "0.15"
 
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.13", features = ["backend-android-activity-06"] }
+# Kotlin側のファイルピッカー(ACTION_OPEN_DOCUMENT)の起動・受け取ったjstringの読み取りに使う。
+# i-slint-backend-android-activityが内部で使っているバージョンに合わせている。
+jni = "0.22"
+ndk-context = "0.1"
 
 [build-dependencies]
 slint-build = "1.13"

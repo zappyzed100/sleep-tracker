@@ -645,8 +645,10 @@ pub fn restore_events(content: String) -> Result<(), String> {
 // ── 日次ローカル自動バックアップ（世代は自動削除しない） ─────────────────────
 //
 // 手動の「バックアップ」ボタン（設定タブ）と同じ内容をファイルダイアログなしで
-// data/backups/ に書き出す。前回バックアップ時刻は data/last_auto_backup.txt に
-// 保持し、アプリ再起動をまたいでも正しく約1日おきになるようにする。
+// crate::backups_base_dir()/backups/ に書き出す（PCはdata/backups/、Androidは
+// ファイルマネージャーから参照できる外部ストレージ領域のbackups/）。
+// 前回バックアップ時刻は data/last_auto_backup.txt に保持し、アプリ再起動を
+// またいでも正しく約1日おきになるようにする。
 // 1件あたり数KB程度なので自動削除はせず、貯まった分は「バックアップを削除」
 // ボタン（clear_backups）で手動削除する。
 // Google Driveへの自動バックアップ（cloud::auto_backup_after_event）とは独立した、
@@ -674,7 +676,7 @@ pub fn maybe_auto_backup(data_dir: &std::path::Path) {
         return;
     }
 
-    let backups_dir = data_dir.join("backups");
+    let backups_dir = crate::backups_base_dir().join("backups");
     if std::fs::create_dir_all(&backups_dir).is_err() {
         eprintln!("{} auto_backup: ERROR backups/ ディレクトリを作成できません", TAG);
         return;
@@ -700,10 +702,10 @@ pub fn maybe_auto_backup(data_dir: &std::path::Path) {
     }
 }
 
-// data/backups/ 以下を全削除する（手動バックアップ・自動バックアップとも対象）。
+// crate::backups_base_dir()/backups/ 以下を全削除する（手動バックアップ・自動バックアップとも対象）。
 // 現在のsleep_events.txt/sleep_manual.txt自体には触れない。
-pub fn clear_backups(data_dir: &std::path::Path) -> Result<(), String> {
-    let backups_dir = data_dir.join("backups");
+pub fn clear_backups(backups_base: &std::path::Path) -> Result<(), String> {
+    let backups_dir = backups_base.join("backups");
     if !backups_dir.exists() {
         return Ok(());
     }

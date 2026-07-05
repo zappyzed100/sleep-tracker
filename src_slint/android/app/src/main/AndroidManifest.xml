@@ -17,6 +17,7 @@
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"
+            android:screenOrientation="landscape"
             android:exported="true">
             <meta-data android:name="android.app.lib_name" android:value="sleep_tracker" />
             <intent-filter>

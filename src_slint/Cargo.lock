@@ -5293,7 +5293,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "image",
+ "jni 0.22.4",
  "mslnk",
+ "ndk-context",
  "raw-window-handle",
  "reqwest",
  "rfd",

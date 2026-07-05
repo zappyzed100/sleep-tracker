@@ -167,7 +167,24 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     } else {
         None
     };
-    let last = sessions.last().map(|s| s.duration_hours);
+    // 「最後の睡眠」は最後のセッション1件の duration_hours ではなく、そのセッションが
+    // 属する「睡眠日」に計上される全セッションを合算した値にする。ある1回の連続した
+    // 睡眠が（短い中断などで）複数セッションに分かれて記録されていた場合でも、
+    // 体感通りの合計時間（例: 16h）を表示するため。
+    let last = sessions.last().and_then(|last_s| {
+        let last_start = chrono::NaiveDateTime::parse_from_str(last_s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+        let day = utils::sleep_day(last_start);
+        let intervals: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> = sessions.iter()
+            .filter_map(|s| {
+                let st = chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+                if utils::sleep_day(st) != day { return None; }
+                let en = chrono::NaiveDateTime::parse_from_str(s.end.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+                Some((st, en))
+            })
+            .collect();
+        let merged = utils::merge_intervals(intervals);
+        Some(merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum::<f64>())
+    });
     // "YYYY-MM-DD HH:MM:SS" の HH:MM 部分だけを取り出す。
     let wake_time = sessions.last().and_then(|s| s.end.get(11..16));
 

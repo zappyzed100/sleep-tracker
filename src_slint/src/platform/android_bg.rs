@@ -13,17 +13,30 @@
 //!        何度も確認する使い方だとログが無駄に増えるだけだったため）。
 //!        在宅解除はAPP_USAGE_START（実際にアプリを使った証拠）だけに一本化する。
 //!
-//! 依存 : crate::{events, cloud, home, sync_status}
+//! 依存 : crate::{events, cloud, home, sync_status}, jni
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`,
-//!        `Java_com_sleeptracker_app_MainActivity_nativeOnResume`（KotlinのActivity#onResume()から呼ばれるJNIエントリポイント）
+//!        `Java_com_sleeptracker_app_MainActivity_nativeOnResume`（KotlinのActivity#onResume()から呼ばれるJNIエントリポイント）,
+//!        `activity()`（android_restore.rsがMainActivityインスタンスへのJNI参照を得るために使う）
 
 use crate::ui::home::{self, SharedState};
 use crate::ui::sync_status;
 use crate::core::{cloud, events};
 use crate::MainWindow;
+use jni::objects::{Global, JObject};
 use slint::ComponentHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+
+// MainActivityインスタンスへのグローバル参照。nativeOnResume()が最初に呼ばれた時
+// （コールドスタート直後のonResume）に一度だけ取得する。ndk_context::android_context()の
+// contextはApplicationインスタンスを指しており（android-activityクレートの実装）、
+// MainActivity固有のメソッド（launchRestorePicker等）を呼べないため、こちらを使う。
+static ACTIVITY: OnceLock<Global<JObject<'static>>> = OnceLock::new();
+
+// Kotlin側のMainActivityインスタンスメソッドをJNIで呼び出す際に使う（android_restore.rs）。
+pub fn activity() -> Option<&'static Global<JObject<'static>>> {
+    ACTIVITY.get()
+}
 
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
@@ -62,12 +75,24 @@ pub fn setup(window: &MainWindow, state: &SharedState) {
 // 権限設定画面からの帰還など、「人間がアプリの操作を再開した」あらゆる経路で
 // Androidは必ずActivity#onResume()を呼ぶため、ここ一箇所に同期をフックすれば
 // 全経路をカバーできる（詳細はplatform/README.md参照）。
-// JNIEnv/jclassは使わないため生ポインタで受け、jni crateへの依存を避けている。
+// インスタンスメソッド呼び出しのため第2引数にMainActivity自身(this)が渡ってくる。
+// 初回呼び出し時にこれをグローバル参照として保持し、android_restore.rsから
+// launchRestorePicker()等のインスタンスメソッドを呼べるようにする。
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume(
-    _env: *mut std::ffi::c_void,
-    _class: *mut std::ffi::c_void,
+pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume<'caller>(
+    mut unowned_env: jni::EnvUnowned<'caller>,
+    this: JObject<'caller>,
 ) {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<()> {
+            if ACTIVITY.get().is_none() {
+                let global = env.new_global_ref(&this)?;
+                let _ = ACTIVITY.set(global);
+            }
+            Ok(())
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>();
+
     if let Some((weak, state)) = HANDLE.get() {
         run_sync(weak.clone(), state.clone());
     }

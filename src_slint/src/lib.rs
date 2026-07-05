@@ -103,6 +103,21 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
+// 自動バックアップ・手動バックアップ削除の書き込み先ベースディレクトリ。
+// PCはdata_dirと同じ場所でよいが、Androidのdata_dir()はアプリ内部保存領域
+// （スコープドストレージの外からは一切アクセスできない）なので、CSVエクスポート・
+// 手動バックアップと同じ「ファイルマネージャーから参照できる外部ストレージ領域」
+// （android_external_dir）に書き出す。
+#[cfg(not(target_os = "android"))]
+pub fn backups_base_dir() -> PathBuf {
+    data_dir()
+}
+
+#[cfg(target_os = "android")]
+pub fn backups_base_dir() -> PathBuf {
+    android_external_dir().unwrap_or_else(data_dir)
+}
+
 pub fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
     if HTTP_CLIENT.get().is_none() {
         let client = reqwest::blocking::Client::builder()

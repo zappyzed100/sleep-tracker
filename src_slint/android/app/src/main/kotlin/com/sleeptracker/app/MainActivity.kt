@@ -1,12 +1,15 @@
 package com.sleeptracker.app
 
+import android.app.Activity
 import android.app.NativeActivity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
+import java.io.File
 
 // android-activity（Slintのbackend-android-activity）はNativeActivityそのままでも動くが、
 // nativeOnResume()のJNI呼び出しを行うためカスタムサブクラスにしている。
@@ -30,6 +33,8 @@ class MainActivity : NativeActivity() {
         init {
             System.loadLibrary("sleep_tracker")
         }
+
+        private const val REQUEST_RESTORE_FILE = 1001
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,4 +83,50 @@ class MainActivity : NativeActivity() {
     }
 
     private external fun nativeOnResume()
+
+    // Rust側（platform/android_restore.rs）からJNI経由で呼ばれる。「復元」ボタンの
+    // 2回目クリックでシステムのファイルピッカー(ACTION_OPEN_DOCUMENT)を起動する。
+    // rfd（Windowsのみ対応）の代わりにこちらを使う。
+    fun launchRestorePicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            // ベストエフォート: 自動/手動バックアップの保存先（このアプリ専用の外部ストレージ
+            // 領域のbackups/）を初期表示フォルダにしようとする。Android 11以降はSAFの
+            // ファイルピッカーがAndroid/data配下へのナビゲーションをOS側で制限しているため、
+            // 端末・ファイルマネージャー実装によっては効かないことがある（その場合は
+            // ピッカーの既定の場所が開くだけで、ユーザーが手動で選び直せる）。
+            val backupsDir = File(getExternalFilesDir(null), "backups")
+            if (backupsDir.exists()) {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.fromFile(backupsDir))
+            }
+        }
+        try {
+            startActivityForResult(intent, REQUEST_RESTORE_FILE)
+        } catch (e: Exception) {
+            Log.w("SleepTracker", "[app] launchRestorePicker: ERROR ${e.message}")
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_RESTORE_FILE) return
+
+        val uri = data?.data
+        if (resultCode != Activity.RESULT_OK || uri == null) {
+            nativeRestorePicked(null)
+            return
+        }
+        try {
+            val content = contentResolver.openInputStream(uri)?.use { input ->
+                input.readBytes().toString(Charsets.UTF_8)
+            }
+            nativeRestorePicked(content)
+        } catch (e: Exception) {
+            Log.w("SleepTracker", "[app] restore file read: ERROR ${e.message}")
+            nativeRestorePicked(null)
+        }
+    }
+
+    private external fun nativeRestorePicked(content: String?)
 }

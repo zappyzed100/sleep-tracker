@@ -311,7 +311,12 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
     RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
 
     std::thread::spawn(move || {
-        let path = rfd::FileDialog::new().add_filter("テキスト", &["txt"]).pick_file();
+        // 自動/手動バックアップの保存先フォルダをデフォルトで開く。最新のバックアップを
+        // 探し回らずに選べるようにするため（Explorer自体の並び順はOS側の設定に依存する）。
+        let path = rfd::FileDialog::new()
+            .set_directory(crate::backups_base_dir().join("backups"))
+            .add_filter("テキスト", &["txt"])
+            .pick_file();
         let result = path.map(|path| {
             std::fs::read_to_string(&path)
                 .map_err(|e| format!("読み込み失敗: {}", e))
@@ -340,49 +345,21 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
     });
 }
 
-// ファイルピッカーが使えないため、固定ファイル名（restore.txt）を外部ストレージ領域に
-// ファイルマネージャーで置いてもらう方式。誤操作防止のため2回クリックで実行。
+// Kotlin側のACTION_OPEN_DOCUMENTシステムファイルピッカーを起動する
+// （platform::android_restore::launch_picker）。誤操作防止のため2回クリックで実行。
+// 完了・キャンセル・失敗の反映はJNIコールバック(nativeRestorePicked)側で行われる。
 #[cfg(target_os = "android")]
 pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
-    let Some(dir) = crate::android_external_dir() else {
-        window.set_restore_message("外部ストレージが利用できません".into());
-        window.set_restore_kind(KIND_ERROR.into());
-        window.set_restore_in_progress(false);
-        return;
-    };
-    let path = dir.join("restore.txt");
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_restore_message(
-            "Android/data/com.sleeptracker.app/files/restore.txt にバックアップファイルを配置してから、もう一度クリックしてください".into()
-        );
+        window.set_restore_message("もう一度クリックするとファイルを選択してバックアップから復元します（現在のデータは上書きされます）".into());
         window.set_restore_kind(KIND_WARN.into());
         window.set_restore_in_progress(false);
         return;
     }
     RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
 
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            window.set_restore_message(format!("restore.txt の読み込み失敗: {} ({})", e, now_hms()).into());
-            window.set_restore_kind(KIND_ERROR.into());
-            window.set_restore_in_progress(false);
-            return;
-        }
-    };
-    match events::restore_events(content) {
-        Ok(()) => {
-            window.set_restore_message(format!("✓ バックアップから復元しました ({})", now_hms()).into());
-            window.set_restore_kind(KIND_SUCCESS.into());
-            crate::ui::home::refresh_all(&window, &state);
-        }
-        Err(e) => {
-            window.set_restore_message(format!("復元失敗: {} ({})", e, now_hms()).into());
-            window.set_restore_kind(KIND_ERROR.into());
-        }
-    }
-    window.set_restore_in_progress(false);
+    crate::platform::android_restore::launch_picker(weak, state);
 }
 
 // ローカルの sleep_events.txt / sleep_manual.txt だけを削除する（クラウドは残る）。
@@ -522,7 +499,7 @@ pub fn clear_backups(weak: slint::Weak<MainWindow>) {
     CLEAR_BACKUPS_CONFIRM_PENDING.store(false, Ordering::SeqCst);
 
     std::thread::spawn(move || {
-        let result = events::clear_backups(&crate::data_dir());
+        let result = events::clear_backups(&crate::backups_base_dir());
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match result {
