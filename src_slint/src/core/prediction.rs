@@ -34,15 +34,15 @@ fn wake_hour(ts: &str) -> f64 {
     h + m / 60.0
 }
 
+// core/utils.rsのSLEEP_DAY_BOUNDARY_HOURと同じ考え方: 深夜0時ではなく午前4時を
+// 1日の区切りとみなす「行動上の曜日」。1:33の睡眠開始は暦日では日曜だが、
+// 体感的には土曜の夜更かしの延長なので、曜日特徴量もこの境界でシフトさせて揃える。
+const SLEEP_DAY_BOUNDARY_HOUR: i64 = 4;
+
 fn weekday_idx(ts: &str) -> usize {
-    let y: i64 = ts.get(0..4).unwrap_or("2000").parse().unwrap_or(2000);
-    let m: i64 = ts.get(5..7).unwrap_or("1").parse().unwrap_or(1);
-    let d: i64 = ts.get(8..10).unwrap_or("1").parse().unwrap_or(1);
-    let (y, m) = if m <= 2 { (y - 1, m + 12) } else { (y, m) };
-    let k = y % 100;
-    let j = y / 100;
-    let h = (d + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j).rem_euclid(7) as usize;
-    (h + 5) % 7
+    let shifted_days = (rough_epoch(ts) - SLEEP_DAY_BOUNDARY_HOUR * 3600).div_euclid(86400);
+    // rough_epochの基準日(2000-01-01, shifted_days=0)は土曜日 → Mon=0基準では5。
+    ((shifted_days + 5).rem_euclid(7)) as usize
 }
 
 fn rough_epoch(ts: &str) -> i64 {
@@ -295,5 +295,30 @@ pub fn predict(sessions: &[Session], now: &str) -> PredictionResult {
             let (dur, method) = heuristic(sessions, bh);
             PredictionResult { duration_hours: dur.clamp(1.0, 18.0), method, awake_hours: awake_h }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 2024-01-07は日曜日。1:33開始の睡眠は、境界(4時)より前なので
+    // 「行動上の曜日」としては土曜(index 5)として扱われるべき
+    // （core/utils.rsのsleep_dayと同じ境界・同じ考え方）。
+    #[test]
+    fn weekday_idx_before_boundary_counts_as_previous_day() {
+        assert_eq!(weekday_idx("2024-01-07 01:33:00"), 5); // 土曜
+        assert_eq!(weekday_idx("2024-01-07 15:46:00"), 6); // 日曜（境界後はそのまま）
+    }
+
+    #[test]
+    fn weekday_idx_boundary_is_inclusive_at_exactly_4am() {
+        assert_eq!(weekday_idx("2024-01-07 04:00:00"), 6); // 日曜のまま
+        assert_eq!(weekday_idx("2024-01-07 03:59:59"), 5); // 土曜に繰り下げ
+    }
+
+    #[test]
+    fn weekday_idx_evening_hour_is_unaffected_by_boundary() {
+        assert_eq!(weekday_idx("2024-01-06 23:50:00"), 5); // 土曜
     }
 }

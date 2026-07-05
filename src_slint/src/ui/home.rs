@@ -144,17 +144,18 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // 薄まって過小評価されてしまうため、日ごとに睡眠時間を合算してから平均する。
     // PC/Android両方から記録された重複区間は merge_intervals で1本にまとめてから
     // 合算する（重なった分の二重計上を防ぐ）。
-    let mut per_day_intervals: std::collections::HashMap<&str, Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>> = std::collections::HashMap::new();
+    // 日ごとの集計キーは暦日ではなく「睡眠日」（開始時刻から導出、境界は午前4時）を使う。
+    // 深夜1:33開始の睡眠が体感通り前日側に計上されるようにするため。
+    let mut per_day_intervals: std::collections::HashMap<NaiveDate, Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>> = std::collections::HashMap::new();
     for s in recent.iter().filter(|s| !s.excluded) {
-        let day_key = &s.start[..10.min(s.start.len())];
         if let (Ok(st), Ok(en)) = (
             chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S"),
             chrono::NaiveDateTime::parse_from_str(s.end.trim(), "%Y-%m-%d %H:%M:%S"),
         ) {
-            per_day_intervals.entry(day_key).or_default().push((st, en));
+            per_day_intervals.entry(utils::sleep_day(st)).or_default().push((st, en));
         }
     }
-    let per_day: std::collections::HashMap<&str, f64> = per_day_intervals.into_iter()
+    let per_day: std::collections::HashMap<NaiveDate, f64> = per_day_intervals.into_iter()
         .map(|(day, intervals)| {
             let merged = utils::merge_intervals(intervals);
             let hours: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
@@ -325,10 +326,10 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
 
     // 進行中（まだIDLE_RESUMEが来ていない）セッションがこの週のどこかにあれば、
     // その開始日のバーとして扱う（完了済みセッションの日付バケット判定と同じ、
-    // 開始時刻が属する暦日で決める）。
+    // 開始時刻から導出した「睡眠日」で決める。build_weekと同じ基準）。
     let in_progress_hours = open_sleep_start.map(|start| {
         let elapsed_h = (chrono::Local::now().naive_local() - start).num_seconds() as f64 / 3600.0;
-        (start.date(), elapsed_h.max(0.0))
+        (utils::sleep_day(start), elapsed_h.max(0.0))
     });
 
     let raw_max = days.iter().map(|d| d.total_hours)
@@ -496,8 +497,16 @@ pub fn open_day_detail(window: &MainWindow, state: &SharedState, date: &str) {
     state.lock().unwrap().selected_date = Some(date.to_string());
     window.set_detail_excluded_message("".into());
 
+    let target_date = NaiveDate::parse_from_str(date, "%Y-%m-%d").ok();
     let sessions = events::get_sessions().unwrap_or_default();
-    let day_sessions: Vec<&Session> = sessions.iter().filter(|s| s.start.starts_with(date)).collect();
+    // チャート側(build_week)と同じ「睡眠日」基準で絞り込む。暦日の前方一致だと、
+    // 深夜1:33開始の睡眠が前日バーに計上されているのにクリックしても出てこない、
+    // というズレが起きるため。
+    let day_sessions: Vec<&Session> = sessions.iter().filter(|s| {
+        chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(utils::sleep_day) == target_date
+    }).collect();
     // セッションが1件も無い日（記録0h）でもボタンの状態が正しく反映されるよう、
     // セッション側のフラグだけでなくファイルの除外マーカーも直接見る
     // （そうしないと0hの日では「対象外にする」を押しても何も反応しないように見えるバグになる）。
@@ -531,7 +540,7 @@ pub fn open_day_detail(window: &MainWindow, state: &SharedState, date: &str) {
         }
     }).collect();
 
-    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap_or_else(|_| chrono::Local::now().date_naive());
+    let d = target_date.unwrap_or_else(|| chrono::Local::now().date_naive());
     let next = d + chrono::Duration::days(1);
     window.set_detail_date_label(date_label_ja(d).into());
     window.set_detail_total_label(utils::format_duration(total).into());
