@@ -12,7 +12,8 @@
 //!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust
 //! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`,
 //!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`,
-//!        `clear_cloud_data`, `push_compacted_to_drive`
+//!        `clear_cloud_data`, `push_compacted_to_drive`,
+//!        `is_sync_paused`, `set_sync_paused`
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -28,6 +29,31 @@ const TAG: &str = "[cloud]";
 static CONSECUTIVE_ERRORS: AtomicU64 = AtomicU64::new(0);
 // Prevents concurrent sync_mobile_inner calls (startup vs manual button press).
 static SYNC_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+// 自動同期の一時停止フラグ（data_dir/sync_paused ファイルの有無で永続化する）。
+// 「同期を停止するボタン」用。手動の「今すぐ同期」ボタン・接続テスト・
+// クラウド全削除などの明示的な操作は、このフラグの影響を受けない
+// （ユーザーが明示的に押した操作は常に実行されるべきため）。
+// 起動時の同期・定期同期・PC側のIDLE_START/RESUMEイベントpushのような
+// 「自動で走る」経路だけがこのフラグを見る。
+fn sync_paused_flag_path() -> std::path::PathBuf {
+    crate::data_dir().join("sync_paused")
+}
+
+pub fn is_sync_paused() -> bool {
+    sync_paused_flag_path().exists()
+}
+
+pub fn set_sync_paused(paused: bool) -> Result<(), String> {
+    let path = sync_paused_flag_path();
+    if paused {
+        std::fs::write(&path, "").map_err(|e| e.to_string())?;
+    } else if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    eprintln!("{} set_sync_paused: {}", TAG, paused);
+    Ok(())
+}
 
 pub fn pull_mobile_events_inner() -> String {
     static N: AtomicU64 = AtomicU64::new(0);

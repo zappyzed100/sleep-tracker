@@ -75,7 +75,10 @@ pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume(
 
 // バックグラウンド同期を1回実行する。同期中は同期アイコン(sync-in-progress)を
 // 手動同期ボタンと同じ見た目で回転させ、完了後は設定タブの同期メッセージも更新する。
+// 「同期を停止」中はこの自動経路をスキップする（手動の「今すぐ同期」ボタンは
+// sync_gist()経由の別経路なので、停止中でも明示的に押せば同期できる）。
 fn run_sync(weak: slint::Weak<MainWindow>, state: SharedState) {
+    if cloud::is_sync_paused() { return; }
     if RUNNING.swap(true, Ordering::SeqCst) { return; }
     sync_status::begin(&weak);
     std::thread::spawn(move || {

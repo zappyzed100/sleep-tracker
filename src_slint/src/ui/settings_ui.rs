@@ -52,6 +52,7 @@ pub fn load_into_window(window: &MainWindow) {
     }
     window.set_mobile_url(cfg.mobile_url.unwrap_or_default().into());
     window.set_mobile_secret(cfg.mobile_secret.unwrap_or_default().into());
+    window.set_sync_paused(cloud::is_sync_paused());
 }
 
 fn current_target_wake(window: &MainWindow) -> Option<String> {

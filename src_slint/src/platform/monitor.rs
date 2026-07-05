@@ -309,23 +309,27 @@ fn run(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: im
         // 何らかの理由（ネットワーク瞬断等）で失敗した場合にリトライされず、
         // タブレット側が進行中セッションを見られないままになる。そのため周期処理でも
         // 毎回ローカルの内容をDriveへpushし直し、初回push失敗からの自動復旧を保証する。
+        // 「同期を停止」中はこの自動pull/pushだけをスキップする（睡眠検知そのものは
+        // ローカルのファイル書き込みだけなので止めない）。
         if last_pull.elapsed() >= PULL_INTERVAL {
             last_pull = Instant::now();
-            let ep = events_path.clone();
-            let w = weak.clone();
-            sync_status::begin(&w);
-            thread::spawn(move || {
-                let msg = crate::core::cloud::pull_mobile_events_inner();
-                eprintln!("{} periodic pull: {}", TAG, msg);
-                if msg.starts_with("追加") || msg.contains("件処理") {
-                    *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
-                }
-                if let Ok(content) = fs::read_to_string(&ep) {
-                    let push_msg = crate::core::cloud::backup_to_drive(&content);
-                    eprintln!("{} periodic push: {}", TAG, push_msg);
-                }
-                sync_status::end(&w, None);
-            });
+            if !crate::core::cloud::is_sync_paused() {
+                let ep = events_path.clone();
+                let w = weak.clone();
+                sync_status::begin(&w);
+                thread::spawn(move || {
+                    let msg = crate::core::cloud::pull_mobile_events_inner();
+                    eprintln!("{} periodic pull: {}", TAG, msg);
+                    if msg.starts_with("追加") || msg.contains("件処理") {
+                        *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
+                    }
+                    if let Ok(content) = fs::read_to_string(&ep) {
+                        let push_msg = crate::core::cloud::backup_to_drive(&content);
+                        eprintln!("{} periodic push: {}", TAG, push_msg);
+                    }
+                    sync_status::end(&w, None);
+                });
+            }
         }
 
         // ── State machine ─────────────────────────────────────────────────────
@@ -337,29 +341,35 @@ fn run(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: im
             eprintln!("{} IDLE_START: idle={}s", TAG, idle);
             sleeping = true;
             // Back up to Drive so Android can see the new session immediately
-            let ep = events_path.clone();
-            let w = weak.clone();
-            sync_status::begin(&w);
-            thread::spawn(move || {
-                crate::core::cloud::auto_backup_after_event(&ep);
-                sync_status::end(&w, None);
-            });
+            // （「同期を停止」中はこのpushだけスキップする）
+            if !crate::core::cloud::is_sync_paused() {
+                let ep = events_path.clone();
+                let w = weak.clone();
+                sync_status::begin(&w);
+                thread::spawn(move || {
+                    crate::core::cloud::auto_backup_after_event(&ep);
+                    sync_status::end(&w, None);
+                });
+            }
         } else if sleeping && idle < WAKE_SECS {
             maybe_in_house(&events_path, &now_str());
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             eprintln!("{} IDLE_RESUME: was sleeping {}s", TAG, idle);
             sleeping = false;
             // Driveからモバイルイベント(APP_USAGE等)を即座にpull → キャッシュ無効化 → push
-            let ep = events_path.clone();
-            let w = weak.clone();
-            sync_status::begin(&w);
-            thread::spawn(move || {
-                let msg = crate::core::cloud::pull_mobile_events_inner();
-                eprintln!("{} IDLE_RESUME pull: {}", TAG, msg);
-                *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
-                crate::core::cloud::auto_backup_after_event(&ep);
-                sync_status::end(&w, None);
-            });
+            // （「同期を停止」中はこのpull/pushだけスキップする）
+            if !crate::core::cloud::is_sync_paused() {
+                let ep = events_path.clone();
+                let w = weak.clone();
+                sync_status::begin(&w);
+                thread::spawn(move || {
+                    let msg = crate::core::cloud::pull_mobile_events_inner();
+                    eprintln!("{} IDLE_RESUME pull: {}", TAG, msg);
+                    *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
+                    crate::core::cloud::auto_backup_after_event(&ep);
+                    sync_status::end(&w, None);
+                });
+            }
             // Notify UI immediately so sessions panel refreshes without polling delay.
             on_session_recorded();
         }

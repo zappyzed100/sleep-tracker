@@ -118,7 +118,10 @@ pub fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
 
 // Drive → ローカルへの同期を1回実行する（別スレッド、完了後にUI再読み込み）。
 // 起動時と、PCがフォアグラウンドに戻った時の両方から呼ばれる共通処理。
+// 「同期を停止」中は自動同期のこの経路をスキップする（手動の「今すぐ同期」
+// ボタンはこのフラグを見ないので、停止中でも明示的に押せば同期できる）。
 fn drive_sync(weak: slint::Weak<MainWindow>, state: home::SharedState) {
+    if cloud::is_sync_paused() { return; }
     ui::sync_status::begin(&weak);
     std::thread::spawn(move || {
         cloud::ensure_events_from_drive();
@@ -193,7 +196,8 @@ pub fn run() {
         let weak = window.as_weak();
         window.on_set_bedtime_optimal(move || {
             if let Some(w) = weak.upgrade() {
-                let sessions = events::get_sessions().unwrap_or_default();
+                let sessions: Vec<Session> = events::get_sessions().unwrap_or_default()
+                    .into_iter().filter(|s| !s.excluded).collect();
                 if sessions.is_empty() { return; }
                 let cfg = config::load_config_inner();
                 let target = cfg.target_wake_time;
@@ -290,6 +294,13 @@ pub fn run() {
         let s = state.clone();
         window.on_close_detail(move || {
             if let Some(w) = weak.upgrade() { home::close_day_detail(&w, &s); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_toggle_day_excluded(move || {
+            if let Some(w) = weak.upgrade() { home::toggle_day_excluded(&w, &s); }
         });
     }
     {
@@ -422,6 +433,19 @@ pub fn run() {
         let weak = window.as_weak();
         window.on_clear_backups(move || {
             settings_ui::clear_backups(weak.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_toggle_sync_paused(move || {
+            if let Some(w) = weak.upgrade() {
+                let new_state = !cloud::is_sync_paused();
+                if let Err(e) = cloud::set_sync_paused(new_state) {
+                    eprintln!("[app] toggle_sync_paused: ERROR {}", e);
+                    return;
+                }
+                w.set_sync_paused(new_state);
+            }
         });
     }
 

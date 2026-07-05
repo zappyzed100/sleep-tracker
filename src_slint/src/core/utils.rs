@@ -26,6 +26,7 @@ pub struct DaySummary {
     pub total_hours: f64,
     pub bedtime_h: Option<f64>,
     pub waketime_h: Option<f64>,
+    pub excluded: bool,
 }
 
 fn parse_local(s: &str) -> Option<NaiveDateTime> {
@@ -61,7 +62,11 @@ pub fn merge_intervals(mut intervals: Vec<(NaiveDateTime, NaiveDateTime)>) -> Ve
     merged
 }
 
-pub fn build_week(sessions: &[Session], week_base: NaiveDate) -> Vec<DaySummary> {
+pub fn build_week(
+    sessions: &[Session],
+    week_base: NaiveDate,
+    excluded_dates: &std::collections::HashSet<String>,
+) -> Vec<DaySummary> {
     let start = week_start(week_base);
     (0..7).map(|i| {
         let day = start + Duration::days(i);
@@ -69,16 +74,20 @@ pub fn build_week(sessions: &[Session], week_base: NaiveDate) -> Vec<DaySummary>
         let day_start = day.and_hms_opt(0, 0, 0).unwrap();
         let day_end = next.and_hms_opt(0, 0, 0).unwrap();
 
-        let day_intervals: Vec<(NaiveDateTime, NaiveDateTime)> = sessions.iter()
-            .filter_map(|s| {
-                let st = parse_local(&s.start)?;
-                let en = parse_local(&s.end)?;
-                if st >= day_start && st < day_end { Some((st, en)) } else { None }
-            })
+        let day_sessions: Vec<&Session> = sessions.iter()
+            .filter(|s| parse_local(&s.start).is_some_and(|st| st >= day_start && st < day_end))
+            .collect();
+        // セッションが1件も無い日（記録0h）でも計測対象外表示ができるよう、
+        // セッション側のexcludedフラグだけでなく、ファイルの除外マーカーも直接見る。
+        let excluded = day_sessions.iter().any(|s| s.excluded)
+            || excluded_dates.contains(&day.format("%Y-%m-%d").to_string());
+
+        let day_intervals: Vec<(NaiveDateTime, NaiveDateTime)> = day_sessions.iter()
+            .filter_map(|s| Some((parse_local(&s.start)?, parse_local(&s.end)?)))
             .collect();
 
         if day_intervals.is_empty() {
-            return DaySummary { date: day, total_hours: 0.0, bedtime_h: None, waketime_h: None };
+            return DaySummary { date: day, total_hours: 0.0, bedtime_h: None, waketime_h: None, excluded };
         }
 
         let merged = merge_intervals(day_intervals);
@@ -92,6 +101,54 @@ pub fn build_week(sessions: &[Session], week_base: NaiveDate) -> Vec<DaySummary>
             total_hours: total,
             bedtime_h: Some(to_night_hour(bedtime)),
             waketime_h: Some(to_night_hour(waketime)),
+            excluded,
         }
     }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(start: &str, end: &str, excluded: bool) -> Session {
+        Session {
+            start: start.to_string(),
+            end: end.to_string(),
+            duration_hours: 0.0,
+            session_type: "IDLE".to_string(),
+            excluded,
+        }
+    }
+
+    #[test]
+    fn day_with_session_flagged_excluded_is_marked_excluded_in_summary() {
+        let sessions = vec![session("2024-01-01 00:00:00", "2024-01-01 08:00:00", true)];
+        let empty = std::collections::HashSet::new();
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let day1 = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()).unwrap();
+        assert!(day1.excluded);
+    }
+
+    #[test]
+    fn day_with_no_sessions_but_excluded_marker_is_still_marked_excluded() {
+        // 回帰テスト：セッションが1件も無い日（記録0h）でも、除外マーカーが
+        // あればグラフ側で対象外だと分かるようにする（以前はセッション経由でしか
+        // 判定していなかったため、0hの日は対象外にしても何も表示されなかった）。
+        let sessions: Vec<Session> = vec![];
+        let mut excluded_dates = std::collections::HashSet::new();
+        excluded_dates.insert("2024-01-03".to_string());
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &excluded_dates);
+        let day3 = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 3).unwrap()).unwrap();
+        assert!(day3.excluded);
+        assert_eq!(day3.total_hours, 0.0);
+    }
+
+    #[test]
+    fn day_without_marker_or_excluded_session_is_not_excluded() {
+        let sessions = vec![session("2024-01-01 00:00:00", "2024-01-01 08:00:00", false)];
+        let empty = std::collections::HashSet::new();
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let day1 = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()).unwrap();
+        assert!(!day1.excluded);
+    }
 }

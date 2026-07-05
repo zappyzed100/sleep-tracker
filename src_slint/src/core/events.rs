@@ -11,7 +11,8 @@
 //!        `get_events_content`, `restore_events`, `clear_all_data`, `compact_data`,
 //!        `current_sleep_start`, `maybe_auto_backup`, `clear_backups`,
 //!        `export_csv`, `write_csv_file`, `import_csv`,
-//!        `is_out_from_content`, `apply_mobile_event_line`
+//!        `is_out_from_content`, `apply_mobile_event_line`,
+//!        `excluded_dates_from_content`, `get_excluded_dates`, `set_day_excluded`
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -27,6 +28,11 @@ pub struct Session {
     pub duration_hours: f64,
     #[serde(rename = "type")]
     pub session_type: String,
+    // その日が計測対象外（平均睡眠・予測計算から除外）としてマークされているか。
+    // 睡眠時間そのものは記録として残す（グラフのバーは表示する）が、
+    // 統計計算だけから除外する。#[serde(default)]で既存データとの互換性を保つ。
+    #[serde(default)]
+    pub excluded: bool,
 }
 
 pub struct SessionCache {
@@ -54,6 +60,54 @@ pub fn is_out_from_content(content: &str) -> bool {
         }
     }
     out
+}
+
+// 「YYYY-MM-DD」を計測対象外（平均睡眠・予測計算から除外）としてマークされている
+// 日付の集合として返す。マーカーは通常のイベント行と同じ書式
+// "タイムスタンプ,DAY_EXCLUDED:YYYY-MM-DD" / "...,DAY_INCLUDED:YYYY-MM-DD" で
+// ファイルに追記され、同じ日付に対する最後のマーカーが有効になる
+// （タイムスタンプは実際に操作した時刻を使うため、ファイルソート後も
+// 時系列どおりの「最後の操作が勝つ」が保たれる）。
+pub fn excluded_dates_from_content(content: &str) -> std::collections::HashSet<String> {
+    let mut state: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for line in content.lines() {
+        let line = line.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}');
+        let Some(c) = line.find(',') else { continue };
+        let rest = &line[c + 1..];
+        if let Some(date) = rest.strip_prefix("DAY_EXCLUDED:") {
+            state.insert(date.to_string(), true);
+        } else if let Some(date) = rest.strip_prefix("DAY_INCLUDED:") {
+            state.insert(date.to_string(), false);
+        }
+    }
+    state.into_iter().filter(|(_, excluded)| *excluded).map(|(d, _)| d).collect()
+}
+
+// sleep_events.txtを直接読んで計測対象外の日付集合を返す。セッションが1件も
+// 無い日（記録0h）でもチャート側で対象外表示ができるよう、Session一覧経由
+// ではなくファイルから直接判定する（Session.excludedはセッションが存在する
+// 日にしか付与されないため、0h の日はこちらでしか拾えない）。
+pub fn get_excluded_dates() -> std::collections::HashSet<String> {
+    let path = crate::data_dir().join("sleep_events.txt");
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    excluded_dates_from_content(&raw)
+}
+
+// 指定した日付(YYYY-MM-DD)を計測対象外/対象に切り替える。
+pub fn set_day_excluded(date: &str, excluded: bool) -> Result<(), String> {
+    let events_path = crate::data_dir().join("sleep_events.txt");
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let marker = if excluded { "DAY_EXCLUDED" } else { "DAY_INCLUDED" };
+    let line = format!("{},{}:{}\n", now, marker, date);
+    let mut f = OpenOptions::new().create(true).append(true).open(&events_path)
+        .map_err(|e| e.to_string())?;
+    f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    drop(f);
+    sort_events_file(&events_path)?;
+    *SESSION_CACHE.lock().unwrap() = None;
+    let ep = events_path.clone();
+    std::thread::spawn(move || { super::cloud::auto_backup_after_event(&ep); });
+    Ok(())
 }
 
 pub fn sort_manual_file(path: &std::path::Path) -> Result<(), String> {
@@ -256,6 +310,8 @@ fn parse_sessions_from_str(
         }
     }
 
+    let excluded_dates = excluded_dates_from_content(raw);
+
     struct Ev { epoch: i64, ts: String, ty: String }
     let mut evs: Vec<Ev> = Vec::new();
     for line in raw.lines() {
@@ -394,6 +450,7 @@ fn parse_sessions_from_str(
                 let dur = $end_ep - cur_ep;
                 if dur >= min_sleep_secs {
                     sessions.push(Session {
+                        excluded: excluded_dates.contains(cur_ts.get(..10).unwrap_or("")),
                         start: cur_ts.clone(),
                         end: $end_ts.to_string(),
                         duration_hours: dur as f64 / 3600.0,
@@ -422,11 +479,13 @@ fn parse_sessions_from_str(
 
     // Append POWER sessions and sort chronologically
     for (pep, pts, eep, ets, ptype) in power_sessions {
+        let excl = excluded_dates.contains(pts.get(..10).unwrap_or(""));
         sessions.push(Session {
             start: pts,
             end: ets,
             duration_hours: (eep - pep) as f64 / 3600.0,
             session_type: ptype,
+            excluded: excl,
         });
     }
     sessions.sort_by(|a, b| a.start.cmp(&b.start));
@@ -459,6 +518,7 @@ fn parse_sessions_from_str(
                     let dur = eep - sep;
                     if dur > 0 {
                         sessions.push(Session {
+                            excluded: excluded_dates.contains(start.get(..10).unwrap_or("")),
                             start: start.to_string(),
                             end: end.to_string(),
                             duration_hours: dur as f64 / 3600.0,

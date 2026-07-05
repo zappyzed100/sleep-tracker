@@ -123,11 +123,14 @@ component DayDetailModal {
     in-out property <int> add-end-h: 7;
     in-out property <int> add-end-m: 0;
     in property <string> error-text: "";
+    in property <bool> excluded: false;
+    in property <string> excluded-message: "";
 
     callback close();
     callback delete-session(string, string);
     callback toggle-add();
     callback add-session();
+    callback toggle-excluded();
 
     backdrop := TouchArea {
         clicked => { root.close(); }
@@ -174,6 +177,32 @@ component DayDetailModal {
                         Text { text: "×"; color: closeBtn.has-hover ? #cdd6f4 : #a6adc8; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
+            }
+
+            excludeBtn := TouchArea {
+                height: 32px;
+                clicked => { root.toggle-excluded(); }
+                Rectangle {
+                    background: root.excluded ? rgba(108, 112, 134, 0.35) : (excludeBtn.has-hover ? #313244 : transparent);
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: root.excluded ? #6c7086 : #45475a;
+                    Text {
+                        text: root.excluded ? "対象外 ✓（タップで計測対象に戻す）" : "この日を計測対象外にする（平均・予測から除外）";
+                        color: root.excluded ? #cdd6f4 : #a6adc8;
+                        font-size: 13px;
+                        font-weight: root.excluded ? 700 : 400;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            if root.excluded-message != "": Text {
+                width: 100%;
+                text: root.excluded-message;
+                color: #a6e3a1;
+                font-size: 12px;
+                horizontal-alignment: left;
             }
 
             Flickable {
@@ -354,6 +383,9 @@ export struct DaySummaryVM {
     in-progress-frac: float,
     in-progress-has: bool,
     in-progress-label: string,
+    // 計測対象外（平均睡眠・予測計算から除外）としてマークされた日。
+    // データそのものは残すが、バーの見た目を変えて対象外だと分かるようにする。
+    excluded: bool,
 }
 
 // 折れ線グラフの曲線をなめらかに描くためのサンプル点。
@@ -539,17 +571,21 @@ component WeeklyChart {
                 y: col.bar-y;
                 height: col.bar-h;
                 width: col.bar-w;
-                background: day.has-data
-                    ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.55))
-                    : (col.is-in-progress ? rgba(249, 226, 175, 0.65) : #313244);
+                background: day.excluded
+                    ? rgba(108, 112, 134, 0.5)
+                    : (day.has-data
+                        ? (day.active ? #89b4fa : rgba(137, 180, 250, 0.55))
+                        : (col.is-in-progress ? rgba(249, 226, 175, 0.65) : #313244));
                 border-radius: 4px;
+                border-width: day.excluded ? 1px : 0px;
+                border-color: #6c7086;
                 animate y, height { duration: 150ms; easing: ease-out; }
             }
             if day.has-data: Text {
                 y: col.bar-y + (col.bar-h - self.preferred-height) / 2;
                 width: 100%;
                 text: day.duration-label;
-                color: #11111b;
+                color: day.excluded ? #a6adc8 : #11111b;
                 font-size: 15px;
                 font-weight: 700;
                 horizontal-alignment: center;
@@ -560,6 +596,17 @@ component WeeklyChart {
                 text: day.in-progress-label;
                 color: #11111b;
                 font-size: 15px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            // 計測対象外バッジ。バーの高さに関係なく常に列の一番上に固定表示する
+            // （バーが低いと文字と重なって読めなくなるため）。
+            if day.excluded: Text {
+                y: 0px;
+                width: 100%;
+                text: "対象外";
+                color: #6c7086;
+                font-size: 11px;
                 font-weight: 700;
                 horizontal-alignment: center;
             }
@@ -575,12 +622,20 @@ component WeeklyChart {
     property <float> axis-l-px: root.axis-l / 1px;
     property <float> legend-h-px: root.legend-h / 1px;
 
+    // 棒グラフの列はcol-spacingの隙間を挟んで並ぶため、列幅は
+    // 「チャート全幅からn-1個ぶんの隙間を引いてから7等分」した値になる。
+    // 単純にchart-w-pxを7等分するとcol-spacingの分だけ後ろの列ほど
+    // 中心がずれる（線グラフの点が棒の中心より左に寄って見えるバグの原因）。
+    property <float> col-spacing-px: root.col-spacing / 1px;
+    property <float> col-w-px: (root.chart-w-px - 6 * root.col-spacing-px) / 7;
+
     function day-cx(idx: int) -> float {
-        root.axis-l-px + (idx + 0.5) / 7 * root.chart-w-px
+        root.axis-l-px + idx * (root.col-w-px + root.col-spacing-px) + root.col-w-px / 2
     }
 
+    // frac は (idx + 0.5) / 7 の形の「列位置」（0.0〜1.0、連続値も取りうる）。
     function curve-px-x(frac: float) -> float {
-        root.axis-l-px + frac * root.chart-w-px
+        root.axis-l-px + (frac * 7 - 0.5) * (root.col-w-px + root.col-spacing-px) + root.col-w-px / 2
     }
     function curve-px-y(frac: float) -> float {
         root.legend-h-px + frac * root.bars-h-px
@@ -1114,8 +1169,10 @@ component SettingsPanel {
     in property <bool> clear-cloud-in-progress: false;
     in property <bool> compact-in-progress: false;
     in property <bool> backups-clear-in-progress: false;
+    in-out property <bool> sync-paused: false;
 
     callback toggle-startup(bool);
+    callback toggle-sync-paused();
     callback create-shortcut();
     callback threshold-changed(int);
     callback toggle-target-wake(bool);
@@ -1239,6 +1296,25 @@ component SettingsPanel {
                 if root.save-message != "": SettingsNote { text: root.save-message; kind: root.save-kind; }
                 if !root.sync-in-progress && root.sync-message != "": SettingsNote { text: root.sync-message; kind: root.sync-kind; }
                 SettingsNote { text: "設定は config.json にローカル保存されます"; }
+
+                Rectangle { height: 1px; background: #313244; }
+
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn {
+                        text: root.sync-paused ? "自動同期を再開する" : "自動同期を停止する";
+                        btn-width: 170px;
+                        primary: root.sync-paused;
+                        clicked => { root.toggle-sync-paused(); }
+                    }
+                }
+                if root.sync-paused: SettingsNote {
+                    text: "自動同期は停止中です（起動時・定期同期・睡眠検知イベントでのDrive送受信を行いません）。「今すぐ同期」ボタンは停止中でも動作します。";
+                    kind: "warn";
+                }
+                if !root.sync-paused: SettingsNote {
+                    text: "Wi-Fi/モバイルデータを切るのではなく、アプリ内の自動同期だけを止めます。";
+                }
             }
 
             // ── データ管理 ──
@@ -1393,6 +1469,9 @@ export component MainWindow inherits Window {
     in-out property <int> detail-add-end-h: 7;
     in-out property <int> detail-add-end-m: 0;
     in property <string> detail-error: "";
+    in property <bool> detail-excluded: false;
+    in property <string> detail-excluded-message: "";
+    callback toggle-day-excluded();
 
     // タブ切り替え
     in-out property <string> tab: "home";
@@ -1436,12 +1515,14 @@ export component MainWindow inherits Window {
     in-out property <bool> clear-cloud-in-progress: false;
     in-out property <bool> compact-in-progress: false;
     in-out property <bool> backups-clear-in-progress: false;
+    in-out property <bool> sync-paused: false;
 
     callback toggle-startup(bool);
     callback create-shortcut();
     callback threshold-changed(int);
     callback toggle-target-wake(bool);
     callback target-wake-changed(int, int);
+    callback toggle-sync-paused();
     callback save-settings();
     callback test-connection();
     callback sync-now();
@@ -1642,6 +1723,8 @@ export component MainWindow inherits Window {
             clear-cloud-in-progress: root.clear-cloud-in-progress;
             compact-in-progress: root.compact-in-progress;
             backups-clear-in-progress: root.backups-clear-in-progress;
+            sync-paused: root.sync-paused;
+            toggle-sync-paused => { root.toggle-sync-paused(); }
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
             threshold-changed(v) => { root.idle-threshold-minutes = v; root.threshold-changed(v); }
@@ -1929,9 +2012,12 @@ export component MainWindow inherits Window {
         add-end-h: root.detail-add-end-h;
         add-end-m: root.detail-add-end-m;
         error-text: root.detail-error;
+        excluded: root.detail-excluded;
+        excluded-message: root.detail-excluded-message;
         close => { root.close-detail(); }
         delete-session(s, e) => { root.delete-session(s, e); }
         toggle-add => { root.toggle-add-session(); }
         add-session => { root.add-session(); }
+        toggle-excluded => { root.toggle-day-excluded(); }
     }
 }

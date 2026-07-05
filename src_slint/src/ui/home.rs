@@ -7,7 +7,7 @@
 //! 依存 : crate::{MainWindow, DaySummaryVM, SessionVM, CalendarDayVM}, events, prediction, utils
 //! 公開 : `AppState`, `SharedState`, `new_shared_state`, `refresh_all`,
 //!        `compute_stats`, `apply_tick`, `recompute_prediction`, `update_chart`,
-//!        `open_day_detail`, `close_day_detail`, `now_iso`, `set_period`,
+//!        `open_day_detail`, `close_day_detail`, `toggle_day_excluded`, `now_iso`, `set_period`,
 //!        `open_calendar`, `close_calendar`, `cal_prev_month`, `cal_next_month`, `cal_select_day`
 
 use crate::core::{events, prediction, utils, Session};
@@ -145,7 +145,7 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // PC/Android両方から記録された重複区間は merge_intervals で1本にまとめてから
     // 合算する（重なった分の二重計上を防ぐ）。
     let mut per_day_intervals: std::collections::HashMap<&str, Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>> = std::collections::HashMap::new();
-    for s in &recent {
+    for s in recent.iter().filter(|s| !s.excluded) {
         let day_key = &s.start[..10.min(s.start.len())];
         if let (Ok(st), Ok(en)) = (
             chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S"),
@@ -175,7 +175,9 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     window.set_last_sleep(last.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
     window.set_wake_time(wake_time.unwrap_or("—").into());
 
-    let pred = prediction::predict(&sessions, &now);
+    // 予測計算も計測対象外の日を除外したセッションだけで行う。
+    let for_prediction: Vec<Session> = sessions.iter().filter(|s| !s.excluded).cloned().collect();
+    let pred = prediction::predict(&for_prediction, &now);
 
     // 進行中（まだ閉じていない）睡眠セッションがあれば、暫定睡眠時間表示のために
     // 開始時刻を保持する。寝ている最中に一瞬起きてタブレットを確認する用途。
@@ -222,7 +224,8 @@ pub fn recompute_prediction(window: &MainWindow) {
     let m = window.get_bed_minute();
     window.set_bed_time_label(format!("{:02}:{:02}", h, m).into());
 
-    let sessions = events::get_sessions().unwrap_or_default();
+    let sessions: Vec<Session> = events::get_sessions().unwrap_or_default()
+        .into_iter().filter(|s| !s.excluded).collect();
     if sessions.is_empty() {
         window.set_has_prediction(false);
         return;
@@ -317,7 +320,8 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
         (s.week_base, s.selected_date.clone(), s.open_sleep_start)
     };
     let sessions = events::get_sessions().unwrap_or_default();
-    let days = utils::build_week(&sessions, week_base);
+    let excluded_dates = events::get_excluded_dates();
+    let days = utils::build_week(&sessions, week_base, &excluded_dates);
 
     // 進行中（まだIDLE_RESUMEが来ていない）セッションがこの週のどこかにあれば、
     // その開始日のバーとして扱う（完了済みセッションの日付バケット判定と同じ、
@@ -363,6 +367,7 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
             in_progress_frac: (in_progress.unwrap_or(0.0) / y_max) as f32,
             in_progress_has: in_progress.is_some(),
             in_progress_label: in_progress.map(utils::format_duration).unwrap_or_default().into(),
+            excluded: d.excluded,
         }
     }).collect();
     let bedtime_ys: Vec<Option<f32>> = vm.iter().zip(days.iter()).map(|(v, d)| d.bedtime_h.map(|_| v.bedtime_y)).collect();
@@ -489,9 +494,16 @@ fn fmt_ts_short(ts: &str) -> String {
 
 pub fn open_day_detail(window: &MainWindow, state: &SharedState, date: &str) {
     state.lock().unwrap().selected_date = Some(date.to_string());
+    window.set_detail_excluded_message("".into());
 
     let sessions = events::get_sessions().unwrap_or_default();
     let day_sessions: Vec<&Session> = sessions.iter().filter(|s| s.start.starts_with(date)).collect();
+    // セッションが1件も無い日（記録0h）でもボタンの状態が正しく反映されるよう、
+    // セッション側のフラグだけでなくファイルの除外マーカーも直接見る
+    // （そうしないと0hの日では「対象外にする」を押しても何も反応しないように見えるバグになる）。
+    window.set_detail_excluded(
+        day_sessions.iter().any(|s| s.excluded) || events::get_excluded_dates().contains(date)
+    );
 
     // PC/Android両方から記録された重複区間は合計計算では1本にまとめて二重計上を
     // 防ぐ（一覧表示では元のセッションをそのまま出し、重複しているものには
@@ -545,4 +557,25 @@ pub fn close_day_detail(window: &MainWindow, state: &SharedState) {
     state.lock().unwrap().selected_date = None;
     window.set_show_detail(false);
     update_chart(window, state);
+}
+
+// 日別詳細モーダルで開いている日を計測対象外/対象に切り替える。
+pub fn toggle_day_excluded(window: &MainWindow, state: &SharedState) {
+    let date = state.lock().unwrap().selected_date.clone();
+    let Some(date) = date else { return };
+    let now_excluded = window.get_detail_excluded();
+    let new_excluded = !now_excluded;
+    if let Err(e) = events::set_day_excluded(&date, new_excluded) {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        window.set_detail_excluded_message(format!("失敗: {} ({})", e, now).into());
+        eprintln!("[app] toggle_day_excluded: ERROR {}", e);
+        return;
+    }
+    // open_day_detail は呼び出し直後に detail-excluded-message をクリアするため、
+    // 確認メッセージは必ずopen_day_detail呼び出しの後で設定すること。
+    open_day_detail(window, state, &date);
+    compute_stats(window, state);
+    let now = chrono::Local::now().format("%H:%M:%S").to_string();
+    let msg = if new_excluded { "✓ 計測対象外にしました" } else { "✓ 計測対象に戻しました" };
+    window.set_detail_excluded_message(format!("{} ({})", msg, now).into());
 }
