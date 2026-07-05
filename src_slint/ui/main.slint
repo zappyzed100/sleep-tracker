@@ -98,6 +98,11 @@ component NumSpin {
     }
 }
 
+export struct BackupEntryVM {
+    path: string,
+    label: string,
+}
+
 export struct SessionVM {
     start: string,
     end: string,
@@ -359,6 +364,126 @@ component DayDetailModal {
                         horizontal-alignment: left;
                         vertical-stretch: 0;
                         read-only: true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component BackupListModal {
+    in property <[BackupEntryVM]> entries;
+
+    callback close();
+    callback restore-entry(string);
+    callback restore-external();
+
+    backdrop := TouchArea {
+        clicked => { root.close(); }
+        Rectangle { background: rgba(0, 0, 0, 0.55); }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: 480px;
+        background: #1e1e2e;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #313244;
+
+        cardBlock := TouchArea {
+            width: 100%;
+            height: 100%;
+            // カード内クリックで閉じないようにイベントを吸収する
+        }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                Text {
+                    text: "📦 バックアップから復元";
+                    color: #f9e2af;
+                    font-size: 17px;
+                    font-weight: 700;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                closeBtn := TouchArea {
+                    width: 28px;
+                    height: 28px;
+                    clicked => { root.close(); }
+                    Rectangle {
+                        background: closeBtn.has-hover ? #313244 : transparent;
+                        border-radius: 6px;
+                        Text { text: "×"; color: closeBtn.has-hover ? #cdd6f4 : #a6adc8; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+
+            Text {
+                width: 100%;
+                text: "現在のデータは上書きされます。新しい順に表示しています。";
+                color: #a6adc8;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 8px;
+
+                    if root.entries.length == 0: Text {
+                        width: 100%;
+                        text: "バックアップが見つかりません";
+                        color: #a6adc8;
+                        font-size: 14px;
+                        horizontal-alignment: left;
+                    }
+
+                    for e in root.entries: entryBtn := TouchArea {
+                        vertical-stretch: 0;
+                        height: 44px;
+                        clicked => { root.restore-entry(e.path); }
+                        Rectangle {
+                            background: entryBtn.has-hover ? #313244 : #181825;
+                            border-radius: 8px;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text {
+                                    text: e.label;
+                                    color: #cdd6f4;
+                                    font-size: 14px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            externalBtn := TouchArea {
+                height: 36px;
+                vertical-stretch: 0;
+                clicked => { root.restore-external(); }
+                Rectangle {
+                    background: externalBtn.has-hover ? #313244 : transparent;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: #45475a;
+                    Text {
+                        text: "その他のファイルを選択…";
+                        color: #89b4fa;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
                 }
             }
@@ -1473,6 +1598,13 @@ export component MainWindow inherits Window {
     in property <string> detail-excluded-message: "";
     callback toggle-day-excluded();
 
+    // バックアップ一覧モーダル用のプロパティ
+    in property <bool> show-backup-list: false;
+    in property <[BackupEntryVM]> backup-list: [];
+    callback close-backup-list();
+    callback restore-from-backup(string);
+    callback restore-via-external-picker();
+
     // タブ切り替え
     in-out property <string> tab: "home";
 
@@ -2019,5 +2151,14 @@ export component MainWindow inherits Window {
         toggle-add => { root.toggle-add-session(); }
         add-session => { root.add-session(); }
         toggle-excluded => { root.toggle-day-excluded(); }
+    }
+
+    if root.show-backup-list: BackupListModal {
+        width: 100%;
+        height: 100%;
+        entries: root.backup-list;
+        close => { root.close-backup-list(); }
+        restore-entry(p) => { root.restore-from-backup(p); }
+        restore-external => { root.restore-via-external-picker(); }
     }
 }

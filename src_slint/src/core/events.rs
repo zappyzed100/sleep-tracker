@@ -9,7 +9,7 @@
 //! 公開 : `Session`, `SessionCache`, `SESSION_CACHE`, `parse_sessions_rust`,
 //!        `sort_events_file`, `get_sessions`, `add_session`, `delete_session`,
 //!        `get_events_content`, `restore_events`, `clear_all_data`, `compact_data`,
-//!        `current_sleep_start`, `maybe_auto_backup`, `clear_backups`,
+//!        `current_sleep_start`, `maybe_auto_backup`, `clear_backups`, `list_backups`,
 //!        `export_csv`, `write_csv_file`, `import_csv`,
 //!        `is_out_from_content`, `apply_mobile_event_line`,
 //!        `excluded_dates_from_content`, `get_excluded_dates`, `set_day_excluded`
@@ -716,6 +716,35 @@ pub fn clear_backups(backups_base: &std::path::Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct BackupEntry {
+    pub path: String,
+    pub label: String,
+}
+
+// crate::backups_base_dir()/backups/ 内のファイルを更新日時が新しい順に列挙する。
+// OSのファイルピッカーはソート順を指定できない（PCのExplorer・AndroidのSAFとも
+// アプリ側から強制する手段がない）ため、アプリ内の一覧表示で確実に新しい順を保証する。
+// 手動バックアップ・自動バックアップの両方がこのフォルダに保存されるため両方を含む。
+pub fn list_backups() -> Vec<BackupEntry> {
+    let backups_dir = crate::backups_base_dir().join("backups");
+    let Ok(entries) = std::fs::read_dir(&backups_dir) else { return Vec::new() };
+
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+
+    files.into_iter()
+        .map(|(_, path)| {
+            let label = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            BackupEntry { path: path.to_string_lossy().to_string(), label }
+        })
+        .collect()
 }
 
 // ローカルの sleep_events.txt / sleep_manual.txt を両方とも空にする。

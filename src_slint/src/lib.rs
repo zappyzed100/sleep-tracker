@@ -425,6 +425,28 @@ pub fn run() {
     }
     {
         let weak = window.as_weak();
+        window.on_close_backup_list(move || {
+            if let Some(w) = weak.upgrade() {
+                settings_ui::close_backup_list(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_restore_from_backup(move |path| {
+            settings_ui::restore_from_backup(weak.clone(), s.clone(), path.to_string());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let s = state.clone();
+        window.on_restore_via_external_picker(move || {
+            settings_ui::restore_via_external_picker(weak.clone(), s.clone());
+        });
+    }
+    {
+        let weak = window.as_weak();
         let s = state.clone();
         window.on_clear_all_data(move || {
             settings_ui::clear_all_data(weak.clone(), s.clone());

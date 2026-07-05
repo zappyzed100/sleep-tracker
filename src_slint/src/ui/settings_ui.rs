@@ -7,14 +7,16 @@
 //!        ブロックしない。完了メッセージには必ずボタンを押した時刻を付け、
 //!        成功/警告/失敗を色分けできるよう種別（kind）も一緒に設定する。
 //!
-//! 依存 : crate::{MainWindow}, config, platform, cloud, events
+//! 依存 : crate::{MainWindow, BackupEntryVM}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
 //!        `create_shortcut`, `export_csv`, `clear_all_data`, `clear_all_data_and_cloud`,
-//!        `compact_data`, `clear_backups`, `sync_now`, `backup`, `restore`
+//!        `compact_data`, `clear_backups`, `sync_now`, `backup`, `restore`,
+//!        `open_backup_list`, `close_backup_list`, `restore_from_backup`,
+//!        `restore_via_external_picker`
 
 use crate::core::{cloud, config, events};
 use crate::platform::windows as platform;
-use crate::MainWindow;
+use crate::{BackupEntryVM, MainWindow};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // 全データ削除・復元の誤操作防止用（2回クリックで実行）。設定画面はウィンドウ1つのみなので
@@ -233,8 +235,13 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
         let content = events::get_events_content();
         let result = match content {
             Ok(content) => {
+                // 自動バックアップと同じフォルダをデフォルトの保存先にする。ここに保存すれば
+                // 「バックアップから復元」の一覧にも自動的に出てくる（新しい順ソート込みで）。
+                let backups_dir = crate::backups_base_dir().join("backups");
+                let _ = std::fs::create_dir_all(&backups_dir);
                 let default_name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
                 let path = rfd::FileDialog::new()
+                    .set_directory(&backups_dir)
                     .set_file_name(&default_name)
                     .add_filter("テキスト", &["txt"])
                     .save_file();
@@ -282,11 +289,15 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
             return;
         }
     };
+    // 自動バックアップと同じbackups/フォルダに保存する。「バックアップから復元」の
+    // 一覧にも自動的に出てくる（新しい順ソート込みで）。
+    let backups_dir = dir.join("backups");
+    let _ = std::fs::create_dir_all(&backups_dir);
     let name = format!("sleep_backup_{}.txt", chrono::Local::now().format("%Y-%m-%d"));
-    let path = dir.join(&name);
+    let path = backups_dir.join(&name);
     match events::write_csv_file(path.to_string_lossy().to_string(), content) {
         Ok(()) => {
-            w.set_backup_message(format!("✓ バックアップ完了 → Android/data/com.sleeptracker.app/files/{} ({})", name, now_hms()).into());
+            w.set_backup_message(format!("✓ バックアップ完了 → Android/data/com.sleeptracker.app/files/backups/{} ({})", name, now_hms()).into());
             w.set_backup_kind(KIND_SUCCESS.into());
         }
         Err(e) => {
@@ -297,22 +308,67 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
     w.set_backup_in_progress(false);
 }
 
-// 誤操作防止のため2回クリックで実行（全データ削除と同様のパターン）。1回目の確認表示は
-// 一瞬で終わるため別スレッド化せず、ファイル選択・復元本体（2回目）のみ別スレッドにする。
-#[cfg(not(target_os = "android"))]
-pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
+// 誤操作防止のため2回クリックで実行（全データ削除と同様のパターン）。2回目でOSの
+// ファイルピッカーを直接開くのではなく、アプリ内の「バックアップ一覧」を表示する
+// （新しい順ソート・デフォルトの場所をアプリ側で保証するため。OSのファイルピッカー
+// にはソート順を指定するAPIが無く、Androidはさらに専用フォルダへのナビゲーションを
+// OS側で制限しているため、どちらも「新しい順」「デフォルトでそこが開く」を保証できない）。
+pub fn restore(weak: slint::Weak<MainWindow>, _state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_restore_message("もう一度クリックするとバックアップファイルから復元します（現在のデータは上書きされます）".into());
+        window.set_restore_message("もう一度クリックするとバックアップ一覧を表示します（現在のデータは上書きされます）".into());
         window.set_restore_kind(KIND_WARN.into());
         window.set_restore_in_progress(false);
         return;
     }
     RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
+    window.set_restore_in_progress(false);
+    open_backup_list(&window);
+}
 
+// バックアップ一覧（backups/フォルダの中身、新しい順）を読み込んでモーダルを開く。
+pub fn open_backup_list(window: &MainWindow) {
+    let entries: Vec<BackupEntryVM> = events::list_backups().into_iter()
+        .map(|b| BackupEntryVM { path: b.path.into(), label: b.label.into() })
+        .collect();
+    window.set_backup_list(slint::ModelRc::new(slint::VecModel::from(entries)));
+    window.set_show_backup_list(true);
+}
+
+pub fn close_backup_list(window: &MainWindow) {
+    window.set_show_backup_list(false);
+}
+
+// 一覧内の1件をタップして復元する。ファイルの場所は既知（backups/内）なので
+// OSのダイアログを介さず直接読み込む。
+pub fn restore_from_backup(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState, path: String) {
+    let Some(window) = weak.upgrade() else { return };
+    window.set_show_backup_list(false);
+    let result = std::fs::read_to_string(&path)
+        .map_err(|e| format!("読み込み失敗: {}", e))
+        .and_then(events::restore_events);
+    match result {
+        Ok(()) => {
+            window.set_restore_message(format!("✓ バックアップから復元しました ({})", now_hms()).into());
+            window.set_restore_kind(KIND_SUCCESS.into());
+            crate::ui::home::refresh_all(&window, &state);
+        }
+        Err(e) => {
+            window.set_restore_message(format!("復元失敗: {} ({})", e, now_hms()).into());
+            window.set_restore_kind(KIND_ERROR.into());
+        }
+    }
+}
+
+// 一覧の「その他のファイルを選択…」— backups/フォルダ以外の任意の場所にある
+// ファイルから復元したい場合のための、OSのファイルピッカー経由の代替経路。
+#[cfg(not(target_os = "android"))]
+pub fn restore_via_external_picker(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
+    if let Some(w) = weak.upgrade() {
+        w.set_show_backup_list(false);
+        w.set_restore_in_progress(true);
+    }
     std::thread::spawn(move || {
-        // 自動/手動バックアップの保存先フォルダをデフォルトで開く。最新のバックアップを
-        // 探し回らずに選べるようにするため（Explorer自体の並び順はOS側の設定に依存する）。
         let path = rfd::FileDialog::new()
             .set_directory(crate::backups_base_dir().join("backups"))
             .add_filter("テキスト", &["txt"])
@@ -320,7 +376,7 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
         let result = path.map(|path| {
             std::fs::read_to_string(&path)
                 .map_err(|e| format!("読み込み失敗: {}", e))
-                .and_then(|content| events::restore_events(content))
+                .and_then(events::restore_events)
         });
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
@@ -346,19 +402,14 @@ pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedStat
 }
 
 // Kotlin側のACTION_OPEN_DOCUMENTシステムファイルピッカーを起動する
-// （platform::android_restore::launch_picker）。誤操作防止のため2回クリックで実行。
-// 完了・キャンセル・失敗の反映はJNIコールバック(nativeRestorePicked)側で行われる。
+// （platform::android_restore::launch_picker）。完了・キャンセル・失敗の反映は
+// JNIコールバック(nativeRestorePicked)側で行われる。
 #[cfg(target_os = "android")]
-pub fn restore(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
-    let Some(window) = weak.upgrade() else { return };
-    if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
-        window.set_restore_message("もう一度クリックするとファイルを選択してバックアップから復元します（現在のデータは上書きされます）".into());
-        window.set_restore_kind(KIND_WARN.into());
-        window.set_restore_in_progress(false);
-        return;
+pub fn restore_via_external_picker(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
+    if let Some(w) = weak.upgrade() {
+        w.set_show_backup_list(false);
+        w.set_restore_in_progress(true);
     }
-    RESTORE_CONFIRM_PENDING.store(false, Ordering::SeqCst);
-
     crate::platform::android_restore::launch_picker(weak, state);
 }
 
