@@ -476,6 +476,7 @@ pub fn run() {
         let weak = window.as_weak();
         window.on_toggle_sync_paused(move || {
             if let Some(w) = weak.upgrade() {
+                settings_ui::clear_stale_confirmations(&w, "");
                 let new_state = !cloud::is_sync_paused();
                 if let Err(e) = cloud::set_sync_paused(new_state) {
                     eprintln!("[app] toggle_sync_paused: ERROR {}", e);

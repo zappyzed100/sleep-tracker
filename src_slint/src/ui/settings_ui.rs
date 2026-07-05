@@ -12,7 +12,7 @@
 //!        `create_shortcut`, `export_csv`, `clear_all_data`, `clear_all_data_and_cloud`,
 //!        `compact_data`, `clear_backups`, `sync_now`, `backup`, `restore`,
 //!        `open_backup_list`, `close_backup_list`, `restore_from_backup`,
-//!        `restore_via_external_picker`
+//!        `restore_via_external_picker`, `clear_stale_confirmations`
 
 use crate::core::{cloud, config, events};
 use crate::platform::windows as platform;
@@ -38,6 +38,31 @@ const KIND_INFO: &str = "info";
 // ボタンを押した操作が完了した時刻を表示する。
 fn now_hms() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+// 「もう一度クリックすると...」の2回クリック確認は、放置すると (a) 確認待ちの
+// メッセージが画面に残り続ける (b) ずっと後になって同じボタンを押した時、本人は
+// 「1回目のつもり」でも実際は確認済み扱いになり即実行されてしまう、という2つの
+// 問題があった。他の操作（別のボタン・設定保存など）を行うたびに呼び出すことで、
+// まだ確認待ちのままの破壊的操作をキャンセルし、そのメッセージも消す。
+// `keep`には呼び出し元自身のタグを渡す（自分の確認待ち状態はこの後の判定に使うため
+// ここでは触らない）。無関係な操作からは""を渡してすべて解除する。
+pub fn clear_stale_confirmations(window: &MainWindow, keep: &str) {
+    if keep != "restore" && RESTORE_CONFIRM_PENDING.swap(false, Ordering::SeqCst) {
+        window.set_restore_message("".into());
+    }
+    if keep != "clear" && CLEAR_CONFIRM_PENDING.swap(false, Ordering::SeqCst) {
+        window.set_clear_message("".into());
+    }
+    if keep != "clear_cloud" && CLEAR_CLOUD_CONFIRM_PENDING.swap(false, Ordering::SeqCst) {
+        window.set_clear_cloud_message("".into());
+    }
+    if keep != "compact" && COMPACT_CONFIRM_PENDING.swap(false, Ordering::SeqCst) {
+        window.set_compact_message("".into());
+    }
+    if keep != "backups_clear" && CLEAR_BACKUPS_CONFIRM_PENDING.swap(false, Ordering::SeqCst) {
+        window.set_backups_clear_message("".into());
+    }
 }
 
 pub fn load_into_window(window: &MainWindow) {
@@ -66,6 +91,7 @@ fn current_target_wake(window: &MainWindow) -> Option<String> {
 }
 
 pub fn save(window: &MainWindow) {
+    clear_stale_confirmations(window, "");
     let idle = window.get_idle_threshold_minutes() as u32;
     let url = window.get_mobile_url().to_string();
     let secret = window.get_mobile_secret().to_string();
@@ -83,6 +109,7 @@ pub fn save(window: &MainWindow) {
 }
 
 pub fn toggle_startup(window: &MainWindow, enable: bool) {
+    clear_stale_confirmations(window, "");
     match platform::set_startup(enable) {
         Ok(()) => {
             let msg = if enable { "✓ 自動起動をONにしました" } else { "✓ 自動起動をOFFにしました" };
@@ -98,6 +125,7 @@ pub fn toggle_startup(window: &MainWindow, enable: bool) {
 }
 
 pub fn create_shortcut(window: &MainWindow) {
+    clear_stale_confirmations(window, "");
     match platform::create_desktop_shortcut() {
         Ok(true) => {
             window.set_shortcut_message(format!("✓ デスクトップにショートカットを作成しました ({})", now_hms()).into());
@@ -118,6 +146,7 @@ pub fn create_shortcut(window: &MainWindow) {
 // test-in-progress は呼び出し側（Slint）で即座にtrueへ設定済み。完了後に必ずfalseへ戻す
 // （成功・失敗問わず）ことで、ボタンの「テスト中…」表示が固まったままにならないようにする。
 pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: String) {
+    if let Some(w) = weak.upgrade() { clear_stale_confirmations(&w, ""); }
     std::thread::spawn(move || {
         let result = cloud::test_mobile_connection(url, secret);
         let _ = slint::invoke_from_event_loop(move || {
@@ -141,6 +170,7 @@ pub fn test_connection(weak: slint::Weak<MainWindow>, url: String, secret: Strin
 // 別スレッドでsync_gistを実行し、完了後にUIスレッドで再読み込みする。
 // sync-in-progress も同様に、成功・失敗どちらの経路でも必ずfalseへ戻す。
 pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
+    if let Some(w) = weak.upgrade() { clear_stale_confirmations(&w, ""); }
     std::thread::spawn(move || {
         let msg = cloud::sync_gist();
         let _ = slint::invoke_from_event_loop(move || {
@@ -170,6 +200,7 @@ pub fn sync_now(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedSta
 // Android版はファイル共有(Intent)経由の実装が別途必要（今後の課題）。
 #[cfg(not(target_os = "android"))]
 pub fn export_csv(weak: slint::Weak<MainWindow>) {
+    if let Some(w) = weak.upgrade() { clear_stale_confirmations(&w, ""); }
     std::thread::spawn(move || {
         let sessions = events::get_sessions().unwrap_or_default();
         let csv = events::export_csv(&sessions);
@@ -206,6 +237,7 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
 #[cfg(target_os = "android")]
 pub fn export_csv(weak: slint::Weak<MainWindow>) {
     let Some(w) = weak.upgrade() else { return };
+    clear_stale_confirmations(&w, "");
     let Some(dir) = crate::android_external_dir() else {
         w.set_export_message("外部ストレージが利用できません".into());
         w.set_export_kind(KIND_ERROR.into());
@@ -231,6 +263,7 @@ pub fn export_csv(weak: slint::Weak<MainWindow>) {
 // バックアップ/リストアもrfd（ネイティブファイルダイアログ）を使うためデスクトップのみ。
 #[cfg(not(target_os = "android"))]
 pub fn backup(weak: slint::Weak<MainWindow>) {
+    if let Some(w) = weak.upgrade() { clear_stale_confirmations(&w, ""); }
     std::thread::spawn(move || {
         let content = events::get_events_content();
         let result = match content {
@@ -274,6 +307,7 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
 #[cfg(target_os = "android")]
 pub fn backup(weak: slint::Weak<MainWindow>) {
     let Some(w) = weak.upgrade() else { return };
+    clear_stale_confirmations(&w, "");
     let Some(dir) = crate::android_external_dir() else {
         w.set_backup_message("外部ストレージが利用できません".into());
         w.set_backup_kind(KIND_ERROR.into());
@@ -315,6 +349,7 @@ pub fn backup(weak: slint::Weak<MainWindow>) {
 // OS側で制限しているため、どちらも「新しい順」「デフォルトでそこが開く」を保証できない）。
 pub fn restore(weak: slint::Weak<MainWindow>, _state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
+    clear_stale_confirmations(&window, "restore");
     if !RESTORE_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_restore_message("もう一度クリックするとバックアップ一覧を表示します（現在のデータは上書きされます）".into());
         window.set_restore_kind(KIND_WARN.into());
@@ -343,6 +378,7 @@ pub fn close_backup_list(window: &MainWindow) {
 // OSのダイアログを介さず直接読み込む。
 pub fn restore_from_backup(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState, path: String) {
     let Some(window) = weak.upgrade() else { return };
+    clear_stale_confirmations(&window, "");
     window.set_show_backup_list(false);
     let result = std::fs::read_to_string(&path)
         .map_err(|e| format!("読み込み失敗: {}", e))
@@ -365,6 +401,7 @@ pub fn restore_from_backup(weak: slint::Weak<MainWindow>, state: crate::ui::home
 #[cfg(not(target_os = "android"))]
 pub fn restore_via_external_picker(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     if let Some(w) = weak.upgrade() {
+        clear_stale_confirmations(&w, "");
         w.set_show_backup_list(false);
         w.set_restore_in_progress(true);
     }
@@ -407,6 +444,7 @@ pub fn restore_via_external_picker(weak: slint::Weak<MainWindow>, state: crate::
 #[cfg(target_os = "android")]
 pub fn restore_via_external_picker(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     if let Some(w) = weak.upgrade() {
+        clear_stale_confirmations(&w, "");
         w.set_show_backup_list(false);
         w.set_restore_in_progress(true);
     }
@@ -416,6 +454,7 @@ pub fn restore_via_external_picker(weak: slint::Weak<MainWindow>, state: crate::
 // ローカルの sleep_events.txt / sleep_manual.txt だけを削除する（クラウドは残る）。
 pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
+    clear_stale_confirmations(&window, "clear");
     if !CLEAR_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_clear_message("もう一度クリックするとローカルの全データを削除します".into());
         window.set_clear_kind(KIND_WARN.into());
@@ -449,6 +488,7 @@ pub fn clear_all_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Sha
 // 削除する。ローカルより一段階重い操作のため、確認フラグはローカル削除とは別に持つ。
 pub fn clear_all_data_and_cloud(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
+    clear_stale_confirmations(&window, "clear_cloud");
     if !CLEAR_CLOUD_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_clear_cloud_message("もう一度クリックするとクラウドも含めて全データを削除します".into());
         window.set_clear_cloud_kind(KIND_WARN.into());
@@ -489,6 +529,7 @@ pub fn clear_all_data_and_cloud(weak: slint::Weak<MainWindow>, state: crate::ui:
 // クラウド（Drive・スプレッドシート）にも直接反映する。破壊的な操作のため2回クリック確認。
 pub fn compact_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::SharedState) {
     let Some(window) = weak.upgrade() else { return };
+    clear_stale_confirmations(&window, "compact");
     if !COMPACT_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_compact_message("もう一度クリックするとデータを圧縮します".into());
         window.set_compact_kind(KIND_WARN.into());
@@ -541,6 +582,7 @@ pub fn compact_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Share
 // sleep_events.txt/sleep_manual.txt自体やクラウドには触れない、比較的軽い操作。
 pub fn clear_backups(weak: slint::Weak<MainWindow>) {
     let Some(window) = weak.upgrade() else { return };
+    clear_stale_confirmations(&window, "backups_clear");
     if !CLEAR_BACKUPS_CONFIRM_PENDING.swap(true, Ordering::SeqCst) {
         window.set_backups_clear_message("もう一度クリックするとバックアップ履歴を削除します".into());
         window.set_backups_clear_kind(KIND_WARN.into());
