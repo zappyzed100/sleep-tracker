@@ -175,32 +175,65 @@ fn coalesce_and_filter_app_usage(mut pairs: Vec<(i64, String, i64, String)>) -> 
     merged.into_iter().filter(|(s, _, e, _)| e - s >= MIN_APP_USAGE_SECS).collect()
 }
 
-pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
+fn ts_to_epoch(s: &str) -> Option<i64> {
     use chrono::NaiveDateTime;
+    let ndt = NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+    Some(ndt.and_utc().timestamp())
+}
 
+fn epoch_to_ts(ep: i64) -> String {
+    use chrono::DateTime;
+    let dt = DateTime::from_timestamp(ep, 0).map(|d| d.naive_utc());
+    dt.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_default()
+}
+
+pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
-    let events_path   = crate::data_dir().join("sleep_events.txt");
+    let events_path    = crate::data_dir().join("sleep_events.txt");
     let heartbeat_path = crate::data_dir().join("sleep_heartbeat.txt");
+    let manual_path    = crate::data_dir().join("sleep_manual.txt");
     let min_sleep_secs = crate::THRESHOLD_SECS.load(Ordering::Relaxed) as i64;
 
-    let ts_to_epoch = |s: &str| -> Option<i64> {
-        let ndt = NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
-        Some(ndt.and_utc().timestamp())
-    };
+    if !events_path.exists() {
+        eprintln!("{} parse_sessions #{}: cache MISS — no file", TAG, n);
+        return Ok(vec![]);
+    }
+    let raw = std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?;
+    let kb = raw.len() as f64 / 1024.0;
+    let heartbeat_raw = std::fs::read_to_string(&heartbeat_path).ok();
+    let manual_raw = std::fs::read_to_string(&manual_path).ok();
 
-    let epoch_to_ts = |ep: i64| -> String {
-        use chrono::DateTime;
-        let dt = DateTime::from_timestamp(ep, 0).map(|d| d.naive_utc());
-        dt.map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_default()
-    };
+    let t0 = std::time::Instant::now();
+    let (sessions, event_count) = parse_sessions_from_str(
+        &raw,
+        manual_raw.as_deref(),
+        heartbeat_raw.as_deref(),
+        min_sleep_secs,
+    );
+    let ms = t0.elapsed().as_millis();
+    eprintln!("{} parse_sessions #{}: cache MISS — {} events → {} sessions ({:.1}KB)  (+{}ms)",
+        TAG, n, event_count, sessions.len(), kb, ms);
 
+    Ok(sessions)
+}
+
+// sleep_events.txt(+ sleep_manual.txt)の生テキストからセッション一覧を組み立てる、
+// ファイルI/O・グローバル状態に依存しない純粋関数。parse_sessions_rust()から
+// 実ファイルを読んで呼ばれるほか、テストからも直接呼べる。
+// 戻り値は (セッション一覧, 生イベント行数)。
+fn parse_sessions_from_str(
+    raw: &str,
+    manual_raw: Option<&str>,
+    heartbeat_raw: Option<&str>,
+    min_sleep_secs: i64,
+) -> (Vec<Session>, usize) {
     // Heartbeat (for POWER_LOSS start-time correction)
     let mut hb_epoch: i64 = 0;
     let mut hb_idle_ms: i64 = 0;
-    if let Ok(txt) = std::fs::read_to_string(&heartbeat_path) {
+    if let Some(txt) = heartbeat_raw {
         if let Some(line) = txt.lines().next() {
             let line = line.trim_end_matches('\r');
             if let Some(c) = line.find(',') {
@@ -211,16 +244,6 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
             }
         }
     }
-
-    // Events
-    if !events_path.exists() {
-        eprintln!("{} parse_sessions #{}: cache MISS — no file", TAG, n);
-        return Ok(vec![]);
-    }
-    let raw = std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?;
-    let kb = raw.len() as f64 / 1024.0;
-
-    let t0 = std::time::Instant::now();
 
     // Collect soft-deleted session start timestamps before running the state machine.
     let mut deleted_starts: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -269,7 +292,6 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     let mut idle_pairs:      Vec<(i64, String, i64, String)> = Vec::new();
     let mut out_pairs:       Vec<(i64, String, i64, String)> = Vec::new();
     let mut app_usage_pairs: Vec<(i64, String, i64, String)> = Vec::new();
-    let mut device_ons: Vec<(i64, String)>              = Vec::new();
     // POWER session tracking: (start_ep, start_ts, end_ep, end_ts, type)
     let mut power_sessions: Vec<(i64, String, i64, String, String)> = Vec::new();
     {
@@ -300,7 +322,6 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
                         app_usage_pairs.push((aep, ats, ep, ts.to_string()));
                     }
                 }
-                "DEVICE_ON"   => { device_ons.push((ep, ts.to_string())); }
                 "SUSPEND" | "SHUTDOWN" => {
                     if power_pend.is_none() {
                         power_pend = Some((ep, ts.to_string()));
@@ -331,17 +352,13 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
             prev_ep = ep;
         }
 
-        // ── Close unclosed IDLE_START with the first subsequent DEVICE_ON ──────────
-        // 起床時にPCを操作する前にAndroidを触った場合、IDLE_RESUME が記録されず
-        // DEVICE_ON しか終了イベントが存在しない。この未閉じペアを DEVICE_ON で閉じる。
-        // （これは進行中セッションの近似的な表示用途であり、確定済みセッションを
-        //   分割するPass 2の用途とは別なので、DEVICE_ONの役割縮小後も残す。）
-        if let Some((start_ep, start_ts)) = idle_pend {
-            if let Some(&(dep, ref dts)) = device_ons.iter().find(|(d, _)| *d > start_ep) {
-                eprintln!("{} parse_sessions: unclosed IDLE_START closed by DEVICE_ON ({} → {})", TAG, start_ts, dts);
-                idle_pairs.push((start_ep, start_ts, dep, dts.clone()));
-            }
-        }
+        // 末尾の未クローズIDLE_START（まだIDLE_RESUMEが来ていない進行中セッション）は
+        // ここでは完了扱いにしない。以前はここでDEVICE_ONを見つけて仮クローズしていたが、
+        // 一晩の間に混じる無関係なDEVICE_ON（タブレット画面が一瞬ついただけ等）を
+        // 拾って実際の睡眠時間より大幅に短いセッションを捏造してしまうバグがあった
+        // （DEVICE_ON単体は「起きていた証拠」にならない、というAPP_USAGE方式への
+        // 移行時の設計方針と矛盾していた）。進行中セッションの表示は
+        // current_sleep_start()（暫定睡眠時間）が別途担当する。
     }
 
     // APP_USAGE区間の統合・フィルタ（画面ロック→即再開のような細切れ検知対策と、
@@ -415,60 +432,46 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     sessions.sort_by(|a, b| a.start.cmp(&b.start));
 
     // Filter out soft-deleted sessions.
-    if !deleted_starts.is_empty() {
-        let before = sessions.len();
-        sessions.retain(|s| !deleted_starts.contains(&s.start));
-        let removed = before - sessions.len();
-        if removed > 0 {
-            eprintln!("{} parse_sessions #{}: {} sessions filtered by SESSION_DELETED", TAG, n, removed);
-        }
-    }
+    sessions.retain(|s| !deleted_starts.contains(&s.start));
 
     // Merge manual sessions from sleep_manual.txt (supports MANUAL_DELETED soft-delete)
-    let manual_path = crate::data_dir().join("sleep_manual.txt");
-    if manual_path.exists() {
-        if let Ok(manual_raw) = std::fs::read_to_string(&manual_path) {
-            // First pass: collect soft-deleted start timestamps
-            let mut manual_deleted: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for line in manual_raw.lines() {
-                let line = line.trim().trim_start_matches('\u{FEFF}');
-                if let Some(c) = line.find(',') {
-                    if &line[c+1..] == "MANUAL_DELETED" {
-                        manual_deleted.insert(line[..c].to_string());
-                    }
+    if let Some(manual_raw) = manual_raw {
+        // First pass: collect soft-deleted start timestamps
+        let mut manual_deleted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for line in manual_raw.lines() {
+            let line = line.trim().trim_start_matches('\u{FEFF}');
+            if let Some(c) = line.find(',') {
+                if &line[c+1..] == "MANUAL_DELETED" {
+                    manual_deleted.insert(line[..c].to_string());
                 }
             }
-            // Second pass: add non-deleted sessions
-            for line in manual_raw.lines() {
-                let line = line.trim().trim_start_matches('\u{FEFF}');
-                if line.is_empty() { continue; }
-                if let Some(c) = line.find(',') {
-                    let start = &line[..c];
-                    let end   = &line[c+1..];
-                    if end == "MANUAL_DELETED" { continue; }
-                    if manual_deleted.contains(start) { continue; }
-                    if let (Some(sep), Some(eep)) = (ts_to_epoch(start), ts_to_epoch(end)) {
-                        let dur = eep - sep;
-                        if dur > 0 {
-                            sessions.push(Session {
-                                start: start.to_string(),
-                                end: end.to_string(),
-                                duration_hours: dur as f64 / 3600.0,
-                                session_type: "MANUAL".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-            sessions.sort_by(|a, b| a.start.cmp(&b.start));
         }
+        // Second pass: add non-deleted sessions
+        for line in manual_raw.lines() {
+            let line = line.trim().trim_start_matches('\u{FEFF}');
+            if line.is_empty() { continue; }
+            if let Some(c) = line.find(',') {
+                let start = &line[..c];
+                let end   = &line[c+1..];
+                if end == "MANUAL_DELETED" { continue; }
+                if manual_deleted.contains(start) { continue; }
+                if let (Some(sep), Some(eep)) = (ts_to_epoch(start), ts_to_epoch(end)) {
+                    let dur = eep - sep;
+                    if dur > 0 {
+                        sessions.push(Session {
+                            start: start.to_string(),
+                            end: end.to_string(),
+                            duration_hours: dur as f64 / 3600.0,
+                            session_type: "MANUAL".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        sessions.sort_by(|a, b| a.start.cmp(&b.start));
     }
 
-    let ms = t0.elapsed().as_millis();
-    eprintln!("{} parse_sessions #{}: cache MISS — {} events → {} sessions ({:.1}KB)  (+{}ms)",
-        TAG, n, event_count, sessions.len(), kb, ms);
-
-    Ok(sessions)
+    (sessions, event_count)
 }
 
 pub fn get_sessions() -> Result<Vec<Session>, String> {
@@ -821,3 +824,6 @@ pub fn import_csv(csv: String) -> Result<usize, String> {
     eprintln!("{} import_csv: {} sessions added", TAG, added);
     Ok(added)
 }
+
+#[cfg(test)]
+mod events_tests;

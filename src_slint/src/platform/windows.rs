@@ -8,7 +8,7 @@
 //!        二重起動されないようになる。
 //!
 //! 公開 : `get_startup_enabled`, `set_startup`, `create_desktop_shortcut`,
-//!        `ensure_single_instance`
+//!        `ensure_single_instance`, `bring_to_foreground`, `is_foreground`
 
 use std::path::PathBuf;
 
@@ -121,6 +121,28 @@ pub fn bring_to_foreground(window: &slint::Window) {
     #[cfg(not(windows))]
     {
         let _ = window;
+    }
+}
+
+// ウィンドウが現在フォアグラウンド（アクティブ）かどうかを判定する。
+// トレイ復帰・タスクバー復帰・Alt+Tab切り替えなど、経路を問わず「今アクティブか」
+// だけを見たいので、個々の復帰経路をフックするのではなく毎tickポーリングする方式にした。
+pub fn is_foreground(window: &slint::Window) -> bool {
+    #[cfg(windows)] {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+        let slint_handle = window.window_handle();
+        let Ok(handle) = slint_handle.window_handle() else { return false };
+        if let RawWindowHandle::Win32(h) = handle.as_raw() {
+            let hwnd: isize = h.hwnd.into();
+            return unsafe { GetForegroundWindow() } == hwnd;
+        }
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = window;
+        false
     }
 }
 

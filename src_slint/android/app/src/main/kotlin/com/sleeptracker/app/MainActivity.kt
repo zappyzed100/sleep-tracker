@@ -23,6 +23,19 @@ import androidx.work.WorkManager
 // （scratchpad/sync_design_testでの検証・議論を参照）。代わりにUsageReporterが
 // UsageStatsManager由来の実際のアプリ利用区間を送信する。
 class MainActivity : NativeActivity() {
+    companion object {
+        // NativeActivity自体はandroid.app.lib_name（sleep_tracker）をフレームワーク内部で
+        // 直接dlopenするが、これはJavaのSystem.loadLibrary経由ではないため、ART側は
+        // このクラスローダーに対して「ネイティブメソッドの探索先」として登録しない。
+        // そのため下のnativeOnResume()のようなexternal fun宣言は、同じライブラリが
+        // 既にプロセスにロード済みであってもUnsatisfiedLinkErrorになる。
+        // 明示的にSystem.loadLibrary()を呼び直すことでART側にも登録させる
+        // （同じライブラリの二重ロードは安全・無視される）。
+        init {
+            System.loadLibrary("sleep_tracker")
+        }
+    }
+
     private val networkConstraints = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
         .build()
@@ -52,8 +65,9 @@ class MainActivity : NativeActivity() {
         }
     }
 
-    // 起動時／バックグラウンドから画面ONで復帰時／スリープから画面ONで復帰時、
-    // いずれもAndroidはonResume()を呼ぶため、ここ一箇所でDEVICE_ONの即時送信をカバーする。
+    // コールドスタート・タスク切り替えからの復帰・画面ロック解除からの復帰・
+    // 権限設定画面からの帰還など、「人間がアプリの操作を再開した」場合は
+    // 必ずAndroidがonResume()を呼ぶため、ここ一箇所で全経路をカバーする。
     override fun onResume() {
         super.onResume()
         val appCtx = applicationContext
@@ -73,5 +87,13 @@ class MainActivity : NativeActivity() {
         Thread {
             UsageReporter.reportSinceLastCheck(appCtx)
         }.start()
+
+        // Rust側の本同期（Drive/Sheetのpull+merge+push、同期アイコンの回転）を
+        // キックする。画面OFFからの復帰時にRust側が反応せず同期アイコンも
+        // 動かない、という指摘への対応（Rust側は5分ごとの定期タイマーしか
+        // 持っておらず、onResume()相当のイベントを検知できていなかった）。
+        nativeOnResume()
     }
+
+    private external fun nativeOnResume()
 }

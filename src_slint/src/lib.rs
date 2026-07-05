@@ -116,6 +116,22 @@ pub fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
     Ok(HTTP_CLIENT.get().unwrap())
 }
 
+// Drive → ローカルへの同期を1回実行する（別スレッド、完了後にUI再読み込み）。
+// 起動時と、PCがフォアグラウンドに戻った時の両方から呼ばれる共通処理。
+fn drive_sync(weak: slint::Weak<MainWindow>, state: home::SharedState) {
+    ui::sync_status::begin(&weak);
+    std::thread::spawn(move || {
+        cloud::ensure_events_from_drive();
+        let _ = cloud::pull_mobile_events_inner();
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        let weak2 = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak2.upgrade() { home::refresh_all(&w, &state); }
+        });
+        ui::sync_status::end(&weak, Some((format!("✓ 同期完了 ({})", now), "success")));
+    });
+}
+
 pub fn run() {
     // 多重起動防止（デスクトップのみ）。監視スレッド(monitor)もこのプロセス内でしか
     // 動かないため、ここで弾けばアプリ本体・監視の両方が二重起動されなくなる。
@@ -424,20 +440,28 @@ pub fn run() {
     // Drive → ローカルへの起動時同期（別スレッド、完了後にUI再読み込み）。
     // 同期アイコン(sync-in-progress)も手動同期ボタンと同じ見た目で回転させる
     // （起動時に実際に同期しているのにアイコンが動かず不安、という指摘への対応）。
+    drive_sync(window.as_weak(), state.clone());
+
+    // ウィンドウがフォアグラウンドに戻った（=人間が操作を再開した）瞬間にも同期する
+    // （トレイからの復帰・タスクバーからの復帰・他ウィンドウからのAlt+Tab切り替え、
+    // いずれもここで検知できる）。既存の10秒tickに相乗りし、前回tick時との
+    // フォアグラウンド状態の変化だけを見る。起動直後は上のdrive_syncと二重に
+    // 走らないよう、初期値をtrue（=起動時点でフォアグラウンド）にしておく。
+    #[cfg(windows)]
     {
         let weak = window.as_weak();
-        ui::sync_status::begin(&weak);
         let s = state.clone();
-        std::thread::spawn(move || {
-            cloud::ensure_events_from_drive();
-            let _ = cloud::pull_mobile_events_inner();
-            let now = chrono::Local::now().format("%H:%M:%S").to_string();
-            let weak2 = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak2.upgrade() { home::refresh_all(&w, &s); }
-            });
-            ui::sync_status::end(&weak, Some((format!("✓ 同期完了 ({})", now), "success")));
+        let mut was_foreground = true;
+        let fg_timer = slint::Timer::default();
+        fg_timer.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(10), move || {
+            let Some(w) = weak.upgrade() else { return };
+            let is_fg = platform::windows::is_foreground(w.window());
+            if is_fg && !was_foreground {
+                drive_sync(weak.clone(), s.clone());
+            }
+            was_foreground = is_fg;
         });
+        std::mem::forget(fg_timer);
     }
 
     // アイドル監視スレッド（Windowsデスクトップのみ）

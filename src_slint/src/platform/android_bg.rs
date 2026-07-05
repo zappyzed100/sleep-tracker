@@ -11,7 +11,8 @@
 //!        24時間経過していれば取る）。
 //!
 //! 依存 : crate::{events, cloud, home, sync_status}
-//! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`
+//! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`,
+//!        `Java_com_sleeptracker_app_MainActivity_nativeOnResume`（KotlinのActivity#onResume()から呼ばれるJNIエントリポイント）
 
 use crate::ui::home::{self, SharedState};
 use crate::ui::sync_status;
@@ -19,6 +20,7 @@ use crate::core::{cloud, events};
 use crate::MainWindow;
 use slint::ComponentHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
@@ -26,7 +28,13 @@ const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5 * 60
 // （sync-in-progressは他の同期要因とも共有する参照カウントのため、これとは別に持つ）。
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
+// KotlinのActivity#onResume()から呼ばれるJNI関数(nativeOnResume)が同期をキックできる
+// よう、setup()で受け取ったweak/stateをここに保持しておく。
+static HANDLE: OnceLock<(slint::Weak<MainWindow>, SharedState)> = OnceLock::new();
+
 pub fn setup(window: &MainWindow, state: &SharedState) {
+    let _ = HANDLE.set((window.as_weak(), state.clone()));
+
     // 起動時: アプリを開いたことを記録（Tauri版のrecord_device_on相当）
     events::record_device_on();
     // 起動時: 前回から24時間経っていればローカルバックアップを取る
@@ -37,7 +45,7 @@ pub fn setup(window: &MainWindow, state: &SharedState) {
     // 同期されず、同期アイコンも動かないままになる。
     run_sync(window.as_weak(), state.clone());
 
-    // 5分ごとにバックグラウンド同期（アプリが存命中のみ）
+    // 5分ごとにバックグラウンド同期（アプリを開きっぱなしで放置している間の保険）
     let weak = window.as_weak();
     let s = state.clone();
     let timer = slint::Timer::default();
@@ -46,6 +54,22 @@ pub fn setup(window: &MainWindow, state: &SharedState) {
     });
     // Timerをリークして保持する（run()のスコープを抜けても動き続けるように）。
     std::mem::forget(timer);
+}
+
+// Kotlin側 MainActivity.onResume() から呼ばれるJNIエントリポイント。
+// コールドスタート・タスク切り替えからの復帰・画面ロック解除からの復帰・
+// 権限設定画面からの帰還など、「人間がアプリの操作を再開した」あらゆる経路で
+// Androidは必ずActivity#onResume()を呼ぶため、ここ一箇所に同期をフックすれば
+// 全経路をカバーできる（詳細はplatform/README.md参照）。
+// JNIEnv/jclassは使わないため生ポインタで受け、jni crateへの依存を避けている。
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume(
+    _env: *mut std::ffi::c_void,
+    _class: *mut std::ffi::c_void,
+) {
+    if let Some((weak, state)) = HANDLE.get() {
+        run_sync(weak.clone(), state.clone());
+    }
 }
 
 // バックグラウンド同期を1回実行する。同期中は同期アイコン(sync-in-progress)を
