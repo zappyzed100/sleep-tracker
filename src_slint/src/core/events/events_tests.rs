@@ -639,23 +639,27 @@ fn usage_packages_sorted_with_allowed_first_then_by_label() {
     assert_eq!(labels, vec!["Bravo", "Alpha", "Zulu"]);
 }
 
-// 「データを圧縮」で消えた生イベントの伝播はHARD_RESET相当のガードに任せる
-// 一方、USAGE_APP_SEEN/ALLOWED/DENIEDはセッションでないため圧縮対象外とし、
-// そのまま引き継がなければならない（消すとユーザーが設定したON/OFFや
-// 検知履歴が圧縮のたびに失われてしまうため）。
+// 「データを圧縮」はUSAGE_APP_SEEN/ALLOWED/DENIEDと同様、DAY_EXCLUDED/DAY_INCLUDED
+// （各日の計測対象外設定）もセッションでないため圧縮対象外とし、そのまま
+// 引き継がなければならない（消すとユーザーが設定した計測対象外設定や
+// アプリのON/OFF・検知履歴が圧縮のたびに失われてしまうため）。
 #[test]
-fn extract_usage_app_lines_keeps_seen_allowed_denied_and_ignores_sessions() {
+fn extract_preserved_metadata_lines_keeps_usage_and_day_excluded_and_ignores_sessions() {
     let raw = "\
 2024-01-01 00:00:00,IDLE_START
 2024-01-01 08:00:00,IDLE_RESUME
 2024-01-01 09:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
 2024-01-01 09:00:01,USAGE_APP_DENIED:com.android.chrome
 2024-01-01 09:00:02,USAGE_APP_ALLOWED:com.miui.home
+2024-01-01 09:00:03,DAY_EXCLUDED:2024-01-01
+2024-01-01 09:00:04,DAY_INCLUDED:2024-01-02
 ";
-    let lines = extract_usage_app_lines(raw);
-    assert_eq!(lines.len(), 3);
+    let lines = extract_preserved_metadata_lines(raw);
+    assert_eq!(lines.len(), 5);
     assert!(lines.iter().any(|l| l.contains("USAGE_APP_SEEN:com.android.chrome")));
     assert!(lines.iter().any(|l| l.contains("USAGE_APP_DENIED:com.android.chrome")));
     assert!(lines.iter().any(|l| l.contains("USAGE_APP_ALLOWED:com.miui.home")));
+    assert!(lines.iter().any(|l| l.contains("DAY_EXCLUDED:2024-01-01")));
+    assert!(lines.iter().any(|l| l.contains("DAY_INCLUDED:2024-01-02")));
     assert!(!lines.iter().any(|l| l.contains("IDLE_START")));
 }
