@@ -3,7 +3,7 @@
 //! 役割 : 時間・日付の表示用フォーマットと、週間チャート用の DaySummary 構築。
 //!        Tauri版 core/utils.ts の移植。
 //!
-//! 公開 : `format_duration`, `DaySummary`, `week_start`, `build_week`
+//! 公開 : `format_duration`, `DaySummary`, `week_start`, `build_week`, `single_day_summary`
 
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
@@ -79,46 +79,54 @@ pub fn merge_intervals(mut intervals: Vec<(NaiveDateTime, NaiveDateTime)>) -> Ve
     merged
 }
 
+// 指定した1日ぶんのDaySummaryを構築する（build_weekの単日版）。週境界をまたぐ
+// 隣接日（前週の日曜・翌週の月曜）の入眠/起床時刻を取得するためにも使う
+// （週またぎの昼夜逆転が一目で分かるよう、週間チャートの線分を隣の週の
+// 境界日までわずかに伸ばして表示する機能で使用。ui/home.rs::update_chart参照）。
+pub fn single_day_summary(
+    sessions: &[Session],
+    day: NaiveDate,
+    excluded_dates: &std::collections::HashSet<String>,
+) -> DaySummary {
+    // 睡眠1回を丸ごと、開始時刻から導出した「睡眠日」に計上する（分割しない）。
+    let day_sessions: Vec<&Session> = sessions.iter()
+        .filter(|s| parse_local(&s.start).is_some_and(|st| sleep_day(st) == day))
+        .collect();
+    // セッションが1件も無い日（記録0h）でも計測対象外表示ができるよう、
+    // セッション側のexcludedフラグだけでなく、ファイルの除外マーカーも直接見る。
+    let excluded = day_sessions.iter().any(|s| s.excluded)
+        || excluded_dates.contains(&day.format("%Y-%m-%d").to_string());
+
+    let day_intervals: Vec<(NaiveDateTime, NaiveDateTime)> = day_sessions.iter()
+        .filter_map(|s| Some((parse_local(&s.start)?, parse_local(&s.end)?)))
+        .collect();
+
+    if day_intervals.is_empty() {
+        return DaySummary { date: day, total_hours: 0.0, bedtime_h: None, waketime_h: None, excluded };
+    }
+
+    let merged = merge_intervals(day_intervals);
+    let total: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
+    let (bedtime, waketime) = *merged.iter()
+        .max_by(|a, b| (a.1 - a.0).cmp(&(b.1 - b.0)))
+        .unwrap();
+
+    DaySummary {
+        date: day,
+        total_hours: total,
+        bedtime_h: Some(to_night_hour(bedtime)),
+        waketime_h: Some(to_night_hour(waketime)),
+        excluded,
+    }
+}
+
 pub fn build_week(
     sessions: &[Session],
     week_base: NaiveDate,
     excluded_dates: &std::collections::HashSet<String>,
 ) -> Vec<DaySummary> {
     let start = week_start(week_base);
-    (0..7).map(|i| {
-        let day = start + Duration::days(i);
-
-        // 睡眠1回を丸ごと、開始時刻から導出した「睡眠日」に計上する（分割しない）。
-        let day_sessions: Vec<&Session> = sessions.iter()
-            .filter(|s| parse_local(&s.start).is_some_and(|st| sleep_day(st) == day))
-            .collect();
-        // セッションが1件も無い日（記録0h）でも計測対象外表示ができるよう、
-        // セッション側のexcludedフラグだけでなく、ファイルの除外マーカーも直接見る。
-        let excluded = day_sessions.iter().any(|s| s.excluded)
-            || excluded_dates.contains(&day.format("%Y-%m-%d").to_string());
-
-        let day_intervals: Vec<(NaiveDateTime, NaiveDateTime)> = day_sessions.iter()
-            .filter_map(|s| Some((parse_local(&s.start)?, parse_local(&s.end)?)))
-            .collect();
-
-        if day_intervals.is_empty() {
-            return DaySummary { date: day, total_hours: 0.0, bedtime_h: None, waketime_h: None, excluded };
-        }
-
-        let merged = merge_intervals(day_intervals);
-        let total: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
-        let (bedtime, waketime) = *merged.iter()
-            .max_by(|a, b| (a.1 - a.0).cmp(&(b.1 - b.0)))
-            .unwrap();
-
-        DaySummary {
-            date: day,
-            total_hours: total,
-            bedtime_h: Some(to_night_hour(bedtime)),
-            waketime_h: Some(to_night_hour(waketime)),
-            excluded,
-        }
-    }).collect()
+    (0..7).map(|i| single_day_summary(sessions, start + Duration::days(i), excluded_dates)).collect()
 }
 
 #[cfg(test)]
@@ -199,5 +207,31 @@ mod tests {
     fn sleep_day_at_evening_hour_is_unaffected_by_boundary() {
         let dt = NaiveDate::from_ymd_opt(2024, 1, 6).unwrap().and_hms_opt(23, 50, 0).unwrap();
         assert_eq!(sleep_day(dt), NaiveDate::from_ymd_opt(2024, 1, 6).unwrap());
+    }
+
+    // 週境界（日曜→月曜）をまたぐ昼夜逆転を一目で分かるようにする機能
+    // （ui/home.rs::update_chart）は、週の範囲外の隣接日をsingle_day_summaryで
+    // 個別に取得する。build_weekが返す同じ日と一致することを確認する。
+    #[test]
+    fn single_day_summary_matches_build_week_for_same_date() {
+        let sessions = vec![session("2024-01-07 23:00:00", "2024-01-08 07:00:00", false)];
+        let empty = std::collections::HashSet::new();
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let sunday = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 7).unwrap()).unwrap();
+
+        let single = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 7).unwrap(), &empty);
+        assert_eq!(single.total_hours, sunday.total_hours);
+        assert_eq!(single.bedtime_h, sunday.bedtime_h);
+        assert_eq!(single.waketime_h, sunday.waketime_h);
+    }
+
+    #[test]
+    fn single_day_summary_returns_none_bedtime_for_day_with_no_sessions() {
+        let sessions: Vec<Session> = vec![];
+        let empty = std::collections::HashSet::new();
+        let summary = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(), &empty);
+        assert!(summary.bedtime_h.is_none());
+        assert!(summary.waketime_h.is_none());
+        assert_eq!(summary.total_hours, 0.0);
     }
 }

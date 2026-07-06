@@ -765,6 +765,10 @@ component WeeklyChart {
     }
 
     // frac は (idx + 0.5) / 7 の形の「列位置」（0.0〜1.0、連続値も取りうる）。
+    // 週境界をまたぐスタブ線分（frac<0 または >1）は、Rust側のbuild_curveで
+    // 既にx=0.0〜1.0にクランプ済みなので、ここでは特別な扱いは不要
+    // （以前はSlintのclip:trueでクリップしていたが、Android実機のレンダリング
+    // バックエンドで効かないことが判明したため、Rust側でのクランプに一本化した）。
     function curve-px-x(frac: float) -> float {
         root.axis-l-px + (frac * 7 - 0.5) * (root.col-w-px + root.col-spacing-px) + root.col-w-px / 2
     }
