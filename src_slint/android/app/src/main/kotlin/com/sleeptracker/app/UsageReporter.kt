@@ -95,29 +95,47 @@ object UsageReporter {
 
     // UsageEvents から「何らかのアプリがフォアグラウンドにあった区間」を再構成する。
     // どのアプリかは問わない（読書アプリでも動画アプリでも同じ扱い）。
+    //
+    // 数秒単位で不自然に連続するAPP_USAGE区間が実機で観測された（睡眠中にタブレットに
+    // 触れていないはずの時間帯に記録される）ため、原因特定用にパッケージ名を全件
+    // logcatへ出す。次回同じ現象が起きた際、`adb logcat | grep "\[app\]"` で
+    // 何が反応しているか（システムUI・通知・特定アプリ等）を特定できるようにするため
+    // （フィルタ・除外ルールはこのログで原因が分かってから追加する）。
     private fun queryForegroundIntervals(context: Context, from: Long, to: Long): List<Pair<Long, Long>> {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val events = usm.queryEvents(from, to)
         val intervals = mutableListOf<Pair<Long, Long>>()
         var pendingStart: Long? = null
+        var pendingPkg: String? = null
         val event = UsageEvents.Event()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             when (event.eventType) {
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {
-                    if (pendingStart == null) pendingStart = event.timeStamp
+                    Log.i(TAG, "[app] queryForegroundIntervals: FOREGROUND pkg=${event.packageName} ts=${event.timeStamp}")
+                    if (pendingStart == null) {
+                        pendingStart = event.timeStamp
+                        pendingPkg = event.packageName
+                    }
                 }
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                    Log.i(TAG, "[app] queryForegroundIntervals: BACKGROUND pkg=${event.packageName} ts=${event.timeStamp}")
                     val s = pendingStart
                     if (s != null) {
+                        val durationSec = (event.timeStamp - s) / 1000
+                        Log.i(TAG, "[app] queryForegroundIntervals: interval pkg=$pendingPkg ${durationSec}s")
                         intervals.add(s to event.timeStamp)
                         pendingStart = null
+                        pendingPkg = null
                     }
                 }
             }
         }
         // 問い合わせ時点でまだ何かがフォアグラウンドにある場合は now で一旦区切る。
-        pendingStart?.let { intervals.add(it to to) }
+        pendingStart?.let {
+            Log.i(TAG, "[app] queryForegroundIntervals: still-open pkg=$pendingPkg at query time")
+            intervals.add(it to to)
+        }
         return intervals
     }
 
