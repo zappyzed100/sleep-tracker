@@ -621,3 +621,41 @@ fn usage_package_last_marker_wins_regardless_of_file_order() {
     let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
     assert!(!chrome.allowed, "10:00のDENIEDが09:00のALLOWEDより新しいので勝つ");
 }
+
+// 一覧が長くなっても、チェック済み（睡眠判定に使う）アプリが表示件数制限の
+// 下の方に埋もれないよう、チェック済みを先頭に配置する。
+#[test]
+fn usage_packages_sorted_with_allowed_first_then_by_label() {
+    let raw = "\
+2024-01-01 00:00:00,USAGE_APP_SEEN:com.b|Bravo
+2024-01-01 00:00:01,USAGE_APP_SEEN:com.a|Alpha
+2024-01-01 00:00:02,USAGE_APP_SEEN:com.z|Zulu
+2024-01-01 00:00:03,USAGE_APP_DENIED:com.a
+2024-01-01 00:00:04,USAGE_APP_DENIED:com.z
+";
+    let list = usage_packages_from_content(raw);
+    let labels: Vec<&str> = list.iter().map(|e| e.label.as_str()).collect();
+    // Bravoだけallowed（既定でON）、Alpha/Zuluは明示的にDENIED。
+    assert_eq!(labels, vec!["Bravo", "Alpha", "Zulu"]);
+}
+
+// 「データを圧縮」で消えた生イベントの伝播はHARD_RESET相当のガードに任せる
+// 一方、USAGE_APP_SEEN/ALLOWED/DENIEDはセッションでないため圧縮対象外とし、
+// そのまま引き継がなければならない（消すとユーザーが設定したON/OFFや
+// 検知履歴が圧縮のたびに失われてしまうため）。
+#[test]
+fn extract_usage_app_lines_keeps_seen_allowed_denied_and_ignores_sessions() {
+    let raw = "\
+2024-01-01 00:00:00,IDLE_START
+2024-01-01 08:00:00,IDLE_RESUME
+2024-01-01 09:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
+2024-01-01 09:00:01,USAGE_APP_DENIED:com.android.chrome
+2024-01-01 09:00:02,USAGE_APP_ALLOWED:com.miui.home
+";
+    let lines = extract_usage_app_lines(raw);
+    assert_eq!(lines.len(), 3);
+    assert!(lines.iter().any(|l| l.contains("USAGE_APP_SEEN:com.android.chrome")));
+    assert!(lines.iter().any(|l| l.contains("USAGE_APP_DENIED:com.android.chrome")));
+    assert!(lines.iter().any(|l| l.contains("USAGE_APP_ALLOWED:com.miui.home")));
+    assert!(!lines.iter().any(|l| l.contains("IDLE_START")));
+}

@@ -189,8 +189,10 @@ fn usage_packages_from_content(content: &str) -> Vec<UsagePackageEntry> {
             UsagePackageEntry { package: pkg, label, allowed }
         })
         .collect();
-    // パッケージ名より読みやすいアプリ名（表示名）でソートする。
-    result.sort_by(|a, b| a.label.cmp(&b.label));
+    // チェック済み（睡眠判定に使う）ものを先頭に、それぞれの中ではアプリ名で
+    // ソートする。一覧が長くなっても、使う設定にしたアプリが表示件数制限で
+    // 埋もれないようにするため。
+    result.sort_by(|a, b| (!a.allowed, &a.label).cmp(&(!b.allowed, &b.label)));
     result
 }
 
@@ -925,6 +927,18 @@ pub fn current_sleep_start() -> Option<String> {
     open_idle
 }
 
+// 生の内容からUSAGE_APP_SEEN/ALLOWED/DENIED行だけを抜き出す（compact_data参照）。
+fn extract_usage_app_lines(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(|l| l.trim_end_matches('\r').trim().trim_start_matches('\u{FEFF}'))
+        .filter(|l| {
+            let Some((_, tag)) = l.split_once(',') else { return false };
+            tag.starts_with("USAGE_APP_SEEN:") || tag.starts_with("USAGE_APP_ALLOWED:") || tag.starts_with("USAGE_APP_DENIED:")
+        })
+        .map(|l| l.to_string())
+        .collect()
+}
+
 // sleep_events.txt / sleep_manual.txt を、実際にセッションとしてパースされている
 // 内容だけの最小構成に作り直す（不要な生イベント・削除済みマーカーなどを一掃する）。
 // 手順：一度セッションリストを構築し、それをIDLE_START/IDLE_RESUMEペアとして再構築する
@@ -941,7 +955,12 @@ pub fn compact_data() -> Result<String, String> {
     let raw = std::fs::read_to_string(&events_path).unwrap_or_default();
     let (open_idle, open_out) = detect_open_idle_and_out(&raw);
 
-    let mut lines: Vec<String> = Vec::with_capacity(sessions.len() * 2 + 2);
+    // 「睡眠判定に使うアプリ」の検知履歴・ON/OFF設定（USAGE_APP_SEEN/ALLOWED/DENIED）は
+    // セッションではないため圧縮対象外とし、そのまま引き継ぐ（消すとユーザーが設定した
+    // ON/OFFや検知履歴が圧縮のたびに失われてしまうため）。
+    let usage_lines = extract_usage_app_lines(&raw);
+
+    let mut lines: Vec<String> = Vec::with_capacity(sessions.len() * 2 + 2 + usage_lines.len());
     for s in &sessions {
         lines.push(format!("{},IDLE_START", s.start));
         lines.push(format!("{},IDLE_RESUME", s.end));
@@ -952,6 +971,7 @@ pub fn compact_data() -> Result<String, String> {
     if let Some(ts) = open_out {
         lines.push(format!("{},OUT_START", ts));
     }
+    lines.extend(usage_lines);
     lines.sort();
     let content = lines.join("\n") + "\n";
     // 圧縮でsleep_manual.txtの内容はsleep_events.txt側に統合済みのため空にする。
