@@ -32,6 +32,7 @@ src_slint/data/device_heartbeat.txt
 src_slint/data/sleep_heartbeat.txt
 src_slint/data/monitor.pid
 src_slint/data/monitor_paused
+src_slint/data/sync_paused
 src_slint/data/generation.txt
 
 # PC版のローカル自動バックアップ（日次、直近10世代。個人データを含むため追跡対象外）
