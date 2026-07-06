@@ -3,24 +3,37 @@ package com.sleeptracker.app
 import android.app.Activity
 import android.app.NativeActivity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 // android-activity（Slintのbackend-android-activity）はNativeActivityそのままでも動くが、
 // nativeOnResume()のJNI呼び出しを行うためカスタムサブクラスにしている。
 //
-// 旧: 15分ごとの定期バックグラウンド送信（PeriodicWorkRequestBuilder）、および
-// アプリを開くたびのDEVICE_ON即時送信（DriveSignalWorker）はどちらも廃止した。
+// 旧: アプリを開くたびのDEVICE_ON即時送信（DriveSignalWorker）は廃止した。
 // 「タブレットの電源が入っているか」しか分からず「実際に使っていたか」の証拠に
 // ならないため、睡眠判定の材料としては信頼できないと判断した
 // （scratchpad/sync_design_testでの検証・議論、および実際にDEVICE_ONが
 // 睡眠セッションを誤って短く打ち切るバグを引き起こした件を参照）。
 // 代わりにUsageReporterがUsageStatsManager由来の実際のアプリ利用区間を送信する。
+//
+// 15分ごとの定期バックグラウンド送信（PeriodicWorkRequestBuilder）は上記の理由で
+// 一度廃止したが、今回はDEVICE_ON送信としてではなく「Drive同期をキックするだけ」の
+// 目的でsetupPeriodicSync()として復活させている（睡眠判定用のイベントは書き込まない）。
+// SyncService.ktのHandlerタイマーが画面OFF中に発火しないことが実機検証で判明した
+// ため、OSに正式スケジュールを委任するWorkManagerに置き換えた。
 class MainActivity : NativeActivity() {
     companion object {
         // NativeActivity自体はandroid.app.lib_name（sleep_tracker）をフレームワーク内部で
@@ -35,13 +48,53 @@ class MainActivity : NativeActivity() {
         }
 
         private const val REQUEST_RESTORE_FILE = 1001
+        private const val REQUEST_NOTIFICATION_PERMISSION = 1002
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         requestIgnoreBatteryOptimizations()
+        requestNotificationPermission()
         UsageReporter.requestUsageAccess(this)
+        startSyncService()
+        setupPeriodicSync()
+    }
+
+    // WorkManagerに15分間隔でのDrive同期を委任する（SyncWorker.kt参照）。
+    // PeriodicWorkRequestの最短間隔は15分固定（OS側の制約）。ExistingPeriodicWorkPolicy.KEEP
+    // により、アプリ再起動のたびに呼んでも既存のスケジュールが重複登録されない。
+    private fun setupPeriodicSync() {
+        val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "drive_sync",
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
+    }
+
+    // 画面OFF中も動き続けるSyncService（常駐フォアグラウンドサービス）を起動する。
+    // 既に起動中でも同じIntentでの再startServiceは安全（onStartCommandが再実行されるだけ）。
+    private fun startSyncService() {
+        val intent = Intent(this, SyncService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    // Android 13+では通知の表示にランタイム権限が必要。拒否されてもSyncService自体は
+    // 動作する（通知が非表示になるだけ）ため、拒否時の特別なハンドリングは不要。
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+            == PackageManager.PERMISSION_GRANTED) return
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_NOTIFICATION_PERMISSION
+        )
     }
 
     // Dozeモード（画面OFF・静止状態が続くと入る省電力モード）に入ると、WorkManagerの

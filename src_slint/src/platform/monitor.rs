@@ -266,6 +266,22 @@ fn run(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: im
                 // Gap with no session: treat as untracked power-loss sleep
                 // (detected later via heartbeat during parse)
             }
+            // サスペンド中はネットワーク（Wi-Fi省電力切断等）も止まっていた可能性が
+            // 高いため、IDLE_RESUMEと同様に復帰直後もpull/pushする。これが無いと
+            // サスペンド経由の復帰では次の周期push（最大60秒後）まで同期されない。
+            if !crate::core::cloud::is_sync_paused() {
+                let ep = events_path.clone();
+                let w = weak.clone();
+                sync_status::begin(&w);
+                thread::spawn(move || {
+                    let msg = crate::core::cloud::pull_mobile_events_inner();
+                    eprintln!("{} RESUME pull: {}", TAG, msg);
+                    *crate::core::events::SESSION_CACHE.lock().unwrap() = None;
+                    crate::core::cloud::auto_backup_after_event(&ep);
+                    sync_status::end(&w, None);
+                });
+            }
+            on_session_recorded();
         }
         last_tick = now;
 

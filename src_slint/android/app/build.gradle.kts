@@ -40,4 +40,6 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    // 画面OFF中もOSに周期同期をスケジュールしてもらうため（SyncWorker.kt参照）。
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

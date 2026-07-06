@@ -100,6 +100,21 @@ pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume<'ca
     }
 }
 
+// Kotlin側 SyncWorker（WorkManagerが15分おきにOS保証付きでスケジュールするWorker）
+// から呼ばれるJNIエントリポイント。setup()のslint::Timer、およびSyncServiceの
+// Handlerタイマー（廃止済み、SyncService.kt参照）はいずれもアプリがフォアグラウンドの
+// 間しか動かないため、画面OFF中の同期はこちらが担う。
+// 同期処理そのものはnativeOnResumeと同じrun_syncを再利用する。
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_sleeptracker_app_SyncWorker_nativeBackgroundSync<'caller>(
+    _unowned_env: jni::EnvUnowned<'caller>,
+    _this: JObject<'caller>,
+) {
+    if let Some((weak, state)) = HANDLE.get() {
+        run_sync(weak.clone(), state.clone());
+    }
+}
+
 // UsageReporter（Kotlin）が使用区間のスキャンを終えるたびに呼ぶ。新規検知した
 // パッケージ（睡眠判定に使うアプリ一覧）が設定画面に反映されるようにするための
 // 再読み込みで、run_syncと違い「同期を停止」中でも動く必要がある
