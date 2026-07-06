@@ -9,6 +9,31 @@
 //   5. Copy the deployment URL into the sleep tracker app settings
 
 const SECRET = PropertiesService.getScriptProperties().getProperty("SECRET");
+const GENERATION_PROP = "GENERATION";
+
+// クラウドの「世代番号」を排他制御しながら1つ進めて返す。
+// 「クラウドも含めて全データ削除」「データを圧縮」等、ローカルの通常マージでは
+// 対応しきれない全体リセット系の操作でのみ呼ぶ。LockServiceにより、2台の端末が
+// ほぼ同時に呼んでも同じ番号が重複して払い出されることはない
+// （番号を各端末が自己申告すると、オフライン時に両方が独立に同じ番号を
+// 採番して衝突する問題があったため、ここで一元管理する）。
+function advanceGeneration() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const next = (parseInt(props.getProperty(GENERATION_PROP) || "0", 10)) + 1;
+    props.setProperty(GENERATION_PROP, String(next));
+    return next;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getGeneration() {
+  const props = PropertiesService.getScriptProperties();
+  return parseInt(props.getProperty(GENERATION_PROP) || "0", 10);
+}
 
 function getBackupFolder() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -125,6 +150,10 @@ function doPost(e) {
   // ローカルファイルの削除はアプリ側（PC）で別途行う。
   if (e.parameter.action === "clear_all") {
     try {
+      // 世代番号を先に確定させてから削除する（削除内容のpushが後で失敗しても、
+      // 世代だけは進んだ状態になるため、他端末は次回同期時に必ず「自分は
+      // 遅れている」と気づける）。
+      const newGen = advanceGeneration();
       const folder = getBackupFolder();
       for (const fileName of ["sleep_events_backup.txt", "sleep_manual_backup.txt"]) {
         const files = folder.getFilesByName(fileName);
@@ -137,7 +166,7 @@ function doPost(e) {
       if (lastRow > 1) {
         sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
       }
-      return ContentService.createTextOutput("ok");
+      return ContentService.createTextOutput(String(newGen));
     } catch (err) {
       Logger.log("[clear_all] ERROR: " + err.message);
       return ContentService.createTextOutput("error: " + err.message);
@@ -177,6 +206,13 @@ function doGet(e) {
   // Health check (used by the desktop app's connection test)
   if (e.parameter.action === "health") {
     return ContentService.createTextOutput("ok");
+  }
+
+  // 世代番号取得: 「クラウドも含めて全データ削除」「データを圧縮」が
+  // もう一方の端末で実行されたかどうかを判定するための、唯一の権威ある
+  // カウンタ（advanceGeneration経由でのみ進む）。
+  if (e.parameter.action === "get_generation") {
+    return ContentService.createTextOutput(String(getGeneration())).setMimeType(ContentService.MimeType.TEXT);
   }
 
   // Sync settings: Android reads PC-pushed settings

@@ -1,8 +1,8 @@
 //! cloud_tests.rs — cloud.rs のテスト専用サブモジュール
 //!
 //! 役割 : merge_into_local（Drive⇔ローカルのマージ）とHARD_RESETマーカー
-//!        （events::HARD_RESET_TAG）による上書き系操作の伝播ロジックの単体テスト。
-//!        `#[cfg(test)]` のみでビルドされる。
+//!        （events::HARD_RESET_TAG）、および世代番号ベースのmerge_or_adopt_atによる
+//!        上書き系操作の伝播ロジックの単体テスト。`#[cfg(test)]` のみでビルドされる。
 //!
 //! 依存 : なし（`super::*` で親モジュール cloud.rs の非公開関数を参照するのみ）
 
@@ -81,4 +81,56 @@ fn merge_into_local_without_reset_keeps_all_local_lines() {
     assert!(content.contains("2024-01-01 00:00:00,IDLE_START"));
     assert!(content.contains("2024-01-02 00:00:00,IDLE_START"));
     let _ = std::fs::remove_file(&path);
+}
+
+// クラウドの世代がローカルより新しければ、HARD_RESETマーカーが無くても
+// ローカル未同期分を丸ごと破棄してDrive内容を採用しなければならない
+// （2端末がオフライン気味の状態でほぼ同時に「全データ削除」した場合の対策）。
+#[test]
+fn merge_or_adopt_discards_local_when_cloud_generation_ahead() {
+    let path = temp_path("gen_adopt_data");
+    let gen_path = temp_path("gen_adopt_gen");
+    std::fs::write(&path, "2024-01-05 00:00:00,IDLE_START\n").unwrap();
+    write_generation_at(&gen_path, 1);
+    let drive_content = "";
+    let changed = merge_or_adopt_at(&path, drive_content, Some(2), &gen_path);
+    assert!(changed);
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(!content.contains("IDLE_START"), "古い世代のローカル専用行が復活してはいけない");
+    assert_eq!(read_generation_at(&gen_path), 2, "ローカルの世代番号がクラウドに追従すること");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&gen_path);
+}
+
+// 世代が同じ（=リセットは起きていない）なら、これまで通り通常のunionマージに任せること。
+#[test]
+fn merge_or_adopt_uses_normal_merge_when_generation_unchanged() {
+    let path = temp_path("gen_same_data");
+    let gen_path = temp_path("gen_same_gen");
+    std::fs::write(&path, "2024-01-05 00:00:00,IDLE_START\n").unwrap();
+    write_generation_at(&gen_path, 3);
+    let drive_content = "2024-01-06 00:00:00,IDLE_START\n";
+    merge_or_adopt_at(&path, drive_content, Some(3), &gen_path);
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("2024-01-05 00:00:00,IDLE_START"), "世代が同じならローカル専用行は残るべき");
+    assert!(content.contains("2024-01-06 00:00:00,IDLE_START"));
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&gen_path);
+}
+
+// 世代番号の取得に失敗した場合（オフライン等）は、世代ゲートを素通りさせて
+// HARD_RESETマーカーベースの通常マージに任せること。
+#[test]
+fn merge_or_adopt_falls_back_to_normal_merge_when_generation_unavailable() {
+    let path = temp_path("gen_none_data");
+    let gen_path = temp_path("gen_none_gen");
+    std::fs::write(&path, "2024-01-05 00:00:00,IDLE_START\n").unwrap();
+    write_generation_at(&gen_path, 5);
+    let drive_content = "2024-01-06 00:00:00,IDLE_START\n";
+    merge_or_adopt_at(&path, drive_content, None, &gen_path);
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("2024-01-05 00:00:00,IDLE_START"));
+    assert!(content.contains("2024-01-06 00:00:00,IDLE_START"));
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&gen_path);
 }

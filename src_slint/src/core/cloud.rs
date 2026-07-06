@@ -6,6 +6,10 @@
 //!        `#[tauri::command] async fn` + `spawn_blocking` は同期関数に変更し、
 //!        UIスレッドをブロックしないための非同期呼び出しは呼び出し側（main.rs）の
 //!        std::thread::spawn に任せる。
+//!        HARD_RESETマーカー（行単位・時刻ベース）に加え、GAS側がLockServiceで
+//!        排他的に払い出す「世代番号」（worker/appsscript.gs参照）でも全体リセット系
+//!        操作の伝播をガードする。時計のズレやオフライン時の同時操作による衝突を
+//!        防ぐのが目的（詳細はmerge_or_adopt/generation_unchanged_sinceのコメント参照）。
 //!
 //! 依存 : crate::data_dir, crate::http_client, config::load_config_inner,
 //!        events::apply_mobile_event_line, events::sort_events_file,
@@ -54,6 +58,75 @@ pub fn set_sync_paused(paused: bool) -> Result<(), String> {
     }
     eprintln!("{} set_sync_paused: {}", TAG, paused);
     Ok(())
+}
+
+// クラウドの「世代番号」（GAS側でLockServiceにより排他的に払い出される、
+// 「クラウドも含めて全データ削除」「データを圧縮」のたびに1つ進むカウンタ）に
+// 関する処理。タイムスタンプ比較のHARD_RESETマーカーだけだと、2端末の時計が
+// ズレている場合や、2端末がオフライン気味の状態でほぼ同時に削除操作をした場合に
+// 正しく判定できないケースがあったため、それを補う目的で追加する
+// （HARD_RESETマーカー自体は引き続き行単位のフィルタとして併用する）。
+fn local_generation_path() -> std::path::PathBuf {
+    crate::data_dir().join("generation.txt")
+}
+
+// パスを引数に取る形にして、テストが実データのgeneration.txtに触れず
+// 一時ファイルで検証できるようにする（merge_into_localの`path`引数と同じ考え方）。
+fn read_generation_at(path: &std::path::Path) -> u64 {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn write_generation_at(path: &std::path::Path, gen: u64) {
+    let _ = std::fs::write(path, gen.to_string());
+}
+
+fn local_generation() -> u64 { read_generation_at(&local_generation_path()) }
+fn save_local_generation(gen: u64) { write_generation_at(&local_generation_path(), gen) }
+
+// クラウドの現在の世代番号を取得する。取得失敗時（オフライン等）はNoneを返し、
+// 呼び出し側は世代ゲートを素通りさせてHARD_RESETマーカーによる従来のフィルタに任せる。
+fn fetch_cloud_generation(base_url: &str, secret: &str) -> Option<u64> {
+    let url = format!("{}?secret={}&action=get_generation", base_url.trim_end_matches('/'), secret);
+    let resp = crate::http_client().ok()?.get(&url).send().ok()?;
+    if !resp.status().is_success() { return None; }
+    resp.text().ok()?.trim().parse().ok()
+}
+
+// クラウドの世代がローカルより新しければ、Driveの内容を通常マージせず丸ごと
+// 採用する（この端末が「全削除/圧縮」を知らない間にもう一方の端末がそれを
+// 実行した場合、ローカル未同期分を破棄してクラウド側を正とする）。世代が
+// 同じ・取得失敗時は、これまで通りHARD_RESETマーカーベースのmerge_into_localに任せる。
+fn merge_or_adopt_at(path: &std::path::Path, drive_content: &str, cloud_gen: Option<u64>, gen_path: &std::path::Path) -> bool {
+    if let Some(cg) = cloud_gen {
+        let lg = read_generation_at(gen_path);
+        if cg > lg {
+            eprintln!("{} merge_or_adopt: cloud generation ahead (local={} cloud={}) — adopting Drive content wholesale ({:?})", TAG, lg, cg, path.file_name());
+            let _ = std::fs::write(path, drive_content);
+            write_generation_at(gen_path, cg);
+            return true;
+        }
+    }
+    merge_into_local(path, drive_content)
+}
+
+fn merge_or_adopt(path: &std::path::Path, drive_content: &str, cloud_gen: Option<u64>) -> bool {
+    merge_or_adopt_at(path, drive_content, cloud_gen, &local_generation_path())
+}
+
+// push直前にクラウドの世代が変わっていないか再確認する。変わっていれば、
+// pull時に見た内容を基にした今回のマージ結果は既に古くなっている可能性があるため
+// pushを見送る（false）。次の同期サイクルで新しい世代を検知し、やり直しがきく。
+fn generation_unchanged_since(base_url: &str, secret: &str, observed_gen: Option<u64>) -> bool {
+    match (observed_gen, fetch_cloud_generation(base_url, secret)) {
+        (Some(old), Some(now)) if now > old => {
+            eprintln!("{} generation_unchanged_since: cloud generation advanced ({} → {}) mid-sync — skip push this cycle", TAG, old, now);
+            false
+        }
+        _ => true,
+    }
 }
 
 pub fn pull_mobile_events_inner() -> String {
@@ -188,6 +261,16 @@ pub fn clear_cloud_data() -> Result<(), String> {
         .send()
         .map_err(|e| format!("送信失敗: {}", e))?;
     if resp.status().is_success() {
+        // action=clear_all は新しい世代番号を返す（GAS側でLockServiceにより排他的に
+        // 払い出される）。ここで確定させ、以後のpushをこの端末が「最新」として行える
+        // ようにする。
+        if let Ok(body) = resp.text() {
+            if let Ok(new_gen) = body.trim().parse::<u64>() {
+                save_local_generation(new_gen);
+                eprintln!("{} clear_cloud_data: done (generation={})", TAG, new_gen);
+                return Ok(());
+            }
+        }
         eprintln!("{} clear_cloud_data: done", TAG);
         Ok(())
     } else {
@@ -385,18 +468,19 @@ pub fn sync_gist() -> Result<String, String> {
     } else { None };
 
     // 0. Drive → local merge (sleep_events.txt and sleep_manual.txt)
+    let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
     if let Some((ref u, ref s)) = url_secret {
         if let Some(drive_content) = fetch_drive_events(u, s) {
             let kb = drive_content.len() as f64 / 1024.0;
             eprintln!("{} sync_gist #{}: {:.1}KB events from Drive", TAG, n, kb);
-            if merge_into_local(&events_path, &drive_content) {
+            if merge_or_adopt(&events_path, &drive_content, cloud_gen) {
                 *SESSION_CACHE.lock().unwrap() = None;
             }
         }
         if let Some(drive_manual) = fetch_drive_manual(u, s) {
             let kb = drive_manual.len() as f64 / 1024.0;
             eprintln!("{} sync_gist #{}: {:.1}KB manual from Drive", TAG, n, kb);
-            if merge_into_local(&manual_path, &drive_manual) {
+            if merge_or_adopt(&manual_path, &drive_manual, cloud_gen) {
                 *SESSION_CACHE.lock().unwrap() = None;
             }
             let _ = sort_manual_file(&manual_path);
@@ -411,18 +495,26 @@ pub fn sync_gist() -> Result<String, String> {
         let _ = sort_events_file(&events_path);
     }
 
-    // 3. Read updated sleep_events.txt
-    let content = if events_path.exists() {
-        std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?
+    // 3. push直前に世代が変わっていないか再確認する。pull時点より進んでいたら、
+    // このマージ結果は既に古くなっている可能性があるためpushを見送る。
+    let should_push = url_secret.as_ref()
+        .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
+        .unwrap_or(true);
+    let drive_msg = if should_push {
+        // Read updated sleep_events.txt and upload both files to Drive (local → Drive)
+        let content = if events_path.exists() {
+            std::fs::read_to_string(&events_path).map_err(|e| e.to_string())?
+        } else {
+            String::new()
+        };
+        let drive_msg = backup_to_drive(&content);
+        if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
+            let _ = backup_manual_to_drive(&manual_content);
+        }
+        drive_msg
     } else {
-        String::new()
+        "スキップ (クラウドが更新済み)".into()
     };
-
-    // 4. Upload both files to Drive (local → Drive)
-    let drive_msg = backup_to_drive(&content);
-    if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
-        let _ = backup_manual_to_drive(&manual_content);
-    }
 
     let ms = t0.elapsed().as_millis();
     eprintln!("{} sync_gist #{}: done  (+{}ms)", TAG, n, ms);
@@ -447,7 +539,8 @@ pub fn ensure_events_from_drive() {
     match fetch_drive_events(&base_url, &secret) {
         Some(drive_content) => {
             let kb = drive_content.len() as f64 / 1024.0;
-            merge_into_local(&path, &drive_content);
+            let cloud_gen = fetch_cloud_generation(&base_url, &secret);
+            merge_or_adopt(&path, &drive_content, cloud_gen);
             eprintln!("{} ensure_events_from_drive: {:.1}KB  (+{}ms)", TAG, kb, t0.elapsed().as_millis());
         }
         None => {
@@ -462,19 +555,28 @@ pub fn ensure_events_from_drive() {
 pub fn auto_backup_after_event(events_path: &std::path::Path) {
     // 1. Driveからマージ（他デバイスのイベントを取り込む）
     let cfg = load_config_inner();
-    if let (Some(u), Some(s)) = (cfg.mobile_url.clone(), cfg.mobile_secret.clone()) {
-        if !u.is_empty() && !s.is_empty() {
-            if let Some(drive_content) = fetch_drive_events(&u, &s) {
-                if merge_into_local(events_path, &drive_content) {
-                    *SESSION_CACHE.lock().unwrap() = None;
-                }
+    let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url.clone(), cfg.mobile_secret.clone()) {
+        if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
+    } else { None };
+    let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
+    if let Some((ref u, ref s)) = url_secret {
+        if let Some(drive_content) = fetch_drive_events(u, s) {
+            if merge_or_adopt(events_path, &drive_content, cloud_gen) {
+                *SESSION_CACHE.lock().unwrap() = None;
             }
         }
     }
-    // 2. マージ済みのローカルファイルをDriveにpush
-    if let Ok(content) = std::fs::read_to_string(events_path) {
-        let msg = backup_to_drive(&content);
-        eprintln!("{} auto_backup: {}", TAG, msg);
+    // 2. push直前に世代が変わっていないか再確認してからDriveにpush
+    let should_push = url_secret.as_ref()
+        .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
+        .unwrap_or(true);
+    if should_push {
+        if let Ok(content) = std::fs::read_to_string(events_path) {
+            let msg = backup_to_drive(&content);
+            eprintln!("{} auto_backup: {}", TAG, msg);
+        }
+    } else {
+        eprintln!("{} auto_backup: skip upload (cloud generation advanced mid-sync)", TAG);
     }
 }
 
@@ -510,23 +612,25 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
 
     // 2. Drive → local merge (sleep_events.txt and sleep_manual.txt)
     let cfg = load_config_inner();
-    if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
-        if !u.is_empty() && !s.is_empty() {
-            if let Some(drive_content) = fetch_drive_events(&u, &s) {
-                let kb = drive_content.len() as f64 / 1024.0;
-                eprintln!("{} sync_mobile_inner #{}: {:.1}KB events from Drive", TAG, n, kb);
-                if merge_into_local(&events_path, &drive_content) {
-                    *SESSION_CACHE.lock().unwrap() = None;
-                }
+    let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
+        if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
+    } else { None };
+    let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
+    if let Some((ref u, ref s)) = url_secret {
+        if let Some(drive_content) = fetch_drive_events(u, s) {
+            let kb = drive_content.len() as f64 / 1024.0;
+            eprintln!("{} sync_mobile_inner #{}: {:.1}KB events from Drive", TAG, n, kb);
+            if merge_or_adopt(&events_path, &drive_content, cloud_gen) {
+                *SESSION_CACHE.lock().unwrap() = None;
             }
-            if let Some(drive_manual) = fetch_drive_manual(&u, &s) {
-                let kb = drive_manual.len() as f64 / 1024.0;
-                eprintln!("{} sync_mobile_inner #{}: {:.1}KB manual from Drive", TAG, n, kb);
-                if merge_into_local(&manual_path, &drive_manual) {
-                    *SESSION_CACHE.lock().unwrap() = None;
-                }
-                let _ = sort_manual_file(&manual_path);
+        }
+        if let Some(drive_manual) = fetch_drive_manual(u, s) {
+            let kb = drive_manual.len() as f64 / 1024.0;
+            eprintln!("{} sync_mobile_inner #{}: {:.1}KB manual from Drive", TAG, n, kb);
+            if merge_or_adopt(&manual_path, &drive_manual, cloud_gen) {
+                *SESSION_CACHE.lock().unwrap() = None;
             }
+            let _ = sort_manual_file(&manual_path);
         }
     }
 
@@ -538,14 +642,22 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         let _ = sort_events_file(&events_path);
     }
 
-    // 5. Upload both files to Drive (local → Drive)
-    if let Ok(content) = std::fs::read_to_string(&events_path) {
-        let drive_msg = backup_to_drive(&content);
-        eprintln!("{} sync_mobile_inner #{}: upload events: {}", TAG, n, drive_msg);
-    }
-    if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
-        let manual_msg = backup_manual_to_drive(&manual_content);
-        eprintln!("{} sync_mobile_inner #{}: upload manual: {}", TAG, n, manual_msg);
+    // 5. push直前に世代が変わっていないか再確認する。pull時点より進んでいたら、
+    // このマージ結果は既に古くなっている可能性があるためpushを見送る。
+    let should_push = url_secret.as_ref()
+        .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
+        .unwrap_or(true);
+    if should_push {
+        if let Ok(content) = std::fs::read_to_string(&events_path) {
+            let drive_msg = backup_to_drive(&content);
+            eprintln!("{} sync_mobile_inner #{}: upload events: {}", TAG, n, drive_msg);
+        }
+        if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
+            let manual_msg = backup_manual_to_drive(&manual_content);
+            eprintln!("{} sync_mobile_inner #{}: upload manual: {}", TAG, n, manual_msg);
+        }
+    } else {
+        eprintln!("{} sync_mobile_inner #{}: skip upload (cloud generation advanced mid-sync)", TAG, n);
     }
 
     // 6. Parse sessions (rebuild cache)
@@ -599,7 +711,8 @@ pub fn fetch_from_cloud() -> Result<Vec<super::events::Session>, String> {
     // Driveから取得した内容をローカルにマージ（上書きではなく統合）
     let kb = content.len() as f64 / 1024.0;
     let path = crate::data_dir().join("sleep_events.txt");
-    merge_into_local(&path, &content);
+    let cloud_gen = fetch_cloud_generation(&base_url, &secret);
+    merge_or_adopt(&path, &content, cloud_gen);
     // Invalidate and rebuild cache
     *SESSION_CACHE.lock().unwrap() = None;
     let sessions = parse_sessions_rust()?;
