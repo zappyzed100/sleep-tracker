@@ -83,7 +83,6 @@ fn write_generation_at(path: &std::path::Path, gen: u64) {
     let _ = std::fs::write(path, gen.to_string());
 }
 
-fn local_generation() -> u64 { read_generation_at(&local_generation_path()) }
 fn save_local_generation(gen: u64) { write_generation_at(&local_generation_path(), gen) }
 
 // クラウドの現在の世代番号を取得する。取得失敗時（オフライン等）はNoneを返し、
@@ -214,7 +213,19 @@ pub fn pull_mobile_events_inner() -> String {
     format!("{} 件処理: {}", msgs.len(), msgs.join(" / "))
 }
 
+// GAS側は検証NG時（HTML混入・縮小ガード等）でもHTTP 200で"error: ..."を返す
+// ため、ステータスだけでなく本文も確認する必要がある。
 pub fn backup_to_drive(content: &str) -> String {
+    backup_to_drive_ex(content, false)
+}
+
+// 「データを圧縮」「クラウドも含めて全データ削除」のように意図的に大きく
+// 縮小した内容をpushする経路専用。GAS側の縮小ガードをforce=1で回避する。
+pub fn backup_to_drive_forced(content: &str) -> String {
+    backup_to_drive_ex(content, true)
+}
+
+fn backup_to_drive_ex(content: &str, force: bool) -> String {
     let t0 = std::time::Instant::now();
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
@@ -222,7 +233,8 @@ pub fn backup_to_drive(content: &str) -> String {
         _ => return "Driveスキップ(未設定)".into(),
     };
 
-    let url = format!("{}?secret={}&action=backup", base_url.trim_end_matches('/'), secret);
+    let force_param = if force { "&force=1" } else { "" };
+    let url = format!("{}?secret={}&action=backup{}", base_url.trim_end_matches('/'), secret, force_param);
     let kb = content.len() as f64 / 1024.0;
     let resp = match crate::http_client()
         .and_then(|c| c.post(&url).header("Content-Type", "text/plain").body(content.to_string()).send().map_err(|e| e.to_string()))
@@ -235,14 +247,18 @@ pub fn backup_to_drive(content: &str) -> String {
     };
 
     let ms = t0.elapsed().as_millis();
-    if resp.status().is_success() {
-        eprintln!("{} backup_to_drive: {:.1}KB sent  (+{}ms)", TAG, kb, ms);
-        "Drive バックアップ完了".into()
-    } else {
+    if !resp.status().is_success() {
         let status = resp.status().as_u16();
         eprintln!("{} ERROR backup_to_drive: HTTP {}  (+{}ms)", TAG, status, ms);
-        format!("Drive HTTP {}", status)
+        return format!("Drive HTTP {}", status);
     }
+    let body = resp.text().unwrap_or_default();
+    if body.trim().starts_with("error:") {
+        eprintln!("{} ERROR backup_to_drive: rejected by server: {}  (+{}ms)", TAG, body.trim(), ms);
+        return format!("Drive拒否: {}", body.trim());
+    }
+    eprintln!("{} backup_to_drive: {:.1}KB sent  (+{}ms)", TAG, kb, ms);
+    "Drive バックアップ完了".into()
 }
 
 // Drive上のバックアップファイル（sleep_events_backup.txt/sleep_manual_backup.txt）と
@@ -253,29 +269,34 @@ pub fn clear_cloud_data() -> Result<(), String> {
         (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
         _ => return Err("クラウド接続が未設定です".into()),
     };
-    let url = format!("{}?secret={}&action=clear_all", base_url.trim_end_matches('/'), secret);
+    // confirm=yes はGAS側の誤爆防止ガード。省略すると"error: clear_all requires
+    // confirm=yes"が返るだけで実際の削除は行われない。
+    let url = format!("{}?secret={}&action=clear_all&confirm=yes", base_url.trim_end_matches('/'), secret);
     let resp = crate::http_client()?
         .post(&url)
         .header("Content-Length", "0")
         .body("")
         .send()
         .map_err(|e| format!("送信失敗: {}", e))?;
-    if resp.status().is_success() {
-        // action=clear_all は新しい世代番号を返す（GAS側でLockServiceにより排他的に
-        // 払い出される）。ここで確定させ、以後のpushをこの端末が「最新」として行える
-        // ようにする。
-        if let Ok(body) = resp.text() {
-            if let Ok(new_gen) = body.trim().parse::<u64>() {
-                save_local_generation(new_gen);
-                eprintln!("{} clear_cloud_data: done (generation={})", TAG, new_gen);
-                return Ok(());
-            }
-        }
-        eprintln!("{} clear_cloud_data: done", TAG);
-        Ok(())
-    } else {
-        Err(format!("HTTP {}", resp.status().as_u16()))
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
     }
+    let body = resp.text().unwrap_or_default();
+    let body = body.trim();
+    if body.starts_with("error:") {
+        eprintln!("{} ERROR clear_cloud_data: rejected by server: {}", TAG, body);
+        return Err(body.to_string());
+    }
+    // action=clear_all は新しい世代番号を返す（GAS側でLockServiceにより排他的に
+    // 払い出される）。ここで確定させ、以後のpushをこの端末が「最新」として行える
+    // ようにする。
+    if let Ok(new_gen) = body.parse::<u64>() {
+        save_local_generation(new_gen);
+        eprintln!("{} clear_cloud_data: done (generation={})", TAG, new_gen);
+    } else {
+        eprintln!("{} clear_cloud_data: done", TAG);
+    }
+    Ok(())
 }
 
 // クラウド全削除。action=clear_allだけでは信頼性に難があり、特にsleep_manual.txt
@@ -286,8 +307,9 @@ pub fn clear_cloud_data_and_push_reset() -> Result<(), String> {
     clear_cloud_data()?;
     let events_content = std::fs::read_to_string(crate::data_dir().join("sleep_events.txt")).unwrap_or_default();
     let manual_content = std::fs::read_to_string(crate::data_dir().join("sleep_manual.txt")).unwrap_or_default();
-    let events_msg = backup_to_drive(&events_content);
-    let manual_msg = backup_manual_to_drive(&manual_content);
+    // clear_all直後はほぼ空の内容をpushするため、GAS側の縮小ガードをforceで回避する。
+    let events_msg = backup_to_drive_forced(&events_content);
+    let manual_msg = backup_manual_to_drive_forced(&manual_content);
     eprintln!("{} clear_cloud_data_and_push_reset: events={} manual={}", TAG, events_msg, manual_msg);
     Ok(())
 }
@@ -302,14 +324,18 @@ pub fn clear_cloud_data_and_push_reset() -> Result<(), String> {
 // HARD_RESETマーカーを見て圧縮前の状態を復活させずに済む（events::HARD_RESET_TAG参照）。
 pub fn push_compacted_to_drive(compacted_events_content: &str) -> Result<(), String> {
     clear_cloud_data()?;
-    let events_msg = backup_to_drive(compacted_events_content);
+    // 圧縮は意図的に内容を大きく縮めるため、GAS側の縮小ガードをforceで回避する。
+    let events_msg = backup_to_drive_forced(compacted_events_content);
     let manual_content = std::fs::read_to_string(crate::data_dir().join("sleep_manual.txt")).unwrap_or_default();
-    let manual_msg = backup_manual_to_drive(&manual_content);
+    let manual_msg = backup_manual_to_drive_forced(&manual_content);
     eprintln!("{} push_compacted_to_drive: events={} manual={}", TAG, events_msg, manual_msg);
     Ok(())
 }
 
 // Download raw sleep_events.txt content from Drive. Returns None on error / empty / unauthorized.
+// GAS側は保存内容が壊れている(HTML混入等)と判断した場合、HTTP 200のまま
+// "error: stored backup is corrupted" を返す。これをそのままマージしてしまうと
+// ローカルがこのエラー文字列で汚染されるため、通常のエラーと同様Noneとして扱う。
 fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
     let url = format!("{}?secret={}&action=restore", base_url.trim_end_matches('/'), secret);
     let resp = crate::http_client().ok()?.get(&url).send().ok()?;
@@ -317,6 +343,10 @@ fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
     let text = resp.text().ok()?;
     let t = text.trim();
     if t.is_empty() || t == "Unauthorized" || t.starts_with("not found") { return None; }
+    if t.starts_with("error:") {
+        eprintln!("{} fetch_drive_events: ERROR server-side backup rejected: {}", TAG, t);
+        return None;
+    }
     Some(text)
 }
 
@@ -328,17 +358,31 @@ fn fetch_drive_manual(base_url: &str, secret: &str) -> Option<String> {
     let text = resp.text().ok()?;
     let t = text.trim();
     if t.is_empty() || t == "Unauthorized" || t.starts_with("not found") { return None; }
+    if t.starts_with("error:") {
+        eprintln!("{} fetch_drive_manual: ERROR server-side backup rejected: {}", TAG, t);
+        return None;
+    }
     Some(text)
 }
 
 fn backup_manual_to_drive(content: &str) -> String {
+    backup_manual_to_drive_ex(content, false)
+}
+
+// backup_to_drive_forced と同様、意図的な縮小pushでGAS側の縮小ガードを回避する。
+fn backup_manual_to_drive_forced(content: &str) -> String {
+    backup_manual_to_drive_ex(content, true)
+}
+
+fn backup_manual_to_drive_ex(content: &str, force: bool) -> String {
     let t0 = std::time::Instant::now();
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
         (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
         _ => return "Manual Driveスキップ(未設定)".into(),
     };
-    let url = format!("{}?secret={}&action=backup_manual", base_url.trim_end_matches('/'), secret);
+    let force_param = if force { "&force=1" } else { "" };
+    let url = format!("{}?secret={}&action=backup_manual{}", base_url.trim_end_matches('/'), secret, force_param);
     let kb = content.len() as f64 / 1024.0;
     let resp = match crate::http_client()
         .and_then(|c| c.post(&url).header("Content-Type", "text/plain").body(content.to_string()).send().map_err(|e| e.to_string()))
@@ -347,12 +391,16 @@ fn backup_manual_to_drive(content: &str) -> String {
         Err(e) => { eprintln!("{} ERROR backup_manual_to_drive: {}", TAG, e); return format!("Manual Drive送信失敗: {}", e); }
     };
     let ms = t0.elapsed().as_millis();
-    if resp.status().is_success() {
-        eprintln!("{} backup_manual_to_drive: {:.1}KB sent  (+{}ms)", TAG, kb, ms);
-        "Manual Drive バックアップ完了".into()
-    } else {
-        format!("Manual Drive HTTP {}", resp.status().as_u16())
+    if !resp.status().is_success() {
+        return format!("Manual Drive HTTP {}", resp.status().as_u16());
     }
+    let body = resp.text().unwrap_or_default();
+    if body.trim().starts_with("error:") {
+        eprintln!("{} ERROR backup_manual_to_drive: rejected by server: {}  (+{}ms)", TAG, body.trim(), ms);
+        return format!("Manual Drive拒否: {}", body.trim());
+    }
+    eprintln!("{} backup_manual_to_drive: {:.1}KB sent  (+{}ms)", TAG, kb, ms);
+    "Manual Drive バックアップ完了".into()
 }
 
 // Merge drive_content lines into the local file (sort by timestamp, dedup).
