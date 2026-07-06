@@ -16,7 +16,9 @@
 //! 依存 : crate::{events, cloud, home, sync_status}, jni
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`,
 //!        `Java_com_sleeptracker_app_MainActivity_nativeOnResume`（KotlinのActivity#onResume()から呼ばれるJNIエントリポイント）,
-//!        `activity()`（android_restore.rsがMainActivityインスタンスへのJNI参照を得るために使う）
+//!        `activity()`（android_restore.rsがMainActivityインスタンスへのJNI参照を得るために使う）,
+//!        `refresh_ui()`（android_usage.rsがUsageReporterのスキャン完了後にUIを
+//!        再読み込みさせるために使う。同期停止中でも動く必要があるためrun_syncとは別）
 
 use crate::ui::home::{self, SharedState};
 use crate::ui::sync_status;
@@ -96,6 +98,19 @@ pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume<'ca
     if let Some((weak, state)) = HANDLE.get() {
         run_sync(weak.clone(), state.clone());
     }
+}
+
+// UsageReporter（Kotlin）が使用区間のスキャンを終えるたびに呼ぶ。新規検知した
+// パッケージ（睡眠判定に使うアプリ一覧）が設定画面に反映されるようにするための
+// 再読み込みで、run_syncと違い「同期を停止」中でも動く必要がある
+// （表示の更新であってDrive同期そのものではないため）。
+pub fn refresh_ui() {
+    let Some((weak, state)) = HANDLE.get() else { return };
+    let weak = weak.clone();
+    let state = state.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() { home::refresh_all(&w, &state); }
+    });
 }
 
 // バックグラウンド同期を1回実行する。同期中は同期アイコン(sync-in-progress)を

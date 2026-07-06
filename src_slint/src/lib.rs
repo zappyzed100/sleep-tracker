@@ -474,6 +474,20 @@ pub fn run() {
     }
     {
         let weak = window.as_weak();
+        window.on_toggle_usage_package(move |package, new_allowed| {
+            settings_ui::toggle_usage_package(weak.clone(), package.to_string(), new_allowed);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_refresh_usage_packages(move || {
+            if let Some(w) = weak.upgrade() {
+                settings_ui::load_usage_packages(&w);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
         window.on_toggle_sync_paused(move || {
             if let Some(w) = weak.upgrade() {
                 settings_ui::clear_stale_confirmations(&w, "");

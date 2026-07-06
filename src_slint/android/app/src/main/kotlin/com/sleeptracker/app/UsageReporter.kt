@@ -68,6 +68,9 @@ object UsageReporter {
         val from = if (lastQuery > 0L) maxOf(lastQuery, now - MAX_LOOKBACK_MS) else now - 60 * 60 * 1000
 
         val intervals = queryForegroundIntervals(context, from, now)
+        // スキャン完了直後（早期returnより前）に呼ぶことで、区間の有無に関わらず
+        // 新規検知パッケージが設定画面に反映されるようにする。
+        nativeReportUsageScanComplete()
         if (intervals.isEmpty()) {
             prefs.edit().putLong(KEY_LAST_QUERY_MS, now).apply()
             Log.i(TAG, "[app] UsageReporter: no usage intervals found")
@@ -94,19 +97,30 @@ object UsageReporter {
     }
 
     // UsageEvents から「何らかのアプリがフォアグラウンドにあった区間」を再構成する。
-    // どのアプリかは問わない（読書アプリでも動画アプリでも同じ扱い）。
     //
-    // 数秒単位で不自然に連続するAPP_USAGE区間が実機で観測された（睡眠中にタブレットに
-    // 触れていないはずの時間帯に記録される）ため、原因特定用にパッケージ名を全件
-    // logcatへ出す。次回同じ現象が起きた際、`adb logcat | grep "\[app\]"` で
-    // 何が反応しているか（システムUI・通知・特定アプリ等）を特定できるようにするため
-    // （フィルタ・除外ルールはこのログで原因が分かってから追加する）。
+    // 数秒単位で不自然に連続するAPP_USAGE区間が実機で観測され（睡眠中のはずの時間帯に
+    // 記録される）、調査の結果システムUI・ランチャー・このアプリ自身が一瞬フォア
+    // グラウンドに来ただけでも「使用した」と誤判定されることが判明した。そのため
+    // 「どのアプリを使っている間は起きているとみなすか」をRust側（core::events、
+    // sleep_events.txt経由でPC/Android間も同期される）で管理し、ここではJNI経由で
+    // 検知したパッケージ名とアプリ名を記録（nativeRecordUsagePackageSeen）・現在OFFに
+    // されているパッケージを取得（nativeGetDeniedPackages）してフィルタする。
+    //
+    // PackageManagerでアプリ名を解決できないパッケージ（インストール済みの通常の
+    // アプリに紐づかないもの）は、記録もせず使用区間としてもカウントしない
+    // （設定画面に意味の分からないパッケージ名だけの項目が並ぶのを防ぐため）。
     private fun queryForegroundIntervals(context: Context, from: Long, to: Long): List<Pair<Long, Long>> {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val events = usm.queryEvents(from, to)
         val intervals = mutableListOf<Pair<Long, Long>>()
+        val deniedPackages = (nativeGetDeniedPackages() ?: "")
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
         var pendingStart: Long? = null
         var pendingPkg: String? = null
+        var pendingLabel: String? = null
         val event = UsageEvents.Event()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
@@ -116,17 +130,28 @@ object UsageReporter {
                     if (pendingStart == null) {
                         pendingStart = event.timeStamp
                         pendingPkg = event.packageName
+                        pendingLabel = resolveAppLabel(context, event.packageName)
+                        pendingLabel?.let { nativeRecordUsagePackageSeen(event.packageName, it) }
                     }
                 }
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> {
                     Log.i(TAG, "[app] queryForegroundIntervals: BACKGROUND pkg=${event.packageName} ts=${event.timeStamp}")
                     val s = pendingStart
+                    val pkg = pendingPkg
+                    val label = pendingLabel
                     if (s != null) {
                         val durationSec = (event.timeStamp - s) / 1000
-                        Log.i(TAG, "[app] queryForegroundIntervals: interval pkg=$pendingPkg ${durationSec}s")
-                        intervals.add(s to event.timeStamp)
+                        when {
+                            label == null -> Log.i(TAG, "[app] queryForegroundIntervals: interval pkg=$pkg ${durationSec}s (アプリに紐づかないためスキップ)")
+                            pkg != null && deniedPackages.contains(pkg) -> Log.i(TAG, "[app] queryForegroundIntervals: interval pkg=$pkg ${durationSec}s (設定でOFFのためスキップ)")
+                            else -> {
+                                Log.i(TAG, "[app] queryForegroundIntervals: interval pkg=$pkg ${durationSec}s")
+                                intervals.add(s to event.timeStamp)
+                            }
+                        }
                         pendingStart = null
                         pendingPkg = null
+                        pendingLabel = null
                     }
                 }
             }
@@ -134,10 +159,31 @@ object UsageReporter {
         // 問い合わせ時点でまだ何かがフォアグラウンドにある場合は now で一旦区切る。
         pendingStart?.let {
             Log.i(TAG, "[app] queryForegroundIntervals: still-open pkg=$pendingPkg at query time")
-            intervals.add(it to to)
+            if (pendingLabel != null && (pendingPkg == null || !deniedPackages.contains(pendingPkg))) {
+                intervals.add(it to to)
+            }
         }
         return intervals
     }
+
+    // パッケージ名からPackageManager経由でアプリ名（表示名）を解決する。
+    // アンインストール済み・通常のアプリに紐づかないパッケージ等ではnullを返す。
+    private fun resolveAppLabel(context: Context, pkg: String): String? {
+        return try {
+            val pm = context.packageManager
+            val appInfo = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(appInfo).toString()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // core::events（Rust）へのJNIブリッジ。実体・ON/OFF切り替えはRust側に集約し、
+    // ここでは検知したパッケージ名・アプリ名の記録と現在OFFのパッケージ一覧の取得だけを
+    // 行う（platform/android_usage.rs参照）。
+    private external fun nativeRecordUsagePackageSeen(pkg: String, label: String)
+    private external fun nativeGetDeniedPackages(): String?
+    private external fun nativeReportUsageScanComplete()
 
     private fun post(baseUrl: String, secret: String, tag: String, tsMs: Long): Boolean {
         return try {

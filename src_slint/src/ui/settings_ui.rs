@@ -7,16 +7,17 @@
 //!        ブロックしない。完了メッセージには必ずボタンを押した時刻を付け、
 //!        成功/警告/失敗を色分けできるよう種別（kind）も一緒に設定する。
 //!
-//! 依存 : crate::{MainWindow, BackupEntryVM}, config, platform, cloud, events
+//! 依存 : crate::{MainWindow, BackupEntryVM, UsagePackageVM}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
 //!        `create_shortcut`, `export_csv`, `clear_all_data`, `clear_all_data_and_cloud`,
 //!        `compact_data`, `clear_backups`, `sync_now`, `backup`, `restore`,
 //!        `open_backup_list`, `close_backup_list`, `restore_from_backup`,
-//!        `restore_via_external_picker`, `clear_stale_confirmations`
+//!        `restore_via_external_picker`, `clear_stale_confirmations`,
+//!        `load_usage_packages`, `toggle_usage_package`
 
 use crate::core::{cloud, config, events};
 use crate::platform::windows as platform;
-use crate::{BackupEntryVM, MainWindow};
+use crate::{BackupEntryVM, MainWindow, UsagePackageVM};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // 全データ削除・復元の誤操作防止用（2回クリックで実行）。設定画面はウィンドウ1つのみなので
@@ -80,6 +81,26 @@ pub fn load_into_window(window: &MainWindow) {
     window.set_mobile_url(cfg.mobile_url.unwrap_or_default().into());
     window.set_mobile_secret(cfg.mobile_secret.unwrap_or_default().into());
     window.set_sync_paused(cloud::is_sync_paused());
+    load_usage_packages(window);
+}
+
+// 「睡眠判定に使うアプリ」一覧を読み込んでウィンドウへ反映する。sleep_events.txt経由の
+// 通常同期で他端末の検知結果も届くため、起動時だけでなくhome::refresh_all（同期後の
+// 再読み込み）からも呼ばれる。
+pub fn load_usage_packages(window: &MainWindow) {
+    let entries: Vec<UsagePackageVM> = events::list_usage_packages().into_iter()
+        .map(|e| UsagePackageVM { package: e.package.into(), label: e.label.into(), allowed: e.allowed })
+        .collect();
+    window.set_usage_packages(slint::ModelRc::new(slint::VecModel::from(entries)));
+}
+
+// 設定画面のトグルから呼ぶ。ON/OFFを反映し、一覧を再読み込みする。
+pub fn toggle_usage_package(weak: slint::Weak<MainWindow>, package: String, new_allowed: bool) {
+    let Some(window) = weak.upgrade() else { return };
+    if let Err(e) = events::set_usage_package_allowed(&package, new_allowed) {
+        eprintln!("[app] toggle_usage_package: ERROR {}", e);
+    }
+    load_usage_packages(&window);
 }
 
 fn current_target_wake(window: &MainWindow) -> Option<String> {

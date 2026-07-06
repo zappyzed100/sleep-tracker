@@ -103,6 +103,12 @@ export struct BackupEntryVM {
     label: string,
 }
 
+export struct UsagePackageVM {
+    package: string,
+    label: string,
+    allowed: bool,
+}
+
 export struct SessionVM {
     start: string,
     end: string,
@@ -1295,6 +1301,7 @@ component SettingsPanel {
     in property <bool> compact-in-progress: false;
     in property <bool> backups-clear-in-progress: false;
     in-out property <bool> sync-paused: false;
+    in property <[UsagePackageVM]> usage-packages: [];
 
     callback toggle-startup(bool);
     callback toggle-sync-paused();
@@ -1312,6 +1319,8 @@ component SettingsPanel {
     callback clear-all-data-and-cloud();
     callback compact-data();
     callback clear-backups();
+    callback toggle-usage-package(string, bool);
+    callback refresh-usage-packages();
 
     Flickable {
         VerticalLayout {
@@ -1525,6 +1534,35 @@ component SettingsPanel {
                 if root.backups-clear-message != "": SettingsNote { text: root.backups-clear-message; kind: root.backups-clear-kind; }
                 SettingsNote { text: "日次ローカル自動バックアップ(data/backups/)は自動削除されないため、ここで手動削除できます。"; }
             }
+
+            // ── 睡眠判定に使うアプリ ──
+            // タブレットでこのアプリ自身やランチャー等が一瞬フォアグラウンドに来ただけでも
+            // 「使用した」と誤判定されることがあったため、ユーザーがどのアプリを
+            // 「使っている間は起きている」の根拠にするか選べるようにする（UsageReporter.kt参照）。
+            // PC/Androidどちらの設定画面からでも切り替えでき、sleep_events.txt経由の通常同期で
+            // 双方に伝わる。
+            SettingsSection {
+                title: "睡眠判定に使うアプリ";
+                SettingsNote { text: "検知されたアプリがここに一覧表示されます。チェックを入れたアプリを使っている間は「起きている」とみなします。"; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn {
+                        text: "アプリ一覧を更新";
+                        btn-width: 150px;
+                        clicked => { root.refresh-usage-packages(); }
+                    }
+                }
+                if root.usage-packages.length == 0: Text {
+                    text: "まだ検知されたアプリがありません。";
+                    color: #a6adc8;
+                    font-size: 13px;
+                }
+                for pkg in root.usage-packages: CheckRow {
+                    checked: pkg.allowed;
+                    label: pkg.label;
+                    toggled => { root.toggle-usage-package(pkg.package, !pkg.allowed); }
+                }
+            }
         }
     }
 }
@@ -1648,6 +1686,7 @@ export component MainWindow inherits Window {
     in-out property <bool> compact-in-progress: false;
     in-out property <bool> backups-clear-in-progress: false;
     in-out property <bool> sync-paused: false;
+    in property <[UsagePackageVM]> usage-packages: [];
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1665,6 +1704,8 @@ export component MainWindow inherits Window {
     callback clear-all-data-and-cloud();
     callback compact-data();
     callback clear-backups();
+    callback toggle-usage-package(string, bool);
+    callback refresh-usage-packages();
 
     callback period-changed(string);
     callback bedtime-edited(int, int);
@@ -1856,6 +1897,7 @@ export component MainWindow inherits Window {
             compact-in-progress: root.compact-in-progress;
             backups-clear-in-progress: root.backups-clear-in-progress;
             sync-paused: root.sync-paused;
+            usage-packages: root.usage-packages;
             toggle-sync-paused => { root.toggle-sync-paused(); }
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
@@ -1917,6 +1959,8 @@ export component MainWindow inherits Window {
                     root.clear-backups();
                 }
             }
+            toggle-usage-package(pkg, new-allowed) => { root.toggle-usage-package(pkg, new-allowed); }
+            refresh-usage-packages => { root.refresh-usage-packages(); }
         }
 
         if root.tab == "home": homeScroll := TouchArea {

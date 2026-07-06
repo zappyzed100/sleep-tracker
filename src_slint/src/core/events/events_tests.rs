@@ -570,3 +570,54 @@ fn manual_session_on_excluded_day_is_flagged() {
     assert_eq!(s.len(), 1);
     assert!(s[0].excluded);
 }
+
+// ── 睡眠判定に使うアプリ（USAGE_APP_SEEN/ALLOWED/DENIED） ──────────────────────
+
+#[test]
+fn usage_package_seen_only_uses_default_allowed_state() {
+    let raw = "\
+2024-01-01 00:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
+2024-01-01 00:00:01,USAGE_APP_SEEN:com.sleeptracker.app|睡眠トラッカー
+";
+    let list = usage_packages_from_content(raw);
+    let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
+    let self_pkg = list.iter().find(|e| e.package == "com.sleeptracker.app").unwrap();
+    assert!(chrome.allowed, "既知の除外対象でないアプリは既定でON");
+    assert!(!self_pkg.allowed, "自アプリ自身は既定でOFF");
+    assert_eq!(chrome.label, "Chrome");
+    assert_eq!(self_pkg.label, "睡眠トラッカー");
+}
+
+#[test]
+fn usage_package_denied_marker_overrides_default_allow() {
+    let raw = "\
+2024-01-01 00:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
+2024-01-01 00:00:01,USAGE_APP_DENIED:com.android.chrome
+";
+    let list = usage_packages_from_content(raw);
+    let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
+    assert!(!chrome.allowed);
+}
+
+#[test]
+fn usage_package_allowed_marker_overrides_default_deny() {
+    let raw = "\
+2024-01-01 00:00:00,USAGE_APP_SEEN:com.miui.home|ホーム
+2024-01-01 00:00:01,USAGE_APP_ALLOWED:com.miui.home
+";
+    let list = usage_packages_from_content(raw);
+    let home = list.iter().find(|e| e.package == "com.miui.home").unwrap();
+    assert!(home.allowed, "既定OFFでも明示的にALLOWEDされていればON");
+}
+
+#[test]
+fn usage_package_last_marker_wins_regardless_of_file_order() {
+    // ファイル内の記述順ではなく、タイムスタンプの新しい方が勝つ。
+    let raw = "\
+2024-01-01 10:00:00,USAGE_APP_DENIED:com.android.chrome
+2024-01-01 09:00:00,USAGE_APP_ALLOWED:com.android.chrome
+";
+    let list = usage_packages_from_content(raw);
+    let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
+    assert!(!chrome.allowed, "10:00のDENIEDが09:00のALLOWEDより新しいので勝つ");
+}

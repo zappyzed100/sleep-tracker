@@ -4,7 +4,8 @@
 //!        表示更新ロジックをまとめる。main.rsのmain()から呼ばれるコールバック
 //!        本体はここに集約し、main.rsは配線のみを担当する。
 //!
-//! 依存 : crate::{MainWindow, DaySummaryVM, SessionVM, CalendarDayVM}, events, prediction, utils
+//! 依存 : crate::{MainWindow, DaySummaryVM, SessionVM, CalendarDayVM}, events, prediction, utils,
+//!        ui::settings_ui（refresh_allから load_usage_packages を呼ぶ）
 //! 公開 : `AppState`, `SharedState`, `new_shared_state`, `refresh_all`,
 //!        `compute_stats`, `apply_tick`, `recompute_prediction`, `update_chart`,
 //!        `open_day_detail`, `close_day_detail`, `toggle_day_excluded`, `now_iso`, `set_period`,
@@ -408,6 +409,9 @@ pub fn refresh_all(window: &MainWindow, state: &SharedState) {
     compute_stats(window, state);
     recompute_prediction(window);
     update_chart(window, state);
+    // 同期で他端末が検知した「睡眠判定に使うアプリ」も届くため、同期後の
+    // 再読み込みのたびに一覧も更新する。
+    crate::ui::settings_ui::load_usage_packages(window);
 }
 
 pub fn adjust_week(state: &SharedState, days: i64) {
