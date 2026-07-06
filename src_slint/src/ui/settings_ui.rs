@@ -499,7 +499,14 @@ pub fn clear_all_data_and_cloud(weak: slint::Weak<MainWindow>, state: crate::ui:
 
     std::thread::spawn(move || {
         let local_result = events::clear_all_data();
-        let cloud_result = cloud::clear_cloud_data();
+        // クラウド削除は直接反映（clear_cloud_data_and_push_reset）を使う。action=clear_all
+        // だけでは信頼性に難があるため、削除後にローカル（HARD_RESETマーカーのみ）を
+        // 直接pushして確実に上書きする。これにより、もう一方の端末も次回同期時に
+        // HARD_RESETマーカーを検知して古いデータを復活させずに揃う。
+        let cloud_result = match &local_result {
+            Ok(()) => cloud::clear_cloud_data_and_push_reset(),
+            Err(e) => Err(e.clone()),
+        };
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match (local_result, cloud_result) {

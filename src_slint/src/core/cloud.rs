@@ -9,10 +9,11 @@
 //!
 //! 依存 : crate::data_dir, crate::http_client, config::load_config_inner,
 //!        events::apply_mobile_event_line, events::sort_events_file,
-//!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust
+//!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust,
+//!        events::HARD_RESET_TAG
 //! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`,
 //!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`,
-//!        `clear_cloud_data`, `push_compacted_to_drive`,
+//!        `clear_cloud_data`, `clear_cloud_data_and_push_reset`, `push_compacted_to_drive`,
 //!        `is_sync_paused`, `set_sync_paused`
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -20,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use super::events::{
     SESSION_CACHE, SessionCache, parse_sessions_rust,
     apply_mobile_event_line, sort_events_file, sort_manual_file,
-    EVENTS_FILE_LOCK,
+    EVENTS_FILE_LOCK, HARD_RESET_TAG,
 };
 use super::config::load_config_inner;
 
@@ -194,15 +195,33 @@ pub fn clear_cloud_data() -> Result<(), String> {
     }
 }
 
+// クラウド全削除。action=clear_allだけでは信頼性に難があり、特にsleep_manual.txt
+// 側のバックアップが消えないケースを確認している。そのため削除後にローカル
+// （events::clear_all_dataでHARD_RESETマーカーのみになっている）の内容を直接pushして
+// 確実に上書きする（push_compacted_to_driveと同じ「マージせず直接反映」パターン）。
+pub fn clear_cloud_data_and_push_reset() -> Result<(), String> {
+    clear_cloud_data()?;
+    let events_content = std::fs::read_to_string(crate::data_dir().join("sleep_events.txt")).unwrap_or_default();
+    let manual_content = std::fs::read_to_string(crate::data_dir().join("sleep_manual.txt")).unwrap_or_default();
+    let events_msg = backup_to_drive(&events_content);
+    let manual_msg = backup_manual_to_drive(&manual_content);
+    eprintln!("{} clear_cloud_data_and_push_reset: events={} manual={}", TAG, events_msg, manual_msg);
+    Ok(())
+}
+
 // events::compact_data() で作り直したsleep_events.txtをクラウドにも反映する。
 // 通常のsync（Drive→localマージ→push）を使うと、Driveに残っている古い（圧縮前の）
 // 内容がローカルに逆マージされて圧縮結果が消えてしまう。そのためここでは
 // 先にclear_all（Driveのバックアップファイル・スプレッドシートのevents行を全消去）
 // してから、圧縮後の内容をマージなしで直接pushする。
+// clear_allの成否に関わらず、compacted_events_content・sleep_manual.txt(圧縮時に
+// HARD_RESETマーカーだけが残る)を直接pushすることで、もう一方の端末は次回同期時に
+// HARD_RESETマーカーを見て圧縮前の状態を復活させずに済む（events::HARD_RESET_TAG参照）。
 pub fn push_compacted_to_drive(compacted_events_content: &str) -> Result<(), String> {
     clear_cloud_data()?;
     let events_msg = backup_to_drive(compacted_events_content);
-    let manual_msg = backup_manual_to_drive("");
+    let manual_content = std::fs::read_to_string(crate::data_dir().join("sleep_manual.txt")).unwrap_or_default();
+    let manual_msg = backup_manual_to_drive(&manual_content);
     eprintln!("{} push_compacted_to_drive: events={} manual={}", TAG, events_msg, manual_msg);
     Ok(())
 }
@@ -284,7 +303,36 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
         .filter(|l| !l.is_empty())
         .collect();
 
-    let mut all: Vec<String> = local_processed.iter()
+    // HARD_RESETマーカー検知（core::events::HARD_RESET_TAG参照）。「全データ削除」
+    // 「データを圧縮」等の上書き系操作がもう一方の端末で実行されると、実行時刻を
+    // 持つこの行がDrive経由で送られてくる。通常のunionマージだとローカルにしか
+    // 無い古い行が復活して上書き操作が台無しになるため、マーカー時刻以前で
+    // Driveに存在しないローカル専用行は破棄する。複数マーカーがあれば最新
+    // （最大タイムスタンプ）を採用する。何度読んでも同じ結果になる（冪等）ため
+    // 「処理済みか」の状態管理は不要。
+    let reset_ts: Option<String> = drive_processed.iter()
+        .filter_map(|l| {
+            let (ts, tag) = l.split_once(',')?;
+            (tag == HARD_RESET_TAG).then(|| ts.to_string())
+        })
+        .max();
+
+    let local_kept: Vec<String> = match &reset_ts {
+        Some(rt) => {
+            let kept: Vec<String> = local_processed.iter()
+                .filter(|l| l.get(..19).is_some_and(|ts| ts > rt.as_str()))
+                .cloned()
+                .collect();
+            let discarded = local_processed.len() - kept.len();
+            if discarded > 0 {
+                eprintln!("{} merge_into_local #{}: HARD_RESET({}) detected — discarding {} local-only line(s) at/before reset", TAG, n, rt, discarded);
+            }
+            kept
+        }
+        None => local_processed.clone(),
+    };
+
+    let mut all: Vec<String> = local_kept.iter()
         .chain(drive_processed.iter())
         .cloned()
         .collect();
@@ -583,3 +631,6 @@ pub fn test_mobile_connection(mobile_url: String, mobile_secret: String) -> Resu
         Err(format!("HTTP {} — レスポンス: {}", status.as_u16(), body.trim()))
     }
 }
+
+#[cfg(test)]
+mod cloud_tests;
