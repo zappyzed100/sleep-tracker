@@ -333,9 +333,52 @@ pub fn push_authoritative_content_to_drive(events_content: &str) -> Result<(), S
 }
 
 // Download raw sleep_events.txt content from Drive. Returns None on error / empty / unauthorized.
-// GAS側は保存内容が壊れている(HTML混入等)と判断した場合、HTTP 200のまま
-// "error: stored backup is corrupted" を返す。これをそのままマージしてしまうと
-// ローカルがこのエラー文字列で汚染されるため、通常のエラーと同様Noneとして扱う。
+// GAS側（worker/appsscript.gs）と同じ検証をクライアント側でも独立に行う。
+// GAS自身が"error: ..."を返してくれるケース（保存済み内容が壊れていると
+// GAS自身が判断した場合）はそれで弾けるが、Googleの認証リダイレクト等
+// GASのスクリプトロジックを経由せずに割り込まれるケース（実際に発生した、
+// ログインページのHTMLがそのままsleep_events_backup.txtに混入した事故）は
+// GAS側の検証をすり抜けるため、クライアント側でも中身を見て判断する必要がある。
+fn looks_like_html_or_js(content: &str) -> bool {
+    let head: String = content.chars().take(5000).collect::<String>().to_lowercase();
+    ["<!doctype", "<html", "<head", "<script", "<meta", "(function()", "document.queryselector"]
+        .iter()
+        .any(|pat| head.contains(pat))
+}
+
+// sleep_events.txtの形式検証: 各行 "YYYY-MM-DD HH:MM:SS,TAG"。
+// 非空行の90%以上が形式に一致しなければ不正とみなす（GAS側looksLikeEventsContent_と同じ基準）。
+fn looks_like_events_content(content: &str) -> bool {
+    if looks_like_html_or_js(content) { return false; }
+    let lines: Vec<&str> = content.lines()
+        .map(|l| l.trim_end_matches('\r').trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() { return false; }
+    let valid = lines.iter().filter(|l| is_event_line(l)).count();
+    (valid as f64 / lines.len() as f64) >= 0.9
+}
+
+fn is_event_line(line: &str) -> bool {
+    if line.len() < 21 { return false; }
+    if !is_timestamp_like(&line[..19]) { return false; }
+    if line.as_bytes()[19] != b',' { return false; }
+    let rest = &line[20..];
+    !rest.is_empty() && !rest.contains('<') && !rest.contains('>')
+}
+
+fn is_timestamp_like(ts: &str) -> bool {
+    let b = ts.as_bytes();
+    if b.len() != 19 { return false; }
+    let d = |i: usize| b[i].is_ascii_digit();
+    d(0) && d(1) && d(2) && d(3) && b[4] == b'-'
+        && d(5) && d(6) && b[7] == b'-'
+        && d(8) && d(9) && b[10] == b' '
+        && d(11) && d(12) && b[13] == b':'
+        && d(14) && d(15) && b[16] == b':'
+        && d(17) && d(18)
+}
+
 fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
     let url = format!("{}?secret={}&action=restore", base_url.trim_end_matches('/'), secret);
     let resp = crate::http_client().ok()?.get(&url).send().ok()?;
@@ -347,10 +390,15 @@ fn fetch_drive_events(base_url: &str, secret: &str) -> Option<String> {
         eprintln!("{} fetch_drive_events: ERROR server-side backup rejected: {}", TAG, t);
         return None;
     }
+    if !looks_like_events_content(t) {
+        eprintln!("{} fetch_drive_events: ERROR content failed client-side validation (HTML/JS混入またはイベント形式不一致) — discarding", TAG);
+        return None;
+    }
     Some(text)
 }
 
 // Download sleep_manual.txt content from Drive.
+// sleep_manual.txtは自由形式のため、HTML/JS混入チェックのみ行う（GAS側と同じ基準）。
 fn fetch_drive_manual(base_url: &str, secret: &str) -> Option<String> {
     let url = format!("{}?secret={}&action=restore_manual", base_url.trim_end_matches('/'), secret);
     let resp = crate::http_client().ok()?.get(&url).send().ok()?;
@@ -360,6 +408,10 @@ fn fetch_drive_manual(base_url: &str, secret: &str) -> Option<String> {
     if t.is_empty() || t == "Unauthorized" || t.starts_with("not found") { return None; }
     if t.starts_with("error:") {
         eprintln!("{} fetch_drive_manual: ERROR server-side backup rejected: {}", TAG, t);
+        return None;
+    }
+    if looks_like_html_or_js(t) {
+        eprintln!("{} fetch_drive_manual: ERROR content looks like HTML/JS — discarding", TAG);
         return None;
     }
     Some(text)

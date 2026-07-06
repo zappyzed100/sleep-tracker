@@ -1,7 +1,8 @@
 //! cloud_tests.rs — cloud.rs のテスト専用サブモジュール
 //!
-//! 役割 : merge_into_local（Drive⇔ローカルのマージ）と、世代番号ベースの
-//!        merge_or_adopt_atによる上書き系操作の伝播ロジックの単体テスト。
+//! 役割 : merge_into_local（Drive⇔ローカルのマージ）、世代番号ベースの
+//!        merge_or_adopt_atによる上書き系操作の伝播ロジック、および
+//!        looks_like_events_content等のクライアント側内容検証の単体テスト。
 //!        `#[cfg(test)]` のみでビルドされる。
 //!
 //! 依存 : なし（`super::*` で親モジュール cloud.rs の非公開関数を参照するのみ）
@@ -107,4 +108,48 @@ fn merge_or_adopt_falls_back_to_normal_merge_when_generation_unavailable() {
     assert!(content.contains("2024-01-06 00:00:00,IDLE_START"));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&gen_path);
+}
+
+// 回帰テスト: GASのスクリプトロジックを経由せず（Googleの認証リダイレクト等で）
+// ログインページのHTMLがそのまま返ってくる事故が実際にあった。GAS側の"error:"検知
+// をすり抜けるケースに備え、クライアント側でも独立に中身を検証できること。
+#[test]
+fn looks_like_html_or_js_detects_login_page() {
+    let html = "<!doctype html><html><head><script>document.querySelector('a')</script></head></html>";
+    assert!(looks_like_html_or_js(html));
+}
+
+#[test]
+fn looks_like_html_or_js_accepts_normal_events_content() {
+    let content = "2024-01-01 00:00:00,IDLE_START\n2024-01-01 08:00:00,IDLE_RESUME\n";
+    assert!(!looks_like_html_or_js(content));
+}
+
+#[test]
+fn looks_like_events_content_accepts_real_event_lines() {
+    let content = "2024-01-01 00:00:00,IDLE_START\n2024-01-01 08:00:00,IDLE_RESUME\n2024-01-02 00:00:00,USAGE_APP_SEEN:com.android.settings|設定\n";
+    assert!(looks_like_events_content(content));
+}
+
+#[test]
+fn looks_like_events_content_rejects_html() {
+    let html = "<!doctype html><html><head><title>Sign in</title></head><body></body></html>";
+    assert!(!looks_like_events_content(html));
+}
+
+#[test]
+fn looks_like_events_content_rejects_mostly_malformed_lines() {
+    let content = "not a valid line\nanother bad line\nyet another\n";
+    assert!(!looks_like_events_content(content));
+}
+
+#[test]
+fn looks_like_events_content_tolerates_a_few_malformed_lines() {
+    // 90%以上が正しい形式なら許容する
+    let mut content = String::new();
+    for _ in 0..20 {
+        content.push_str("2024-01-01 00:00:00,IDLE_START\n");
+    }
+    content.push_str("stray line without timestamp\n");
+    assert!(looks_like_events_content(&content));
 }
