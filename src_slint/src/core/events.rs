@@ -13,7 +13,7 @@
 //!        `export_csv`, `write_csv_file`, `import_csv`,
 //!        `is_out_from_content`, `apply_mobile_event_line`,
 //!        `excluded_dates_from_content`, `get_excluded_dates`, `set_day_excluded`,
-//!        `HARD_RESET_TAG`, `UsagePackageEntry`, `list_usage_packages`,
+//!        `UsagePackageEntry`, `list_usage_packages`,
 //!        `set_usage_package_allowed`, `record_usage_package_seen`
 
 use std::fs::OpenOptions;
@@ -21,18 +21,6 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const TAG: &str = "[events]";
-
-// 「全データ削除」「データを圧縮」のような"上書き"系操作が実行されたことを示す
-// マーカー行（"{timestamp},HARD_RESET"）。PC/Androidは互いのローカルファイルを
-// 直接は見えず、Drive経由の通常同期はunion（和集合）マージのため、一方が削除・圧縮
-// してDriveを更新しても、もう一方が古いローカルを持ったまま同期すると削除・圧縮前の
-// データが復活してDriveに書き戻ってしまう問題があった。
-// このマーカーをローカル書き換え時に必ず残し、Driveへも通常のバックアップ経路で
-// push することで、もう一方の端末は次回の同期（自動同期は数分以内、手動なら
-// その時）でこのタグを検知し、マーカーの時刻以前のローカル専用行を破棄した上で
-// マージするようになる（cloud::merge_into_local参照）。何度読んでも同じ結果になる
-// （冪等）ため「このマーカーは処理済みか」の状態管理は不要。
-pub const HARD_RESET_TAG: &str = "HARD_RESET";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Session {
@@ -889,16 +877,15 @@ pub fn list_backups() -> Vec<BackupEntry> {
         .collect()
 }
 
-// ローカルの sleep_events.txt / sleep_manual.txt を両方とも空にする（実際には
-// HARD_RESETマーカー1行だけを残す。理由はHARD_RESET_TAGのドキュメント参照）。
+// ローカルの sleep_events.txt / sleep_manual.txt を両方とも空にする。
 // クラウド（Drive・スプレッドシート）は消さない。
+// もう一方の端末への伝播はcloud::clear_cloud_data_and_push_reset側の
+// 世代番号（GAS側のGENERATION、cloud.rs参照）が担う。
 pub fn clear_all_data() -> Result<(), String> {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let reset_line = format!("{},{}\n", now, HARD_RESET_TAG);
     let path = crate::data_dir().join("sleep_events.txt");
-    std::fs::write(&path, &reset_line).map_err(|e| e.to_string())?;
+    std::fs::write(&path, "").map_err(|e| e.to_string())?;
     let manual_path = crate::data_dir().join("sleep_manual.txt");
-    std::fs::write(&manual_path, &reset_line).map_err(|e| e.to_string())?;
+    std::fs::write(&manual_path, "").map_err(|e| e.to_string())?;
     *SESSION_CACHE.lock().unwrap() = None;
     Ok(())
 }
@@ -965,15 +952,12 @@ pub fn compact_data() -> Result<String, String> {
     if let Some(ts) = open_out {
         lines.push(format!("{},OUT_START", ts));
     }
-    // HARD_RESETマーカー（詳細はHARD_RESET_TAGのドキュメント参照）: 圧縮によって
-    // 消えた生イベント（APP_USAGE/DEVICE_ON等の細切れ）が、もう一方の端末との
-    // 次回同期でunionマージにより復活しないようにする。
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let reset_line = format!("{},{}", now, HARD_RESET_TAG);
-    lines.push(reset_line.clone());
     lines.sort();
     let content = lines.join("\n") + "\n";
-    let manual_content = reset_line + "\n";
+    // 圧縮でsleep_manual.txtの内容はsleep_events.txt側に統合済みのため空にする。
+    // もう一方の端末への伝播（圧縮で消えた生イベントが復活しないようにする）は
+    // cloud::push_authoritative_content_to_driveの世代番号ガードが担う。
+    let manual_content = String::new();
 
     let _lock = EVENTS_FILE_LOCK.lock().unwrap();
     std::fs::write(&events_path, &content).map_err(|e| e.to_string())?;

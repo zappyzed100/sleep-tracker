@@ -6,18 +6,20 @@
 //!        `#[tauri::command] async fn` + `spawn_blocking` は同期関数に変更し、
 //!        UIスレッドをブロックしないための非同期呼び出しは呼び出し側（main.rs）の
 //!        std::thread::spawn に任せる。
-//!        HARD_RESETマーカー（行単位・時刻ベース）に加え、GAS側がLockServiceで
-//!        排他的に払い出す「世代番号」（worker/appsscript.gs参照）でも全体リセット系
-//!        操作の伝播をガードする。時計のズレやオフライン時の同時操作による衝突を
-//!        防ぐのが目的（詳細はmerge_or_adopt/generation_unchanged_sinceのコメント参照）。
+//!        全体リセット系操作（全データ削除・データ圧縮）の伝播は、GAS側で
+//!        LockServiceにより排他的に払い出す「世代番号」（worker/appsscript.gs参照）
+//!        でガードする。以前は行単位・時刻ベースのHARD_RESETマーカーも併用していたが、
+//!        時計のズレでの誤判定に加え、世代が一致している（＝リセットを見逃していない）
+//!        状態でも「復元」等が書き込む古いタイムスタンプのデータを誤って破棄する副作用が
+//!        あったため廃止した（世代番号だけで十分にカバーできるため。詳細は
+//!        merge_or_adopt/generation_unchanged_sinceのコメント参照）。
 //!
 //! 依存 : crate::data_dir, crate::http_client, config::load_config_inner,
 //!        events::apply_mobile_event_line, events::sort_events_file,
-//!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust,
-//!        events::HARD_RESET_TAG
+//!        events::SESSION_CACHE, events::SessionCache, events::parse_sessions_rust
 //! 公開 : `pull_mobile_events_inner`, `fetch_from_cloud`,
 //!        `sync_gist`, `ensure_events_from_drive`, `test_mobile_connection`,
-//!        `clear_cloud_data`, `clear_cloud_data_and_push_reset`, `push_compacted_to_drive`,
+//!        `clear_cloud_data`, `clear_cloud_data_and_push_reset`, `push_authoritative_content_to_drive`,
 //!        `is_sync_paused`, `set_sync_paused`
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,7 +27,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use super::events::{
     SESSION_CACHE, SessionCache, parse_sessions_rust,
     apply_mobile_event_line, sort_events_file, sort_manual_file,
-    EVENTS_FILE_LOCK, HARD_RESET_TAG,
+    EVENTS_FILE_LOCK,
 };
 use super::config::load_config_inner;
 
@@ -62,10 +64,10 @@ pub fn set_sync_paused(paused: bool) -> Result<(), String> {
 
 // クラウドの「世代番号」（GAS側でLockServiceにより排他的に払い出される、
 // 「クラウドも含めて全データ削除」「データを圧縮」のたびに1つ進むカウンタ）に
-// 関する処理。タイムスタンプ比較のHARD_RESETマーカーだけだと、2端末の時計が
-// ズレている場合や、2端末がオフライン気味の状態でほぼ同時に削除操作をした場合に
-// 正しく判定できないケースがあったため、それを補う目的で追加する
-// （HARD_RESETマーカー自体は引き続き行単位のフィルタとして併用する）。
+// 関する処理。全体リセット系操作が伝播したかを判定する唯一の手段
+// （以前併用していたタイムスタンプ比較のHARD_RESETマーカーは、2端末の時計が
+// ズレている場合に誤判定する上、世代が一致していても「復元」等が書き込む
+// 古いタイムスタンプのデータを誤って破棄する副作用があったため廃止した）。
 fn local_generation_path() -> std::path::PathBuf {
     crate::data_dir().join("generation.txt")
 }
@@ -86,7 +88,7 @@ fn write_generation_at(path: &std::path::Path, gen: u64) {
 fn save_local_generation(gen: u64) { write_generation_at(&local_generation_path(), gen) }
 
 // クラウドの現在の世代番号を取得する。取得失敗時（オフライン等）はNoneを返し、
-// 呼び出し側は世代ゲートを素通りさせてHARD_RESETマーカーによる従来のフィルタに任せる。
+// 呼び出し側は世代ゲートを素通りさせて通常のunionマージ(merge_into_local)に任せる。
 fn fetch_cloud_generation(base_url: &str, secret: &str) -> Option<u64> {
     let url = format!("{}?secret={}&action=get_generation", base_url.trim_end_matches('/'), secret);
     let resp = crate::http_client().ok()?.get(&url).send().ok()?;
@@ -97,7 +99,7 @@ fn fetch_cloud_generation(base_url: &str, secret: &str) -> Option<u64> {
 // クラウドの世代がローカルより新しければ、Driveの内容を通常マージせず丸ごと
 // 採用する（この端末が「全削除/圧縮」を知らない間にもう一方の端末がそれを
 // 実行した場合、ローカル未同期分を破棄してクラウド側を正とする）。世代が
-// 同じ・取得失敗時は、これまで通りHARD_RESETマーカーベースのmerge_into_localに任せる。
+// 同じ・取得失敗時は、通常のunionマージ(merge_into_local)に任せる。
 fn merge_or_adopt_at(path: &std::path::Path, drive_content: &str, cloud_gen: Option<u64>, gen_path: &std::path::Path) -> bool {
     if let Some(cg) = cloud_gen {
         let lg = read_generation_at(gen_path);
@@ -301,8 +303,8 @@ pub fn clear_cloud_data() -> Result<(), String> {
 
 // クラウド全削除。action=clear_allだけでは信頼性に難があり、特にsleep_manual.txt
 // 側のバックアップが消えないケースを確認している。そのため削除後にローカル
-// （events::clear_all_dataでHARD_RESETマーカーのみになっている）の内容を直接pushして
-// 確実に上書きする（push_compacted_to_driveと同じ「マージせず直接反映」パターン）。
+// （events::clear_all_dataで空になっている）の内容を直接pushして確実に上書きする
+// （push_authoritative_content_to_driveと同じ「マージせず直接反映」パターン）。
 pub fn clear_cloud_data_and_push_reset() -> Result<(), String> {
     clear_cloud_data()?;
     let events_content = std::fs::read_to_string(crate::data_dir().join("sleep_events.txt")).unwrap_or_default();
@@ -314,21 +316,19 @@ pub fn clear_cloud_data_and_push_reset() -> Result<(), String> {
     Ok(())
 }
 
-// events::compact_data() で作り直したsleep_events.txtをクラウドにも反映する。
-// 通常のsync（Drive→localマージ→push）を使うと、Driveに残っている古い（圧縮前の）
-// 内容がローカルに逆マージされて圧縮結果が消えてしまう。そのためここでは
-// 先にclear_all（Driveのバックアップファイル・スプレッドシートのevents行を全消去）
-// してから、圧縮後の内容をマージなしで直接pushする。
-// clear_allの成否に関わらず、compacted_events_content・sleep_manual.txt(圧縮時に
-// HARD_RESETマーカーだけが残る)を直接pushすることで、もう一方の端末は次回同期時に
-// HARD_RESETマーカーを見て圧縮前の状態を復活させずに済む（events::HARD_RESET_TAG参照）。
-pub fn push_compacted_to_drive(compacted_events_content: &str) -> Result<(), String> {
+// events::compact_data() で作り直したsleep_events.txtを「新しい正の状態」として
+// クラウドにも反映する。通常のsync（Drive→localマージ→push）だと、Driveに残っている
+// 圧縮前の内容が通常のunionマージで復活し、圧縮結果が台無しになってしまう。
+// そのためここでは先にclear_all（Driveのバックアップファイル・スプレッドシートの
+// events行を全消去＋世代番号を新しく進める）してから、圧縮後の内容をマージなしで
+// 直接pushする。これにより次回同期時は世代が一致し、この内容がそのまま正として扱われる。
+pub fn push_authoritative_content_to_drive(events_content: &str) -> Result<(), String> {
     clear_cloud_data()?;
-    // 圧縮は意図的に内容を大きく縮めるため、GAS側の縮小ガードをforceで回避する。
-    let events_msg = backup_to_drive_forced(compacted_events_content);
+    // 圧縮・復元は既存の内容と大きさが大きく異なりうるため、GAS側の縮小ガードをforceで回避する。
+    let events_msg = backup_to_drive_forced(events_content);
     let manual_content = std::fs::read_to_string(crate::data_dir().join("sleep_manual.txt")).unwrap_or_default();
     let manual_msg = backup_manual_to_drive_forced(&manual_content);
-    eprintln!("{} push_compacted_to_drive: events={} manual={}", TAG, events_msg, manual_msg);
+    eprintln!("{} push_authoritative_content_to_drive: events={} manual={}", TAG, events_msg, manual_msg);
     Ok(())
 }
 
@@ -434,36 +434,10 @@ fn merge_into_local(path: &std::path::Path, drive_content: &str) -> bool {
         .filter(|l| !l.is_empty())
         .collect();
 
-    // HARD_RESETマーカー検知（core::events::HARD_RESET_TAG参照）。「全データ削除」
-    // 「データを圧縮」等の上書き系操作がもう一方の端末で実行されると、実行時刻を
-    // 持つこの行がDrive経由で送られてくる。通常のunionマージだとローカルにしか
-    // 無い古い行が復活して上書き操作が台無しになるため、マーカー時刻以前で
-    // Driveに存在しないローカル専用行は破棄する。複数マーカーがあれば最新
-    // （最大タイムスタンプ）を採用する。何度読んでも同じ結果になる（冪等）ため
-    // 「処理済みか」の状態管理は不要。
-    let reset_ts: Option<String> = drive_processed.iter()
-        .filter_map(|l| {
-            let (ts, tag) = l.split_once(',')?;
-            (tag == HARD_RESET_TAG).then(|| ts.to_string())
-        })
-        .max();
-
-    let local_kept: Vec<String> = match &reset_ts {
-        Some(rt) => {
-            let kept: Vec<String> = local_processed.iter()
-                .filter(|l| l.get(..19).is_some_and(|ts| ts > rt.as_str()))
-                .cloned()
-                .collect();
-            let discarded = local_processed.len() - kept.len();
-            if discarded > 0 {
-                eprintln!("{} merge_into_local #{}: HARD_RESET({}) detected — discarding {} local-only line(s) at/before reset", TAG, n, rt, discarded);
-            }
-            kept
-        }
-        None => local_processed.clone(),
-    };
-
-    let mut all: Vec<String> = local_kept.iter()
+    // 全体リセット系操作（全データ削除・データ圧縮）を見逃していないかは
+    // merge_or_adopt/fetch_cloud_generationの世代番号ガードが担うため、ここは
+    // 純粋なunion（和集合）マージに徹する。
+    let mut all: Vec<String> = local_processed.iter()
         .chain(drive_processed.iter())
         .cloned()
         .collect();

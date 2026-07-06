@@ -521,9 +521,9 @@ pub fn clear_all_data_and_cloud(weak: slint::Weak<MainWindow>, state: crate::ui:
     std::thread::spawn(move || {
         let local_result = events::clear_all_data();
         // クラウド削除は直接反映（clear_cloud_data_and_push_reset）を使う。action=clear_all
-        // だけでは信頼性に難があるため、削除後にローカル（HARD_RESETマーカーのみ）を
-        // 直接pushして確実に上書きする。これにより、もう一方の端末も次回同期時に
-        // HARD_RESETマーカーを検知して古いデータを復活させずに揃う。
+        // だけでは信頼性に難があるため、削除後にローカル（空になっている）を直接pushして
+        // 確実に上書きする。もう一方の端末は世代番号（cloud::fetch_cloud_generation参照）で
+        // このリセットを検知し、古いデータを復活させずに揃う。
         let cloud_result = match &local_result {
             Ok(()) => cloud::clear_cloud_data_and_push_reset(),
             Err(e) => Err(e.clone()),
@@ -577,7 +577,7 @@ pub fn compact_data(weak: slint::Weak<MainWindow>, state: crate::ui::home::Share
                         crate::ui::home::refresh_all(&w, &state);
 
                         std::thread::spawn(move || {
-                            let cloud_result = cloud::push_compacted_to_drive(&content);
+                            let cloud_result = cloud::push_authoritative_content_to_drive(&content);
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
                                     match cloud_result {
