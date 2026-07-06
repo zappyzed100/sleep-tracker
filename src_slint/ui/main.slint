@@ -803,6 +803,21 @@ component WeeklyChart {
         background: day.waketime-has ? #a6e3a1 : transparent;
     }
 
+    // ── 昼型/夜型バッジ ──
+    // 入眠（黄）が起床（緑）より上（y値が小さい）に来る日は「夜型」、
+    // 逆に起床が上に来る日は「昼型」。どちらの点が上か＝どちらのy-fracが
+    // 小さいかで判定する（y-fracは0.0が上端・1.0が下端、詳細はhome.rsのy_frac参照）。
+    for day[i] in root.week: Text {
+        x: root.day-cx(i) * 1px - 30px;
+        width: 60px;
+        y: (root.legend-h-px + min(day.bedtime-y, day.waketime-y) * root.bars-h-px) * 1px - 18px;
+        text: day.bedtime-has && day.waketime-has ? (day.bedtime-y < day.waketime-y ? "夜型" : "昼型") : "";
+        color: day.bedtime-y < day.waketime-y ? #f9e2af : #a6e3a1;
+        font-size: 11px;
+        font-weight: 700;
+        horizontal-alignment: center;
+    }
+
     // ── 曜日ラベル（棒グラフと同じcol-spacingで列を揃える） ──
     // TextをそのままHorizontalLayoutの子にすると、日付文字数の違い
     // （"7/2"=3文字 と "6/29"=4文字など）でTextごとのpreferred-widthが
