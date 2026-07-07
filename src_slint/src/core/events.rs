@@ -367,6 +367,18 @@ fn ts_to_epoch(s: &str) -> Option<i64> {
     Some(ndt.and_utc().timestamp())
 }
 
+// セッション開始時刻(ts)の「睡眠日」（暦日ではなく午前4時境界、super::utils::sleep_day
+// 参照）が計測対象外としてマークされているかを判定する。生のタイムスタンプの暦日
+// （ts[..10]）で比較すると、日付境界をまたぐ深夜開始のセッション（例:
+// 6/30 01:14開始 → 睡眠日は6/29）が、6/29を対象外にしても除外されない
+// バグになるため、必ず睡眠日ベースで比較すること。
+fn is_excluded_at(ts: &str, excluded_dates: &std::collections::HashSet<String>) -> bool {
+    let Some(ndt) = chrono::NaiveDateTime::parse_from_str(ts.trim(), "%Y-%m-%d %H:%M:%S").ok() else {
+        return excluded_dates.contains(ts.get(..10).unwrap_or(""));
+    };
+    excluded_dates.contains(&super::utils::sleep_day(ndt).format("%Y-%m-%d").to_string())
+}
+
 fn epoch_to_ts(ep: i64) -> String {
     use chrono::DateTime;
     let dt = DateTime::from_timestamp(ep, 0).map(|d| d.naive_utc());
@@ -582,7 +594,7 @@ fn parse_sessions_from_str(
                 let dur = $end_ep - cur_ep;
                 if dur >= min_sleep_secs {
                     sessions.push(Session {
-                        excluded: excluded_dates.contains(cur_ts.get(..10).unwrap_or("")),
+                        excluded: is_excluded_at(&cur_ts, &excluded_dates),
                         start: cur_ts.clone(),
                         end: $end_ts.to_string(),
                         duration_hours: dur as f64 / 3600.0,
@@ -611,7 +623,7 @@ fn parse_sessions_from_str(
 
     // Append POWER sessions and sort chronologically
     for (pep, pts, eep, ets, ptype) in power_sessions {
-        let excl = excluded_dates.contains(pts.get(..10).unwrap_or(""));
+        let excl = is_excluded_at(&pts, &excluded_dates);
         sessions.push(Session {
             start: pts,
             end: ets,
@@ -650,7 +662,7 @@ fn parse_sessions_from_str(
                     let dur = eep - sep;
                     if dur > 0 {
                         sessions.push(Session {
-                            excluded: excluded_dates.contains(start.get(..10).unwrap_or("")),
+                            excluded: is_excluded_at(start, &excluded_dates),
                             start: start.to_string(),
                             end: end.to_string(),
                             duration_hours: dur as f64 / 3600.0,
