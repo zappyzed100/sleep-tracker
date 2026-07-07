@@ -21,6 +21,8 @@
 //  F. 世代番号(GENERATION): 「クラウドも含めて全データ削除」「データを圧縮」が
 //     もう一方の端末で実行されたかを判定するための、LockServiceで排他的に
 //     払い出されるカウンタ（アプリ側 core/cloud.rs 参照）
+//  G. 内容ハッシュ(expected_hash): pull〜push間の割り込み書き込みによる
+//     ロスト・アップデートを防ぐ楽観的並行性制御。force=1のときはスキップ
 // ──────────────────────────────────────────────────────────────────
 
 const SECRET = PropertiesService.getScriptProperties().getProperty("SECRET");
@@ -32,6 +34,27 @@ const SETTINGS_FILE       = "sync_settings.json";
 const HISTORY_FOLDER      = "backup_history";
 const GENERATIONS_TO_KEEP = 10;   // 世代バックアップの保持数
 const SHRINK_RATIO_LIMIT  = 0.5;  // 既存の50%未満に縮む上書きは拒否（force=1で回避可）
+
+// ── G. 内容ハッシュ（楽観的並行性制御） ──────────────────────────────
+//
+// 「pullしてからpushするまでの間に、別端末（またはこのendpointへの直接操作）が
+// 割り込んで書き込むと、その内容がマージされずに上書きされて消える」という
+// 事故が発生したため追加した。世代番号（F）は全削除・圧縮のような一括リセット
+// しか検知できず、通常のイベント追記の競合は検知できないため、別の仕組みが必要。
+//
+// push時にクライアントが「pull時点で見ていた内容のSHA-256」を expected_hash
+// として一緒に送り、GASは「今実際に保存されている内容のハッシュ」と比較する。
+// 一致すれば書き込みを許可（＝pullしてから誰も書き込んでいない証拠）。
+// 不一致ならreject（＝pullとpushの間に誰かが書き込んだ）し、クライアントは
+// pullからやり直す。ハッシュは保存せず、比較のたびに現在の内容から都度計算する
+// （別途保持すると、更新し忘れるバグ＝Fの世代番号で起きたのと同じ種類のバグの
+// 温床になるため）。
+// force=1（圧縮・全削除後の強制上書き）の時はこのチェックをスキップする
+// （force自体が「ガードを承知の上で上書きする」という明示的な意思表示のため）。
+function computeHash_(content) {
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, content, Utilities.Charset.UTF_8);
+  return raw.map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, "0")).join("");
+}
 
 // ── F. 世代番号 ────────────────────────────────────────────────────
 
@@ -127,7 +150,9 @@ function archiveExisting_(folder, fileName) {
 
 // 検証 + 退避 + 書き込みをまとめた安全な保存処理
 // validator: content を受けて true/false を返す関数(null なら形式検証なし)
-function safeWriteBackup_(folder, fileName, content, force, validator) {
+// expectedHash: 非null かつ force=false のとき、現在保存されている内容のハッシュと
+// 一致しなければ拒否する（G. 内容ハッシュ参照）。
+function safeWriteBackup_(folder, fileName, content, force, validator, expectedHash) {
   if (looksLikeHtmlOrJs_(content)) {
     throw new Error("rejected: content looks like HTML/JavaScript (login page?)");
   }
@@ -139,7 +164,15 @@ function safeWriteBackup_(folder, fileName, content, force, validator) {
   const existing = files.hasNext() ? files.next() : null;
 
   if (existing && !force) {
-    const oldLen = existing.getBlob().getDataAsString().length;
+    const oldContent = existing.getBlob().getDataAsString();
+    if (expectedHash) {
+      const actualHash = computeHash_(oldContent);
+      if (actualHash !== expectedHash) {
+        throw new Error("conflict: content changed since last pull (expected " +
+          expectedHash.slice(0, 8) + ", actual " + actualHash.slice(0, 8) + "). Pull and retry.");
+      }
+    }
+    const oldLen = oldContent.length;
     if (oldLen > 0 && content.length < oldLen * SHRINK_RATIO_LIMIT) {
       throw new Error(
         "rejected: new content (" + content.length + " bytes) is much smaller than existing (" +
@@ -166,7 +199,7 @@ function testBackup() {
     Logger.log("フォルダ名: " + folder.getName() + " / ID: " + folder.getId());
     // 本番ファイルは触らず、テスト専用ファイルに書く(誤上書き防止)
     const result = safeWriteBackup_(folder, "sleep_backup_test.txt",
-      "2026-01-01 00:00:00,TEST", true, null);
+      "2026-01-01 00:00:00,TEST", true, null, null);
     Logger.log(result);
     Logger.log("完了");
   } catch (err) {
@@ -193,7 +226,7 @@ function doPost(e) {
         Logger.log("[backup] content length: " + content.length);
         const result = safeWriteBackup_(
           getBackupFolder(), BACKUP_FILE, content,
-          e.parameter.force === "1", looksLikeEventsContent_);
+          e.parameter.force === "1", looksLikeEventsContent_, e.parameter.expected_hash || null);
         Logger.log("[backup] " + result);
         return ContentService.createTextOutput("ok");
       } catch (err) {
@@ -209,7 +242,7 @@ function doPost(e) {
         const content = e.postData ? e.postData.getDataAsString() : "";
         const result = safeWriteBackup_(
           getBackupFolder(), MANUAL_BACKUP_FILE, content,
-          e.parameter.force === "1", null);
+          e.parameter.force === "1", null, e.parameter.expected_hash || null);
         Logger.log("[backup_manual] " + result);
         return ContentService.createTextOutput("ok");
       } catch (err) {

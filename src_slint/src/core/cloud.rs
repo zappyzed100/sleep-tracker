@@ -13,6 +13,13 @@
 //!        状態でも「復元」等が書き込む古いタイムスタンプのデータを誤って破棄する副作用が
 //!        あったため廃止した（世代番号だけで十分にカバーできるため。詳細は
 //!        merge_or_adopt/generation_unchanged_sinceのコメント参照）。
+//!        世代番号は全削除・圧縮のような一括リセットしか検知できず、通常の
+//!        イベント追記どうしの競合（pull〜push間に別端末が割り込んで上書きし、
+//!        マージされずに消えるロスト・アップデート）は検知できない。そのため
+//!        pushのたびにpull直後の内容のSHA-256を送り、GAS側の実際の内容と
+//!        食い違っていれば拒否する楽観的並行性制御を別途行う
+//!        （sha256_hex/backup_to_drive_checked、worker/appsscript.gsの
+//!        「G. 内容ハッシュ」参照）。
 //!
 //! 依存 : crate::data_dir, crate::http_client, config::load_config_inner,
 //!        events::apply_mobile_event_line, events::sort_events_file,
@@ -32,6 +39,13 @@ use super::events::{
 use super::config::load_config_inner;
 
 const TAG: &str = "[cloud]";
+
+// pull直後の内容のSHA-256（16進文字列）。楽観的並行性制御のexpected_hashに使う
+// （GAS側でも同じアルゴリズムで計算して比較する。worker/appsscript.gsのcomputeHash_参照）。
+fn sha256_hex(content: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, content.as_bytes());
+    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
 
 static CONSECUTIVE_ERRORS: AtomicU64 = AtomicU64::new(0);
 // Prevents concurrent sync_mobile_inner calls (startup vs manual button press).
@@ -218,16 +232,25 @@ pub fn pull_mobile_events_inner() -> String {
 // GAS側は検証NG時（HTML混入・縮小ガード等）でもHTTP 200で"error: ..."を返す
 // ため、ステータスだけでなく本文も確認する必要がある。
 pub fn backup_to_drive(content: &str) -> String {
-    backup_to_drive_ex(content, false)
+    backup_to_drive_ex(content, false, None)
 }
 
 // 「データを圧縮」「クラウドも含めて全データ削除」のように意図的に大きく
 // 縮小した内容をpushする経路専用。GAS側の縮小ガードをforce=1で回避する。
 pub fn backup_to_drive_forced(content: &str) -> String {
-    backup_to_drive_ex(content, true)
+    backup_to_drive_ex(content, true, None)
 }
 
-fn backup_to_drive_ex(content: &str, force: bool) -> String {
+// pull直後に取得した内容のハッシュをexpected_hashとして渡すことで、pull〜push間に
+// 別端末（や手動操作）が割り込んで書き込んだ場合、GAS側が拒否してくれる
+// （楽観的並行性制御。詳細はworker/appsscript.gsの「G. 内容ハッシュ」参照）。
+// 拒否された場合はbody.trim().starts_with("error:")のため呼び出し側の既存の
+// エラーハンドリングにそのまま乗る（"Drive拒否: error: conflict: ..."のような形）。
+pub fn backup_to_drive_checked(content: &str, expected_hash: &str) -> String {
+    backup_to_drive_ex(content, false, Some(expected_hash))
+}
+
+fn backup_to_drive_ex(content: &str, force: bool, expected_hash: Option<&str>) -> String {
     let t0 = std::time::Instant::now();
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
@@ -235,8 +258,9 @@ fn backup_to_drive_ex(content: &str, force: bool) -> String {
         _ => return "Driveスキップ(未設定)".into(),
     };
 
-    let force_param = if force { "&force=1" } else { "" };
-    let url = format!("{}?secret={}&action=backup{}", base_url.trim_end_matches('/'), secret, force_param);
+    let force_param = if force { "&force=1".to_string() } else { String::new() };
+    let hash_param = expected_hash.map(|h| format!("&expected_hash={h}")).unwrap_or_default();
+    let url = format!("{}?secret={}&action=backup{}{}", base_url.trim_end_matches('/'), secret, force_param, hash_param);
     let kb = content.len() as f64 / 1024.0;
     let resp = match crate::http_client()
         .and_then(|c| c.post(&url).header("Content-Type", "text/plain").body(content.to_string()).send().map_err(|e| e.to_string()))
@@ -418,23 +442,29 @@ fn fetch_drive_manual(base_url: &str, secret: &str) -> Option<String> {
 }
 
 fn backup_manual_to_drive(content: &str) -> String {
-    backup_manual_to_drive_ex(content, false)
+    backup_manual_to_drive_ex(content, false, None)
 }
 
 // backup_to_drive_forced と同様、意図的な縮小pushでGAS側の縮小ガードを回避する。
 fn backup_manual_to_drive_forced(content: &str) -> String {
-    backup_manual_to_drive_ex(content, true)
+    backup_manual_to_drive_ex(content, true, None)
 }
 
-fn backup_manual_to_drive_ex(content: &str, force: bool) -> String {
+// backup_to_drive_checked と同様の楽観的並行性制御（詳細はそちらのコメント参照）。
+fn backup_manual_to_drive_checked(content: &str, expected_hash: &str) -> String {
+    backup_manual_to_drive_ex(content, false, Some(expected_hash))
+}
+
+fn backup_manual_to_drive_ex(content: &str, force: bool, expected_hash: Option<&str>) -> String {
     let t0 = std::time::Instant::now();
     let cfg = load_config_inner();
     let (base_url, secret) = match (cfg.mobile_url, cfg.mobile_secret) {
         (Some(u), Some(s)) if !u.is_empty() && !s.is_empty() => (u, s),
         _ => return "Manual Driveスキップ(未設定)".into(),
     };
-    let force_param = if force { "&force=1" } else { "" };
-    let url = format!("{}?secret={}&action=backup_manual{}", base_url.trim_end_matches('/'), secret, force_param);
+    let force_param = if force { "&force=1".to_string() } else { String::new() };
+    let hash_param = expected_hash.map(|h| format!("&expected_hash={h}")).unwrap_or_default();
+    let url = format!("{}?secret={}&action=backup_manual{}{}", base_url.trim_end_matches('/'), secret, force_param, hash_param);
     let kb = content.len() as f64 / 1024.0;
     let resp = match crate::http_client()
         .and_then(|c| c.post(&url).header("Content-Type", "text/plain").body(content.to_string()).send().map_err(|e| e.to_string()))
@@ -633,8 +663,13 @@ pub fn auto_backup_after_event(events_path: &std::path::Path) {
         if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
     } else { None };
     let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
+    // pull時点の内容のハッシュを覚えておき、push時にexpected_hashとして送る
+    // （pull〜push間に別端末が割り込んで書き込んだ場合、GAS側で拒否させるため。
+    // fetch自体に失敗した場合はNoneのままとなり、従来通りチェック無しでpushする）。
+    let mut pulled_hash: Option<String> = None;
     if let Some((ref u, ref s)) = url_secret {
         if let Some(drive_content) = fetch_drive_events(u, s) {
+            pulled_hash = Some(sha256_hex(&drive_content));
             if merge_or_adopt(events_path, &drive_content, cloud_gen) {
                 *SESSION_CACHE.lock().unwrap() = None;
             }
@@ -646,7 +681,10 @@ pub fn auto_backup_after_event(events_path: &std::path::Path) {
         .unwrap_or(true);
     if should_push {
         if let Ok(content) = std::fs::read_to_string(events_path) {
-            let msg = backup_to_drive(&content);
+            let msg = match &pulled_hash {
+                Some(h) => backup_to_drive_checked(&content, h),
+                None => backup_to_drive(&content),
+            };
             eprintln!("{} auto_backup: {}", TAG, msg);
         }
     } else {
@@ -690,10 +728,16 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
     } else { None };
     let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
+    // pull時点の内容のハッシュを覚えておき、push時にexpected_hashとして送る
+    // （pull〜push間に別端末が割り込んで書き込んだ場合、GAS側で拒否させるため。
+    // fetch自体に失敗した場合はNoneのままとなり、従来通りチェック無しでpushする）。
+    let mut events_pulled_hash: Option<String> = None;
+    let mut manual_pulled_hash: Option<String> = None;
     if let Some((ref u, ref s)) = url_secret {
         if let Some(drive_content) = fetch_drive_events(u, s) {
             let kb = drive_content.len() as f64 / 1024.0;
             eprintln!("{} sync_mobile_inner #{}: {:.1}KB events from Drive", TAG, n, kb);
+            events_pulled_hash = Some(sha256_hex(&drive_content));
             if merge_or_adopt(&events_path, &drive_content, cloud_gen) {
                 *SESSION_CACHE.lock().unwrap() = None;
             }
@@ -701,6 +745,7 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         if let Some(drive_manual) = fetch_drive_manual(u, s) {
             let kb = drive_manual.len() as f64 / 1024.0;
             eprintln!("{} sync_mobile_inner #{}: {:.1}KB manual from Drive", TAG, n, kb);
+            manual_pulled_hash = Some(sha256_hex(&drive_manual));
             if merge_or_adopt(&manual_path, &drive_manual, cloud_gen) {
                 *SESSION_CACHE.lock().unwrap() = None;
             }
@@ -723,11 +768,17 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         .unwrap_or(true);
     if should_push {
         if let Ok(content) = std::fs::read_to_string(&events_path) {
-            let drive_msg = backup_to_drive(&content);
+            let drive_msg = match &events_pulled_hash {
+                Some(h) => backup_to_drive_checked(&content, h),
+                None => backup_to_drive(&content),
+            };
             eprintln!("{} sync_mobile_inner #{}: upload events: {}", TAG, n, drive_msg);
         }
         if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
-            let manual_msg = backup_manual_to_drive(&manual_content);
+            let manual_msg = match &manual_pulled_hash {
+                Some(h) => backup_manual_to_drive_checked(&manual_content, h),
+                None => backup_manual_to_drive(&manual_content),
+            };
             eprintln!("{} sync_mobile_inner #{}: upload manual: {}", TAG, n, manual_msg);
         }
     } else {

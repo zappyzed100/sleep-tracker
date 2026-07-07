@@ -22,6 +22,9 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 smartcore = "0.3"
+# 楽観的並行性制御（同期のpull〜push間の競合検知）のSHA-256計算に使う。
+# reqwestのrustls-tls経由で既にビルドに含まれているため追加コストはほぼ無い。
+ring = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
