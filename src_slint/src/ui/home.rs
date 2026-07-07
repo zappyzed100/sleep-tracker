@@ -96,6 +96,10 @@ pub struct AppState {
     // 絶対時刻で持っているので、tickごとに Local::now() との差分を取り直すだけでよい
     // （awake_hoursのようにInstant経過分を毎回加算する必要がない）。
     open_sleep_start: Option<chrono::NaiveDateTime>,
+    // open_sleep_startが属する睡眠日の、確定済み（閉じた）セッションだけの合計時間。
+    // 「最後の睡眠」表示はこれにapply_tickで進行中セッションの経過時間を足し合わせる
+    // （compute_stats参照）。
+    last_day_confirmed_hours: Option<f64>,
     week_base: NaiveDate,
     selected_date: Option<String>,
     period: Period,
@@ -110,6 +114,7 @@ pub fn new_shared_state() -> SharedState {
     Arc::new(Mutex::new(AppState {
         baseline: None,
         open_sleep_start: None,
+        last_day_confirmed_hours: None,
         week_base: today,
         selected_date: None,
         period: Period::Month,
@@ -168,13 +173,25 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     } else {
         None
     };
-    // 「最後の睡眠」は最後のセッション1件の duration_hours ではなく、そのセッションが
-    // 属する「睡眠日」に計上される全セッションを合算した値にする。ある1回の連続した
+    // 進行中（まだ閉じていない）睡眠セッションがあれば、暫定睡眠時間表示のために
+    // 開始時刻を保持する。寝ている最中に一瞬起きてタブレットを確認する用途。
+    let open_sleep_start = events::current_sleep_start()
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok());
+
+    // 「最後の睡眠」は最後のセッション1件の duration_hours ではなく、その睡眠日に
+    // 計上される確定済み（閉じた）セッションを合算した値にする。ある1回の連続した
     // 睡眠が（短い中断などで）複数セッションに分かれて記録されていた場合でも、
     // 体感通りの合計時間（例: 16h）を表示するため。
-    let last = sessions.last().and_then(|last_s| {
-        let last_start = chrono::NaiveDateTime::parse_from_str(last_s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
-        let day = utils::sleep_day(last_start);
+    // 進行中セッションがある場合は「その睡眠日」を基準にする（1回目の睡眠が
+    // 確定した後、2回目の睡眠が始まった状態でPCのIDLE_RESUME前にAndroidを確認
+    // したときも、確定済み分だけの古い値ではなく、進行中セッションの経過時間を
+    // 加えたライブの合計をapply_tickで表示するため。確定分はここではまだ加算
+    // せず保持だけしておき、実際の加算はapply_tickが毎tick行う）。
+    let last_day = open_sleep_start.map(utils::sleep_day).or_else(|| {
+        sessions.last().and_then(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
+            .map(utils::sleep_day)
+    });
+    let last_day_confirmed_hours = last_day.map(|day| {
         let intervals: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> = sessions.iter()
             .filter_map(|s| {
                 let st = chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
@@ -184,29 +201,24 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
             })
             .collect();
         let merged = utils::merge_intervals(intervals);
-        Some(merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum::<f64>())
+        merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum::<f64>()
     });
     // "YYYY-MM-DD HH:MM:SS" の HH:MM 部分だけを取り出す。
     let wake_time = sessions.last().and_then(|s| s.end.get(11..16));
 
     window.set_days_recorded(format!("{}日", per_day.len()).into());
     window.set_avg_sleep(avg.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
-    window.set_last_sleep(last.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
     window.set_wake_time(wake_time.unwrap_or("—").into());
 
     // 予測計算も計測対象外の日を除外したセッションだけで行う。
     let for_prediction: Vec<Session> = sessions.iter().filter(|s| !s.excluded).cloned().collect();
     let pred = prediction::predict(&for_prediction, &now);
 
-    // 進行中（まだ閉じていない）睡眠セッションがあれば、暫定睡眠時間表示のために
-    // 開始時刻を保持する。寝ている最中に一瞬起きてタブレットを確認する用途。
-    let open_sleep_start = events::current_sleep_start()
-        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok());
-
     {
         let mut st = state.lock().unwrap();
         st.baseline = Some(StatsBaseline { awake_hours: pred.awake_hours, computed_at: Instant::now() });
         st.open_sleep_start = open_sleep_start;
+        st.last_day_confirmed_hours = last_day_confirmed_hours;
     }
 
     apply_tick(window, state);
@@ -231,7 +243,18 @@ pub fn apply_tick(window: &MainWindow, state: &SharedState) {
         window.set_awake_since(utils::format_duration(awake).into());
         window.set_awake_color(awake_color(awake));
     }
+    // 「最後の睡眠」= その睡眠日の確定済み合計 + 進行中セッションの経過時間（あれば）。
+    // 2回目の睡眠が始まった直後、PCのIDLE_RESUME前にAndroidを確認したような場合でも、
+    // 確定済み分だけの古い値ではなく暫定分を足したライブの合計を表示する
+    // （compute_stats参照）。
+    let last_total = st.last_day_confirmed_hours.map(|confirmed| {
+        let live_h = st.open_sleep_start
+            .map(|start| (chrono::Local::now().naive_local() - start).num_seconds() as f64 / 3600.0)
+            .unwrap_or(0.0);
+        confirmed + live_h.max(0.0)
+    });
     drop(st);
+    window.set_last_sleep(last_total.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
 
     update_chart(window, state);
 }
