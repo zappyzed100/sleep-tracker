@@ -217,7 +217,12 @@ fn run(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: im
 
     const POLL:        Duration = Duration::from_secs(5);
     const HB_INTERVAL: Duration = Duration::from_secs(30);
-    const PULL_INTERVAL: Duration = Duration::from_secs(60); // Drive/Sheet からモバイルイベントを定期pull
+    // Drive/Sheet からモバイルイベントを定期pull。IDLE_START/RESUMEは数時間に1回
+    // 程度しか起きず（実データ中央値で約4.7時間間隔）、この周期同期はあくまで
+    // 「即時push失敗時のリトライ保険」と「就寝中に一瞬確認した時の鮮度」が目的
+    // なので、秒単位の即応性は不要。60秒だと1日1440回のほぼ全てが空振り通信に
+    // なっていたため10分に緩和した。
+    const PULL_INTERVAL: Duration = Duration::from_secs(10 * 60);
     // 実際に「7日経過したか」はdata/last_auto_backup.txtで判定するので、ここは
     // その判定を行う頻度（何度もディスクI/Oしないよう1時間おき）。
     const BACKUP_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
