@@ -13,6 +13,10 @@ use std::sync::atomic::Ordering;
 
 const TAG: &str = "[config]";
 
+// 「この時刻まで寝ていたら夜型」の基準時刻のデフォルト値（時、0-23）。
+// utils::single_day_summaryの就寝/起床チャート用スケール変換に使う。
+pub const NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT: f64 = 14.0;
+
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct AppConfig {
     pub idle_threshold_minutes: Option<u32>,
@@ -20,6 +24,7 @@ pub struct AppConfig {
     pub mobile_secret: Option<String>,
     pub target_wake_time: Option<String>,
     pub screen_on_enabled: Option<bool>,
+    pub night_type_boundary_hour: Option<f64>,
 }
 
 // Subset of config synced between PC and Android via Drive.
@@ -27,6 +32,7 @@ pub struct AppConfig {
 struct SyncSettings {
     idle_threshold_minutes: Option<u32>,
     target_wake_time: Option<String>,
+    night_type_boundary_hour: Option<f64>,
 }
 
 pub fn load_config_inner() -> AppConfig {
@@ -48,6 +54,7 @@ pub fn save_config(
     mobile_secret: String,
     target_wake_time: Option<String>,
     screen_on_enabled: Option<bool>,
+    night_type_boundary_hour: Option<f64>,
 ) -> Result<(), String> {
     let t0 = std::time::Instant::now();
     let cfg = AppConfig {
@@ -56,6 +63,7 @@ pub fn save_config(
         mobile_secret: if mobile_secret.is_empty() { None } else { Some(mobile_secret) },
         target_wake_time: target_wake_time.filter(|s| !s.is_empty()),
         screen_on_enabled,
+        night_type_boundary_hour,
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(crate::config_path(), json).map_err(|e| e.to_string())?;
@@ -81,6 +89,7 @@ pub fn push_settings_to_drive_inner(cfg: &AppConfig) {
     let sync = SyncSettings {
         idle_threshold_minutes: cfg.idle_threshold_minutes,
         target_wake_time: cfg.target_wake_time.clone(),
+        night_type_boundary_hour: cfg.night_type_boundary_hour,
     };
     let Ok(body) = serde_json::to_string(&sync) else { return };
     let url = format!("{}?secret={}&action=set_settings", base_url.trim_end_matches('/'), secret);
@@ -121,6 +130,7 @@ pub fn fetch_settings_from_cloud() -> Result<(), String> {
         *super::events::SESSION_CACHE.lock().unwrap() = None;
     }
     if let Some(v) = sync.target_wake_time { local.target_wake_time = Some(v); }
+    if let Some(v) = sync.night_type_boundary_hour { local.night_type_boundary_hour = Some(v); }
     let json = serde_json::to_string_pretty(&local).map_err(|e| e.to_string())?;
     std::fs::write(crate::config_path(), json).map_err(|e| e.to_string())?;
     let ms = t0.elapsed().as_millis();

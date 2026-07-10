@@ -55,10 +55,13 @@ pub fn week_start(ref_date: NaiveDate) -> NaiveDate {
     ref_date - Duration::days(ref_date.weekday().num_days_from_monday() as i64)
 }
 
-// 0時〜11:59は「深夜」として+24hしたスケールに変換する（就寝/起床チャート用）
-fn to_night_hour(dt: NaiveDateTime) -> f64 {
+// boundary_hour未満の時刻は「深夜」として+24hしたスケールに変換する（就寝/起床チャート用）。
+// boundary_hourは「この時刻まで寝ていたら夜型」という基準（設定でユーザーが変更可能、
+// デフォルト14時）。この基準より前の時刻はすべて「前日の夜の続き」として同じ連続した
+// スケールに乗せる。
+fn to_night_hour(dt: NaiveDateTime, boundary_hour: f64) -> f64 {
     let h = dt.hour() as f64 + dt.minute() as f64 / 60.0;
-    if h < 12.0 { h + 24.0 } else { h }
+    if h < boundary_hour { h + 24.0 } else { h }
 }
 
 // PC版・Android版それぞれが記録した睡眠時間が重なっている場合、単純に合計すると
@@ -87,6 +90,7 @@ pub fn single_day_summary(
     sessions: &[Session],
     day: NaiveDate,
     excluded_dates: &std::collections::HashSet<String>,
+    night_type_boundary_hour: f64,
 ) -> DaySummary {
     // 睡眠1回を丸ごと、開始時刻から導出した「睡眠日」に計上する（分割しない）。
     let day_sessions: Vec<&Session> = sessions.iter()
@@ -114,8 +118,8 @@ pub fn single_day_summary(
     DaySummary {
         date: day,
         total_hours: total,
-        bedtime_h: Some(to_night_hour(bedtime)),
-        waketime_h: Some(to_night_hour(waketime)),
+        bedtime_h: Some(to_night_hour(bedtime, night_type_boundary_hour)),
+        waketime_h: Some(to_night_hour(waketime, night_type_boundary_hour)),
         excluded,
     }
 }
@@ -124,9 +128,10 @@ pub fn build_week(
     sessions: &[Session],
     week_base: NaiveDate,
     excluded_dates: &std::collections::HashSet<String>,
+    night_type_boundary_hour: f64,
 ) -> Vec<DaySummary> {
     let start = week_start(week_base);
-    (0..7).map(|i| single_day_summary(sessions, start + Duration::days(i), excluded_dates)).collect()
+    (0..7).map(|i| single_day_summary(sessions, start + Duration::days(i), excluded_dates, night_type_boundary_hour)).collect()
 }
 
 #[cfg(test)]
@@ -147,7 +152,7 @@ mod tests {
     fn day_with_session_flagged_excluded_is_marked_excluded_in_summary() {
         let sessions = vec![session("2024-01-01 08:00:00", "2024-01-01 16:00:00", true)];
         let empty = std::collections::HashSet::new();
-        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty, 12.0);
         let day1 = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()).unwrap();
         assert!(day1.excluded);
     }
@@ -160,7 +165,7 @@ mod tests {
         let sessions: Vec<Session> = vec![];
         let mut excluded_dates = std::collections::HashSet::new();
         excluded_dates.insert("2024-01-03".to_string());
-        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &excluded_dates);
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &excluded_dates, 12.0);
         let day3 = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 3).unwrap()).unwrap();
         assert!(day3.excluded);
         assert_eq!(day3.total_hours, 0.0);
@@ -170,7 +175,7 @@ mod tests {
     fn day_without_marker_or_excluded_session_is_not_excluded() {
         let sessions = vec![session("2024-01-01 08:00:00", "2024-01-01 16:00:00", false)];
         let empty = std::collections::HashSet::new();
-        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty, 12.0);
         let day1 = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()).unwrap();
         assert!(day1.total_hours > 0.0);
         assert!(!day1.excluded);
@@ -182,7 +187,7 @@ mod tests {
     fn late_night_sleep_is_attributed_to_the_previous_sleep_day() {
         let sessions = vec![session("2024-01-07 01:33:00", "2024-01-07 15:46:00", false)];
         let empty = std::collections::HashSet::new();
-        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty, 12.0);
 
         let saturday = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 6).unwrap()).unwrap();
         assert!((saturday.total_hours - 14.216666666666667).abs() < 0.001);
@@ -216,10 +221,10 @@ mod tests {
     fn single_day_summary_matches_build_week_for_same_date() {
         let sessions = vec![session("2024-01-07 23:00:00", "2024-01-08 07:00:00", false)];
         let empty = std::collections::HashSet::new();
-        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty);
+        let days = build_week(&sessions, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(), &empty, 12.0);
         let sunday = days.iter().find(|d| d.date == NaiveDate::from_ymd_opt(2024, 1, 7).unwrap()).unwrap();
 
-        let single = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 7).unwrap(), &empty);
+        let single = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 7).unwrap(), &empty, 12.0);
         assert_eq!(single.total_hours, sunday.total_hours);
         assert_eq!(single.bedtime_h, sunday.bedtime_h);
         assert_eq!(single.waketime_h, sunday.waketime_h);
@@ -229,9 +234,37 @@ mod tests {
     fn single_day_summary_returns_none_bedtime_for_day_with_no_sessions() {
         let sessions: Vec<Session> = vec![];
         let empty = std::collections::HashSet::new();
-        let summary = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(), &empty);
+        let summary = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(), &empty, 12.0);
         assert!(summary.bedtime_h.is_none());
         assert!(summary.waketime_h.is_none());
         assert_eq!(summary.total_hours, 0.0);
+    }
+
+    // 回帰テスト：0:57就寝→12:20起床のように、waketimeの時刻がboundary_hour未満の
+    // 「深夜」帯（デフォルト14時未満）に収まっている場合は、bedtime・waketimeの両方が
+    // +24hされて連続したスケールに乗るため、waketimeは必ずbedtimeより後（値が大きい）
+    // になる。boundary_hourが12時のままだと12:20は「12時以降」なので+24hされず、
+    // 24.95のbedtimeより小さい12.33になって逆転してしまっていた（昼型/夜型バッジの
+    // 判定が反転するバグ）。boundary_hourを14時にすることでこのケースを解消する。
+    #[test]
+    fn waketime_within_boundary_is_ordered_after_bedtime() {
+        let sessions = vec![session("2024-01-09 00:57:00", "2024-01-09 12:20:00", false)];
+        let empty = std::collections::HashSet::new();
+        let summary = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(), &empty, 14.0);
+        let bedtime_h = summary.bedtime_h.unwrap();
+        let waketime_h = summary.waketime_h.unwrap();
+        assert!(waketime_h > bedtime_h, "waketime_h ({waketime_h}) should be after bedtime_h ({bedtime_h})");
+    }
+
+    // boundary_hourが低すぎる（例: 12時のまま）と、正午をまたぐ長い睡眠で
+    // waketimeがbedtimeより前に来てしまう既知の限界を明示する回帰テスト。
+    #[test]
+    fn waketime_past_boundary_hour_is_not_shifted() {
+        let sessions = vec![session("2024-01-09 00:57:00", "2024-01-09 12:20:00", false)];
+        let empty = std::collections::HashSet::new();
+        let summary = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(), &empty, 12.0);
+        let bedtime_h = summary.bedtime_h.unwrap();
+        let waketime_h = summary.waketime_h.unwrap();
+        assert!(waketime_h < bedtime_h);
     }
 }

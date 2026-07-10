@@ -11,7 +11,7 @@
 //!        `open_day_detail`, `close_day_detail`, `toggle_day_excluded`, `now_iso`, `set_period`,
 //!        `open_calendar`, `close_calendar`, `cal_prev_month`, `cal_next_month`, `cal_select_day`
 
-use crate::core::{events, prediction, utils, Session};
+use crate::core::{config, events, prediction, utils, Session};
 use crate::{CalendarDayVM, CurvePointVM, DaySummaryVM, MainWindow, SessionVM};
 use chrono::{Datelike, NaiveDate};
 use std::sync::{Arc, Mutex};
@@ -411,15 +411,17 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
     };
     let sessions = events::get_sessions().unwrap_or_default();
     let excluded_dates = events::get_excluded_dates();
-    let days = utils::build_week(&sessions, week_base, &excluded_dates);
+    let night_boundary = config::load_config_inner().night_type_boundary_hour
+        .unwrap_or(config::NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT);
+    let days = utils::build_week(&sessions, week_base, &excluded_dates, night_boundary);
 
     // 週境界（日曜→月曜）をまたぐ昼夜逆転が一目で分かるよう、隣接週の境界日
     // （前週の日曜・翌週の月曜）の入眠/起床時刻も取得する。両方にデータがあれば
     // 折れ線をグラフの端までわずかに伸ばし、端で切れるように見せる
     // （build_curveでのx座標クランプと対応。詳細はbuild_curveのコメント参照）。
     let week_start_date = utils::week_start(week_base);
-    let prev_day_summary = utils::single_day_summary(&sessions, week_start_date - chrono::Duration::days(1), &excluded_dates);
-    let next_day_summary = utils::single_day_summary(&sessions, week_start_date + chrono::Duration::days(7), &excluded_dates);
+    let prev_day_summary = utils::single_day_summary(&sessions, week_start_date - chrono::Duration::days(1), &excluded_dates, night_boundary);
+    let next_day_summary = utils::single_day_summary(&sessions, week_start_date + chrono::Duration::days(7), &excluded_dates, night_boundary);
 
     // 進行中（まだIDLE_RESUMEが来ていない）セッションがこの週のどこかにあれば、
     // その開始日のバーとして扱う（完了済みセッションの日付バケット判定と同じ、
@@ -435,14 +437,12 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
         .max(6.0);
     let y_max = raw_max.ceil() + 1.0;
 
-    let all_y2: Vec<f64> = days.iter().flat_map(|d| [d.bedtime_h, d.waketime_h]).flatten().collect();
-    let (y2_min, y2_max) = if all_y2.is_empty() {
-        (20.0, 32.0)
-    } else {
-        let lo = all_y2.iter().cloned().fold(f64::INFINITY, f64::min);
-        let hi = all_y2.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        (lo.floor() - 1.0, hi.ceil() + 1.0)
-    };
+    // y2軸（就寝/起床の時刻軸）は常に基準時刻(night_boundary)を上端・下端とする
+    // 固定24h幅にする。to_night_hourの変換で値は必ず[night_boundary, night_boundary+24)
+    // に収まるため、データに応じて範囲が動かない固定軸にできる（データが無い日・
+    // 極端な時刻の日があってもグラフの見た目が変わらない）。
+    let y2_min = night_boundary;
+    let y2_max = night_boundary + 24.0;
     let y2_range = (y2_max - y2_min).max(0.001);
     // 折れ線グラフ用: 0.0(上端)〜1.0(下端)の縦位置に正規化する
     let y_frac = |v: f64| (1.0 - ((v - y2_min) / y2_range).clamp(0.0, 1.0)) as f32;

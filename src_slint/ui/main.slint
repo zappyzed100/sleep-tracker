@@ -1324,6 +1324,7 @@ component SettingsPanel {
     in-out property <int> target-wake-m: 0;
     in-out property <string> mobile-url: "";
     in-out property <string> mobile-secret: "";
+    in-out property <int> night-type-boundary-hour: 14;
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
     in property <string> shortcut-message: "";
@@ -1429,6 +1430,24 @@ component SettingsPanel {
                     NumSpin { spin-width: 60px; zero-pad: true; minimum: 0; maximum: 59; value: root.target-wake-m; edited(v) => { root.target-wake-m = v; root.target-wake-changed(root.target-wake-h, v); } }
                 }
                 if !root.target-wake-enabled: SettingsNote { text: "未指定の場合、過去の起床時刻の中央値を自動で使用します"; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
+                }
+                if root.save-message != "": SettingsNote { text: root.save-message; kind: root.save-kind; }
+            }
+
+            // ── 昼型/夜型バッジの判定基準 ──
+            SettingsSection {
+                title: "昼型/夜型バッジの判定基準";
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text { text: "この時刻まで寝ていたら"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
+                    NumSpin { spin-width: 60px; zero-pad: true; minimum: 0; maximum: 23; value: root.night-type-boundary-hour; edited(v) => { root.night-type-boundary-hour = v; } }
+                    Text { text: "時台としてグラフ上でも夜型判定"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
+                }
+                SettingsNote { text: "週間チャートの就寝/起床の折れ線と、昼型/夜型バッジの判定に使う基準時刻です（デフォルト14時）"; }
                 HorizontalLayout {
                     alignment: start;
                     SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
@@ -1710,6 +1729,7 @@ export component MainWindow inherits Window {
     in-out property <int> target-wake-m: 0;
     in-out property <string> mobile-url: "";
     in-out property <string> mobile-secret: "";
+    in-out property <int> night-type-boundary-hour: 14;
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
     in property <string> shortcut-message: "";
@@ -1921,6 +1941,7 @@ export component MainWindow inherits Window {
             target-wake-m: root.target-wake-m;
             mobile-url <=> root.mobile-url;
             mobile-secret <=> root.mobile-secret;
+            night-type-boundary-hour <=> root.night-type-boundary-hour;
             connection-status: root.connection-status;
             connection-ok: root.connection-ok;
             shortcut-message: root.shortcut-message;

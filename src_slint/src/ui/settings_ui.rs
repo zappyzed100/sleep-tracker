@@ -80,6 +80,9 @@ pub fn load_into_window(window: &MainWindow) {
     }
     window.set_mobile_url(cfg.mobile_url.unwrap_or_default().into());
     window.set_mobile_secret(cfg.mobile_secret.unwrap_or_default().into());
+    window.set_night_type_boundary_hour(
+        cfg.night_type_boundary_hour.unwrap_or(config::NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT) as i32
+    );
     window.set_sync_paused(cloud::is_sync_paused());
     load_usage_packages(window);
 }
@@ -117,7 +120,8 @@ pub fn save(window: &MainWindow) {
     let url = window.get_mobile_url().to_string();
     let secret = window.get_mobile_secret().to_string();
     let target = current_target_wake(window);
-    match config::save_config(idle, url, secret, target, None) {
+    let night_boundary = Some(window.get_night_type_boundary_hour() as f64);
+    match config::save_config(idle, url, secret, target, None, night_boundary) {
         Ok(()) => {
             window.set_save_message(format!("✓ 保存しました ({})", now_hms()).into());
             window.set_save_kind(KIND_SUCCESS.into());
