@@ -191,7 +191,7 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
         sessions.last().and_then(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
             .map(utils::sleep_day)
     });
-    let last_day_confirmed_hours = last_day.map(|day| {
+    let last_day_merged = last_day.map(|day| {
         let intervals: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> = sessions.iter()
             .filter_map(|s| {
                 let st = chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
@@ -200,15 +200,21 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
                 Some((st, en))
             })
             .collect();
-        let merged = utils::merge_intervals(intervals);
+        utils::merge_intervals(intervals)
+    });
+    let last_day_confirmed_hours = last_day_merged.as_ref().map(|merged| {
         merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum::<f64>()
     });
-    // "YYYY-MM-DD HH:MM:SS" の HH:MM 部分だけを取り出す。
-    let wake_time = sessions.last().and_then(|s| s.end.get(11..16));
+    // 「起床時刻」はその睡眠日の最も長いセッション（本眠り）の終了時刻を採用する。
+    // 単純に最後のセッションを使うと、本眠りの後に短い仮眠を記録した場合に
+    // 仮眠の終了時刻が表示されてしまう（utils::single_day_summaryのチャート表示と同じ考え方）。
+    let wake_time = last_day_merged.as_ref()
+        .and_then(|merged| merged.iter().max_by(|a, b| (a.1 - a.0).cmp(&(b.1 - b.0))))
+        .map(|(_, e)| e.format("%H:%M").to_string());
 
     window.set_days_recorded(format!("{}日", per_day.len()).into());
     window.set_avg_sleep(avg.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
-    window.set_wake_time(wake_time.unwrap_or("—").into());
+    window.set_wake_time(wake_time.unwrap_or_else(|| "—".to_string()).into());
 
     // 予測計算も計測対象外の日を除外したセッションだけで行う。
     let for_prediction: Vec<Session> = sessions.iter().filter(|s| !s.excluded).cloned().collect();
