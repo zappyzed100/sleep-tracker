@@ -111,11 +111,20 @@ pub fn single_day_summary(
         .max_by(|a, b| (a.1 - a.0).cmp(&(b.1 - b.0)))
         .unwrap();
 
+    // waketimeはto_night_hourで独立に変換せず、bedtimeからの経過時間を足して求める。
+    // 独立変換だと「waketimeの時刻がたまたま12時以降」の場合に+24hされず、
+    // 実際にはbedtimeより後のはずのwaketimeがチャート上でbedtimeより前
+    // （y値が小さい＝上）に来てしまい、昼型/夜型バッジの判定が反転するバグがあった
+    // （例: 0:57就寝→12:20起床の11時間23分睡眠で、12:20はh<12を満たさず無変換のまま
+    // 12.33になり、24.95のbedtimeより小さい値になっていた）。
+    let bedtime_h = to_night_hour(bedtime);
+    let waketime_h = bedtime_h + (waketime - bedtime).num_seconds() as f64 / 3600.0;
+
     DaySummary {
         date: day,
         total_hours: total,
-        bedtime_h: Some(to_night_hour(bedtime)),
-        waketime_h: Some(to_night_hour(waketime)),
+        bedtime_h: Some(bedtime_h),
+        waketime_h: Some(waketime_h),
         excluded,
     }
 }
@@ -223,6 +232,22 @@ mod tests {
         assert_eq!(single.total_hours, sunday.total_hours);
         assert_eq!(single.bedtime_h, sunday.bedtime_h);
         assert_eq!(single.waketime_h, sunday.waketime_h);
+    }
+
+    // 回帰テスト：0:57就寝→12:20起床（11時間23分睡眠）のように、waketimeの時刻が
+    // 12時台に入る場合でも、waketime_hはbedtime_hより必ず大きくなる（＝チャート上で
+    // bedtimeより後＝より下）べき。以前はwaketimeをto_night_hourで独立に変換して
+    // いたため、12:20は「h<12」を満たさず無変換のまま12.33になり、24.95の
+    // bedtime_hより小さい値になっていた（昼型/夜型バッジの判定が反転するバグ）。
+    #[test]
+    fn waketime_after_noon_is_still_ordered_after_bedtime() {
+        let sessions = vec![session("2024-01-09 00:57:00", "2024-01-09 12:20:00", false)];
+        let empty = std::collections::HashSet::new();
+        let summary = single_day_summary(&sessions, NaiveDate::from_ymd_opt(2024, 1, 8).unwrap(), &empty);
+        let bedtime_h = summary.bedtime_h.unwrap();
+        let waketime_h = summary.waketime_h.unwrap();
+        assert!(waketime_h > bedtime_h, "waketime_h ({waketime_h}) should be after bedtime_h ({bedtime_h})");
+        assert!((waketime_h - bedtime_h - 11.383333333333333).abs() < 0.001);
     }
 
     #[test]
