@@ -1,15 +1,16 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// events_tests.rs — 睡眠判定（parse_sessions_from_str）のテスト
+// parsing_tests.rs — 睡眠判定（parse_sessions_from_str）のテスト
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 役割 : sleep_events.txt のパース・セッション再構築ロジックを、
 //        実ファイル・実時刻に依存しない純粋関数(parse_sessions_from_str等)
 //        に対して直接検証する。日付はすべて架空の値（2024-01-01〜）を使い、
 //        実データの日付は含めない。
 //
-// 依存 : super::*（events.rs 内の非公開関数を含む）
+// 依存 : super::super::parsing（非公開関数を含む）
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-use super::*;
+use crate::core::events::Session;
+use crate::core::events::parsing::{parse_sessions_from_str, is_out_from_content, coalesce_and_filter_app_usage};
 
 const MIN: i64 = 60; // テスト用のゆるいしきい値（1分）。特にことわりが無い限りこれを使う。
 
@@ -399,51 +400,6 @@ fn events_out_of_chronological_order_in_file_are_sorted_first() {
     assert_eq!(hours(&s[0]), 8.0);
 }
 
-// ── detect_open_idle_and_out（暫定睡眠時間の判定に使う別関数）──────────────────
-
-#[test]
-fn detect_open_idle_and_out_reports_open_idle_start() {
-    let raw = "2024-01-01 01:00:00,IDLE_START\n";
-    let (idle, out) = detect_open_idle_and_out(raw);
-    assert_eq!(idle.as_deref(), Some("2024-01-01 01:00:00"));
-    assert_eq!(out, None);
-}
-
-#[test]
-fn detect_open_idle_and_out_ignores_device_on_noise() {
-    // これがまさに今回のバグの核心：DEVICE_ONが何度挟まっても、
-    // detect_open_idle_and_out自体は元々DEVICE_ONを見ないため、
-    // 「進行中」判定は最初から正しかった（バグはparse_sessions_from_str側だけにあった）。
-    let raw = "\
-2024-01-01 01:00:00,IDLE_START
-2024-01-01 02:00:00,DEVICE_ON
-2024-01-01 03:00:00,DEVICE_ON
-";
-    let (idle, _) = detect_open_idle_and_out(raw);
-    assert_eq!(idle.as_deref(), Some("2024-01-01 01:00:00"));
-}
-
-#[test]
-fn detect_open_idle_and_out_closed_session_reports_none() {
-    let raw = "2024-01-01 01:00:00,IDLE_START\n2024-01-01 08:00:00,IDLE_RESUME\n";
-    let (idle, _) = detect_open_idle_and_out(raw);
-    assert_eq!(idle, None);
-}
-
-#[test]
-fn detect_open_idle_and_out_reports_open_out() {
-    let raw = "2024-01-01 01:00:00,OUT_START\n";
-    let (_, out) = detect_open_idle_and_out(raw);
-    assert_eq!(out.as_deref(), Some("2024-01-01 01:00:00"));
-}
-
-#[test]
-fn detect_open_idle_and_out_in_house_closes_out() {
-    let raw = "2024-01-01 01:00:00,OUT_START\n2024-01-01 02:00:00,IN_HOUSE\n";
-    let (_, out) = detect_open_idle_and_out(raw);
-    assert_eq!(out, None);
-}
-
 // ── is_out_from_content ───────────────────────────────────────────────────────
 
 #[test]
@@ -495,206 +451,4 @@ fn coalesce_keeps_far_apart_pairs_separate() {
         (1000i64, "c".to_string(), 1090i64, "d".to_string()),
     ];
     assert_eq!(coalesce_and_filter_app_usage(pairs).len(), 2);
-}
-
-// ── 計測対象外の日（DAY_EXCLUDED / DAY_INCLUDED） ─────────────────────────────
-
-#[test]
-fn excluded_dates_from_content_finds_marked_date() {
-    let raw = "2024-01-02 09:00:00,DAY_EXCLUDED:2024-01-01\n";
-    let dates = excluded_dates_from_content(raw);
-    assert!(dates.contains("2024-01-01"));
-    assert_eq!(dates.len(), 1);
-}
-
-#[test]
-fn excluded_dates_from_content_last_marker_wins_exclude_then_include() {
-    let raw = "\
-2024-01-02 09:00:00,DAY_EXCLUDED:2024-01-01
-2024-01-03 09:00:00,DAY_INCLUDED:2024-01-01
-";
-    assert!(excluded_dates_from_content(raw).is_empty());
-}
-
-#[test]
-fn excluded_dates_from_content_last_marker_wins_include_then_exclude() {
-    let raw = "\
-2024-01-02 09:00:00,DAY_INCLUDED:2024-01-01
-2024-01-03 09:00:00,DAY_EXCLUDED:2024-01-01
-";
-    assert!(excluded_dates_from_content(raw).contains("2024-01-01"));
-}
-
-#[test]
-fn session_on_excluded_day_is_still_returned_but_flagged() {
-    // 開始時刻は睡眠日境界（午前4時）をまたがない09:00にする。00:00だと
-    // sleep_day("2024-01-01 00:00:00")が前日(2023-12-31)になってしまい、
-    // 「2024-01-01」を対象外にしても一致しない（is_excluded_at参照）。
-    let raw = "\
-2024-01-01 09:00:00,IDLE_START
-2024-01-01 17:00:00,IDLE_RESUME
-2024-01-02 00:00:00,DAY_EXCLUDED:2024-01-01
-";
-    let s = sessions(raw, MIN);
-    // バーとしては表示し続けるため、除外してもセッション自体は消えない。
-    assert_eq!(s.len(), 1);
-    assert!(s[0].excluded);
-}
-
-#[test]
-fn session_on_non_excluded_day_is_not_flagged() {
-    let raw = "2024-01-01 09:00:00,IDLE_START\n2024-01-01 17:00:00,IDLE_RESUME\n";
-    let s = sessions(raw, MIN);
-    assert!(!s[0].excluded);
-}
-
-#[test]
-fn excluding_one_day_does_not_affect_another_day_session() {
-    let raw = "\
-2024-01-01 09:00:00,IDLE_START
-2024-01-01 17:00:00,IDLE_RESUME
-2024-01-02 09:00:00,IDLE_START
-2024-01-02 17:00:00,IDLE_RESUME
-2024-01-03 00:00:00,DAY_EXCLUDED:2024-01-01
-";
-    let s = sessions(raw, MIN);
-    assert_eq!(s.len(), 2);
-    let day1 = s.iter().find(|x| x.start.starts_with("2024-01-01")).unwrap();
-    let day2 = s.iter().find(|x| x.start.starts_with("2024-01-02")).unwrap();
-    assert!(day1.excluded);
-    assert!(!day2.excluded);
-}
-
-// ── 睡眠日境界をまたぐ除外判定（実データで見つかった回帰バグ） ───────────────────
-// 深夜0〜4時開始のセッションは、暦日ではなく前日の睡眠日に属する
-// （sleep_day境界は午前4時）。DAY_EXCLUDEDマーカーは常にUIが操作した睡眠日で
-// 書き込まれるため、除外判定も睡眠日基準で一致させる必要がある
-// （is_excluded_at参照。以前は暦日で比較しており、この境界をまたぐケースで
-// 除外が効かないバグがあった）。
-#[test]
-fn session_starting_just_after_midnight_is_excluded_via_previous_sleep_day() {
-    let raw = "\
-2024-01-02 01:14:00,IDLE_START
-2024-01-02 02:51:00,IDLE_RESUME
-2024-01-03 00:00:00,DAY_EXCLUDED:2024-01-01
-";
-    let s = sessions(raw, MIN);
-    assert_eq!(s.len(), 1);
-    assert!(s[0].excluded);
-}
-
-#[test]
-fn session_starting_just_after_midnight_is_not_excluded_by_its_calendar_date() {
-    // 同じセッションを、暦日(2024-01-02)側で対象外にしても効かないことを確認する
-    // （睡眠日ベースの判定が暦日と混同していない証拠）。
-    let raw = "\
-2024-01-02 01:14:00,IDLE_START
-2024-01-02 02:51:00,IDLE_RESUME
-2024-01-03 00:00:00,DAY_EXCLUDED:2024-01-02
-";
-    let s = sessions(raw, MIN);
-    assert_eq!(s.len(), 1);
-    assert!(!s[0].excluded);
-}
-
-#[test]
-fn manual_session_on_excluded_day_is_flagged() {
-    let raw = "2024-01-01 00:00:00,DAY_EXCLUDED:2024-01-01\n";
-    let manual = "2024-01-01 13:00:00,2024-01-01 14:00:00\n";
-    let s = sessions_with_manual(raw, manual, MIN);
-    assert_eq!(s.len(), 1);
-    assert!(s[0].excluded);
-}
-
-// ── 睡眠判定に使うアプリ（USAGE_APP_SEEN/ALLOWED/DENIED） ──────────────────────
-
-#[test]
-fn usage_package_seen_only_uses_default_allowed_state() {
-    let raw = "\
-2024-01-01 00:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
-2024-01-01 00:00:01,USAGE_APP_SEEN:com.sleeptracker.app|睡眠トラッカー
-";
-    let list = usage_packages_from_content(raw);
-    let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
-    let self_pkg = list.iter().find(|e| e.package == "com.sleeptracker.app").unwrap();
-    assert!(chrome.allowed, "既知の除外対象でないアプリは既定でON");
-    assert!(!self_pkg.allowed, "自アプリ自身は既定でOFF");
-    assert_eq!(chrome.label, "Chrome");
-    assert_eq!(self_pkg.label, "睡眠トラッカー");
-}
-
-#[test]
-fn usage_package_denied_marker_overrides_default_allow() {
-    let raw = "\
-2024-01-01 00:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
-2024-01-01 00:00:01,USAGE_APP_DENIED:com.android.chrome
-";
-    let list = usage_packages_from_content(raw);
-    let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
-    assert!(!chrome.allowed);
-}
-
-#[test]
-fn usage_package_allowed_marker_overrides_default_deny() {
-    let raw = "\
-2024-01-01 00:00:00,USAGE_APP_SEEN:com.miui.home|ホーム
-2024-01-01 00:00:01,USAGE_APP_ALLOWED:com.miui.home
-";
-    let list = usage_packages_from_content(raw);
-    let home = list.iter().find(|e| e.package == "com.miui.home").unwrap();
-    assert!(home.allowed, "既定OFFでも明示的にALLOWEDされていればON");
-}
-
-#[test]
-fn usage_package_last_marker_wins_regardless_of_file_order() {
-    // ファイル内の記述順ではなく、タイムスタンプの新しい方が勝つ。
-    let raw = "\
-2024-01-01 10:00:00,USAGE_APP_DENIED:com.android.chrome
-2024-01-01 09:00:00,USAGE_APP_ALLOWED:com.android.chrome
-";
-    let list = usage_packages_from_content(raw);
-    let chrome = list.iter().find(|e| e.package == "com.android.chrome").unwrap();
-    assert!(!chrome.allowed, "10:00のDENIEDが09:00のALLOWEDより新しいので勝つ");
-}
-
-// 一覧が長くなっても、チェック済み（睡眠判定に使う）アプリが表示件数制限の
-// 下の方に埋もれないよう、チェック済みを先頭に配置する。
-#[test]
-fn usage_packages_sorted_with_allowed_first_then_by_label() {
-    let raw = "\
-2024-01-01 00:00:00,USAGE_APP_SEEN:com.b|Bravo
-2024-01-01 00:00:01,USAGE_APP_SEEN:com.a|Alpha
-2024-01-01 00:00:02,USAGE_APP_SEEN:com.z|Zulu
-2024-01-01 00:00:03,USAGE_APP_DENIED:com.a
-2024-01-01 00:00:04,USAGE_APP_DENIED:com.z
-";
-    let list = usage_packages_from_content(raw);
-    let labels: Vec<&str> = list.iter().map(|e| e.label.as_str()).collect();
-    // Bravoだけallowed（既定でON）、Alpha/Zuluは明示的にDENIED。
-    assert_eq!(labels, vec!["Bravo", "Alpha", "Zulu"]);
-}
-
-// 「データを圧縮」はUSAGE_APP_SEEN/ALLOWED/DENIEDと同様、DAY_EXCLUDED/DAY_INCLUDED
-// （各日の計測対象外設定）もセッションでないため圧縮対象外とし、そのまま
-// 引き継がなければならない（消すとユーザーが設定した計測対象外設定や
-// アプリのON/OFF・検知履歴が圧縮のたびに失われてしまうため）。
-#[test]
-fn extract_preserved_metadata_lines_keeps_usage_and_day_excluded_and_ignores_sessions() {
-    let raw = "\
-2024-01-01 00:00:00,IDLE_START
-2024-01-01 08:00:00,IDLE_RESUME
-2024-01-01 09:00:00,USAGE_APP_SEEN:com.android.chrome|Chrome
-2024-01-01 09:00:01,USAGE_APP_DENIED:com.android.chrome
-2024-01-01 09:00:02,USAGE_APP_ALLOWED:com.miui.home
-2024-01-01 09:00:03,DAY_EXCLUDED:2024-01-01
-2024-01-01 09:00:04,DAY_INCLUDED:2024-01-02
-";
-    let lines = extract_preserved_metadata_lines(raw);
-    assert_eq!(lines.len(), 5);
-    assert!(lines.iter().any(|l| l.contains("USAGE_APP_SEEN:com.android.chrome")));
-    assert!(lines.iter().any(|l| l.contains("USAGE_APP_DENIED:com.android.chrome")));
-    assert!(lines.iter().any(|l| l.contains("USAGE_APP_ALLOWED:com.miui.home")));
-    assert!(lines.iter().any(|l| l.contains("DAY_EXCLUDED:2024-01-01")));
-    assert!(lines.iter().any(|l| l.contains("DAY_INCLUDED:2024-01-02")));
-    assert!(!lines.iter().any(|l| l.contains("IDLE_START")));
 }

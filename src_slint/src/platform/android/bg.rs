@@ -1,4 +1,4 @@
-//! android_bg.rs — Androidフォアグラウンド中の定期同期
+//! bg.rs — Androidフォアグラウンド中の定期同期
 //!
 //! 役割 : Tauri版のvisibilitychange同期・30分ごとの定期同期に相当する処理を、
 //!        プロセス生存中に限り純Rustで実現する。
@@ -16,8 +16,8 @@
 //! 依存 : crate::{events, cloud, home, sync_status}, jni
 //! 公開 : `setup(window: &MainWindow, state: &home::SharedState)`,
 //!        `Java_com_sleeptracker_app_MainActivity_nativeOnResume`（KotlinのActivity#onResume()から呼ばれるJNIエントリポイント）,
-//!        `activity()`（android_restore.rsがMainActivityインスタンスへのJNI参照を得るために使う）,
-//!        `refresh_ui()`（android_usage.rsがUsageReporterのスキャン完了後にUIを
+//!        `activity()`（restore.rsがMainActivityインスタンスへのJNI参照を得るために使う）,
+//!        `refresh_ui()`（usage.rsがUsageReporterのスキャン完了後にUIを
 //!        再読み込みさせるために使う。同期停止中でも動く必要があるためrun_syncとは別）
 
 use crate::ui::home::{self, SharedState};
@@ -35,7 +35,7 @@ use std::sync::OnceLock;
 // MainActivity固有のメソッド（launchRestorePicker等）を呼べないため、こちらを使う。
 static ACTIVITY: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 
-// Kotlin側のMainActivityインスタンスメソッドをJNIで呼び出す際に使う（android_restore.rs）。
+// Kotlin側のMainActivityインスタンスメソッドをJNIで呼び出す際に使う（restore.rs）。
 pub fn activity() -> Option<&'static Global<JObject<'static>>> {
     ACTIVITY.get()
 }
@@ -78,7 +78,7 @@ pub fn setup(window: &MainWindow, state: &SharedState) {
 // Androidは必ずActivity#onResume()を呼ぶため、ここ一箇所に同期をフックすれば
 // 全経路をカバーできる（詳細はplatform/README.md参照）。
 // インスタンスメソッド呼び出しのため第2引数にMainActivity自身(this)が渡ってくる。
-// 初回呼び出し時にこれをグローバル参照として保持し、android_restore.rsから
+// 初回呼び出し時にこれをグローバル参照として保持し、restore.rsから
 // launchRestorePicker()等のインスタンスメソッドを呼べるようにする。
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_sleeptracker_app_MainActivity_nativeOnResume<'caller>(

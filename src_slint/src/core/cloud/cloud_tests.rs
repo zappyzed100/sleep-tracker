@@ -5,9 +5,11 @@
 //!        looks_like_events_content等のクライアント側内容検証の単体テスト。
 //!        `#[cfg(test)]` のみでビルドされる。
 //!
-//! 依存 : なし（`super::*` で親モジュール cloud.rs の非公開関数を参照するのみ）
+//! 依存 : super::generation::{merge_into_local, merge_or_adopt_at},
+//!        super::validation::{looks_like_html_or_js, looks_like_events_content}
 
-use super::*;
+use super::generation::{merge_into_local, merge_or_adopt_at, read_generation_at, write_generation_at};
+use super::validation::{looks_like_html_or_js, looks_like_events_content};
 
 // 実データと衝突しないよう、プロセスIDとテスト名からユニークな一時ファイルパスを作る。
 fn temp_path(name: &str) -> std::path::PathBuf {

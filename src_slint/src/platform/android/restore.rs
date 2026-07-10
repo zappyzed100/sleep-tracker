@@ -1,11 +1,11 @@
-//! android_restore.rs — Android版「バックアップから復元」のファイルピッカー連携
+//! restore.rs — Android版「バックアップから復元」のファイルピッカー連携
 //!
 //! 役割 : rfd（Androidバックエンドを持たない）の代わりに、Kotlin側の
 //!        ACTION_OPEN_DOCUMENTシステムファイルピッカーをJNI経由で起動し、
 //!        選択されたファイルの内容をJNI経由で受け取ってevents::restore_eventsに
 //!        渡す。以前の「restore.txtを手動配置してもらう」方式を置き換える。
 //!
-//! 依存 : crate::{core::events, ui::home, MainWindow}, jni, ndk-context
+//! 依存 : crate::{core::events, ui::home, MainWindow}, super::bg, jni, ndk-context
 //! 公開 : `launch_picker`,
 //!        `Java_com_sleeptracker_app_MainActivity_nativeRestorePicked`（Kotlinの
 //!        onActivityResult()から呼ばれるJNIエントリポイント）
@@ -26,13 +26,13 @@ static HANDLE: Mutex<Option<(slint::Weak<MainWindow>, SharedState)>> = Mutex::ne
 //
 // ndk_context::android_context().context()はApplicationインスタンスを指しており
 // （android-activityクレートの実装、MainActivity固有ではない）、launchRestorePicker()
-// を呼べない。代わりにandroid_bg::activity()（nativeOnResume初回呼び出し時に保持した
+// を呼べない。代わりにbg::activity()（nativeOnResume初回呼び出し時に保持した
 // MainActivity自身へのグローバル参照）を使う。JavaVMの取得だけはndk_contextのままでよい。
 pub fn launch_picker(weak: slint::Weak<MainWindow>, state: SharedState) {
     *HANDLE.lock().unwrap() = Some((weak.clone(), state));
 
-    let Some(activity) = crate::platform::android_bg::activity() else {
-        eprintln!("[app] android_restore: ERROR MainActivity参照がまだ初期化されていません");
+    let Some(activity) = super::bg::activity() else {
+        eprintln!("[app] android restore: ERROR MainActivity参照がまだ初期化されていません");
         report_launch_failure(&weak);
         return;
     };
@@ -45,7 +45,7 @@ pub fn launch_picker(weak: slint::Weak<MainWindow>, state: SharedState) {
     });
 
     if let Err(e) = result {
-        eprintln!("[app] android_restore: ERROR launchRestorePicker呼び出し失敗 {:?}", e);
+        eprintln!("[app] android restore: ERROR launchRestorePicker呼び出し失敗 {:?}", e);
         report_launch_failure(&weak);
     }
 }

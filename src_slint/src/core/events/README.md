@@ -1,20 +1,29 @@
 # src_slint/src/core/events
 
-`events.rs` のテスト専用サブモジュール。
+`../events.rs`（エントリポイント）の実装を担う内部サブモジュール群。1000行超だった
+`events.rs`を責務ごとに分割している。外部からはこのフォルダの内部ファイルへ直接
+アクセスせず、必ず`../events.rs`の再公開経由で使う。
 
 ## 含まれるファイル
 
 | ファイル | 役割 |
 |---------|------|
-| `events_tests.rs` | `parse_sessions_from_str`（睡眠セッション再構築ロジック）・`detect_open_idle_and_out`・`is_out_from_content`・`coalesce_and_filter_app_usage` の単体テスト。`#[cfg(test)]` のみでビルドされる |
+| `parsing.rs` | イベント行→睡眠セッション変換のステートマシン本体。ファイルソート・モバイルイベント取り込み・キャッシュ付き取得(`get_sessions`) |
+| `excluded.rs` | 計測対象外の日（`DAY_EXCLUDED`/`DAY_INCLUDED`）の読み書き |
+| `usage_packages.rs` | 「睡眠判定に使うアプリ」（`USAGE_APP_SEEN`/`ALLOWED`/`DENIED`）の記録・許可状態管理 |
+| `session_ops.rs` | 手動セッションの追加・削除（CRUD） |
+| `backup.rs` | バックアップ・復元・全削除・データ圧縮(`compact_data`)・進行中セッション検出 |
+| `csv.rs` | CSVエクスポート・インポート |
+| `tests/` | 上記各モジュールの単体テスト。詳細は`tests/README.md`参照 |
 
 ## 依存関係
 
-- 依存する（import する）フォルダ：なし（`super::*` で親モジュール `events.rs` の非公開関数を参照するのみ）
-- 依存される（import される）フォルダ：なし（テストからのみ使われる）
+- 依存する（import する）フォルダ：`../../` (`crate::core::cloud`、`crate::core::utils`)
+- 依存される（import される）フォルダ：なし（`../events.rs`経由でのみ外部から使われる）
 
-## 注意
+## 内部モジュール間の依存
 
-テストの入力データはすべて架空の日付（`2024-01-01`〜）を使う。実際のユーザーの
-睡眠データ（日付・時刻）はプライバシー上コミットしないため、実データを再現する
-回帰テストも実データの日付そのものではなく同じ「事象の形」を架空の日付で表現する。
+同じ`events`配下の兄弟モジュール間は`super::`または`crate::core::events::`で
+直接参照し合う（例: `excluded.rs`/`usage_packages.rs`/`session_ops.rs`/`backup.rs`は
+いずれも`parsing::sort_events_file`等を使う）。`parsing.rs`は`excluded.rs`の
+`excluded_dates_from_content`を使う（除外判定はセッション構築時に行うため）。

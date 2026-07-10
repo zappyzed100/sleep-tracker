@@ -1,4 +1,4 @@
-//! android.rs — Android版エントリポイント
+//! entry.rs — Android版エントリポイント
 //!
 //! 役割 : cargo-apk が呼び出す android_main。Slintのandroid-activityバックエンドを
 //!        初期化し、アプリのデータ保存先（内部ストレージ）と

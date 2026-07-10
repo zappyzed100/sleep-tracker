@@ -1,10 +1,9 @@
 //! lib.rs — sleep_tracker (Rust + Slint) 共有ロジック・エントリポイント
 //!
-//! 役割 : デスクトップ（src/main.rs）・Android（src/platform/android.rs）の両方から
-//!        呼ばれる共通ロジック。Slintウィンドウの起動、共有static
-//!        （THRESHOLD_SECS, HTTP_CLIENT）、パスユーティリティ（data_dir, config_path）
-//!        を定義する。core/（ビジネスロジック）・platform/（OS固有機能）・
-//!        ui/（画面ロジック）を宣言し、起動時の初期化と全コールバックの配線を行う。
+//! 役割 : デスクトップ（src/main.rs）・Android（src/platform/android/entry.rs）の
+//!        両方から呼ばれる共通ロジック。core/（ビジネスロジック）・platform/（OS固有
+//!        機能）・ui/（画面ロジック）・paths/（データ/設定パス解決）を宣言し、
+//!        Slintウィンドウの起動と全コールバックの配線(`run`)を行う。
 //!
 //! 公開 : `run`, `THRESHOLD_SECS`, `data_dir`, `config_path`, `http_client`,
 //!        `Session`, `init_android_app_dir`（Android専用）
@@ -12,124 +11,17 @@
 mod core;
 mod platform;
 mod ui;
+mod paths;
 
 use core::{cloud, config, events, prediction};
 use ui::{home, settings_ui};
 
 pub use core::Session;
+pub use paths::*;
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::atomic::Ordering;
 
 slint::include_modules!();
-
-// Shared threshold: updated instantly by save_config, read by monitor thread.
-pub static THRESHOLD_SECS: AtomicU64 = AtomicU64::new(3600);
-
-static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-
-// ── Path utilities ────────────────────────────────────────────────────────────
-//
-// デスクトップ: exe の場所から上に辿って ui/main.slint をマーカーにsrc_slint/
-// 自身を探す。データ・設定ファイルはsrc_slint/配下に自己完結させる
-// （以前はTauri版のsrc_tauri/data/を間借りしていたが、src_tauri/を削除すると
-// データを見失う脆い作りだったため、src_slint単体で完結するよう変更した）。
-// Android: setup()でAndroidのアプリ内部ストレージパスを渡してもらう（Tauri版のAPP_DIR相当）。
-
-#[cfg(target_os = "android")]
-static ANDROID_APP_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-#[cfg(target_os = "android")]
-pub fn init_android_app_dir(path: PathBuf) {
-    let _ = ANDROID_APP_DIR.set(path);
-}
-
-// アプリ専用の外部ストレージ領域（/storage/emulated/0/Android/data/<package>/files/）。
-// スコープドストレージ配下でも特別な権限なしにファイルマネージャーから参照できるため、
-// CSVエクスポート・バックアップ・リストア（rfdが使えないAndroidの代替）に使う。
-#[cfg(target_os = "android")]
-static ANDROID_EXTERNAL_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-
-#[cfg(target_os = "android")]
-pub fn init_android_external_dir(path: Option<PathBuf>) {
-    let _ = ANDROID_EXTERNAL_DIR.set(path);
-}
-
-#[cfg(target_os = "android")]
-pub fn android_external_dir() -> Option<PathBuf> {
-    ANDROID_EXTERNAL_DIR.get().cloned().flatten()
-}
-
-#[cfg(not(target_os = "android"))]
-fn app_root() -> &'static PathBuf {
-    static ROOT: OnceLock<PathBuf> = OnceLock::new();
-    ROOT.get_or_init(|| {
-        let exe = std::env::current_exe().unwrap_or_default();
-        let mut dir = exe.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
-        for _ in 0..8 {
-            if dir.join("ui").join("main.slint").exists() { return dir; }
-            match dir.parent() {
-                Some(p) => dir = p.to_path_buf(),
-                None => break,
-            }
-        }
-        std::env::current_dir().unwrap_or_default()
-    })
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn data_dir() -> PathBuf {
-    static DATA: OnceLock<PathBuf> = OnceLock::new();
-    DATA.get_or_init(|| {
-        let dir = app_root().join("data");
-        let _ = std::fs::create_dir_all(&dir);
-        dir
-    }).clone()
-}
-
-#[cfg(target_os = "android")]
-pub fn data_dir() -> PathBuf {
-    ANDROID_APP_DIR.get().expect("init_android_app_dir が呼ばれていません").clone()
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn config_path() -> PathBuf {
-    app_root().join("config.json")
-}
-
-#[cfg(target_os = "android")]
-pub fn config_path() -> PathBuf {
-    data_dir().join("config.json")
-}
-
-// 自動バックアップ・手動バックアップ削除の書き込み先ベースディレクトリ。
-// PCはdata_dirと同じ場所でよいが、Androidのdata_dir()はアプリ内部保存領域
-// （スコープドストレージの外からは一切アクセスできない）なので、CSVエクスポート・
-// 手動バックアップと同じ「ファイルマネージャーから参照できる外部ストレージ領域」
-// （android_external_dir）に書き出す。
-#[cfg(not(target_os = "android"))]
-pub fn backups_base_dir() -> PathBuf {
-    data_dir()
-}
-
-#[cfg(target_os = "android")]
-pub fn backups_base_dir() -> PathBuf {
-    android_external_dir().unwrap_or_else(data_dir)
-}
-
-pub fn http_client() -> Result<&'static reqwest::blocking::Client, String> {
-    if HTTP_CLIENT.get().is_none() {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .pool_idle_timeout(std::time::Duration::from_secs(60))
-            .tcp_keepalive(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let _ = HTTP_CLIENT.set(client);
-    }
-    Ok(HTTP_CLIENT.get().unwrap())
-}
 
 // Drive → ローカルへの同期を1回実行する（別スレッド、完了後にUI再読み込み）。
 // 起動時と、PCがフォアグラウンドに戻った時の両方から呼ばれる共通処理。
@@ -560,7 +452,7 @@ pub fn run() {
 
     // フォアグラウンド定期同期・onResume()経由の同期キック（Androidのみ）
     #[cfg(target_os = "android")]
-    platform::android_bg::setup(&window, &state);
+    platform::android::setup(&window, &state);
 
     // window.run() は「最後のウィンドウが隠れたら」イベントループごと終了してしまうため、
     // トレイに閉じるだけのWindowsデスクトップでは使えない
