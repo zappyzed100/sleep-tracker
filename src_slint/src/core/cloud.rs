@@ -656,40 +656,56 @@ pub fn ensure_events_from_drive() {
 // Back up sleep_events.txt to Drive after writes.
 // Drive→ローカルマージ → push することで、他デバイスがDriveに書き込んだイベントの上書き消失を防ぐ。
 // 呼び出し側で std::thread::spawn すること。
+//
+// pull〜push間のハッシュ競合（他端末が割り込んで書き込んだ）は即座に再試行する。
+// 周期同期の間隔を60秒→10分に緩和した際、IDLE_START直後の一発pushが競合で
+// 拒否されると次の周期同期（最大10分後）までAndroid側にIDLE_STARTが届かなく
+// なる問題が発覚したため追加した（IDLE_RESUME側は別途pullし直すため気づかれ
+// にくかった）。ネットワーク断・検証NG等の競合以外の失敗は即時リトライしても
+// 改善しないため1回で諦め、次回の周期同期に任せる。
 pub fn auto_backup_after_event(events_path: &std::path::Path) {
-    // 1. Driveからマージ（他デバイスのイベントを取り込む）
-    let cfg = load_config_inner();
-    let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url.clone(), cfg.mobile_secret.clone()) {
-        if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
-    } else { None };
-    let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
-    // pull時点の内容のハッシュを覚えておき、push時にexpected_hashとして送る
-    // （pull〜push間に別端末が割り込んで書き込んだ場合、GAS側で拒否させるため。
-    // fetch自体に失敗した場合はNoneのままとなり、従来通りチェック無しでpushする）。
-    let mut pulled_hash: Option<String> = None;
-    if let Some((ref u, ref s)) = url_secret {
-        if let Some(drive_content) = fetch_drive_events(u, s) {
-            pulled_hash = Some(sha256_hex(&drive_content));
-            if merge_or_adopt(events_path, &drive_content, cloud_gen) {
-                *SESSION_CACHE.lock().unwrap() = None;
+    const MAX_ATTEMPTS: u32 = 3;
+    for attempt in 1..=MAX_ATTEMPTS {
+        // 1. Driveからマージ（他デバイスのイベントを取り込む）
+        let cfg = load_config_inner();
+        let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url.clone(), cfg.mobile_secret.clone()) {
+            if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
+        } else { None };
+        let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
+        // pull時点の内容のハッシュを覚えておき、push時にexpected_hashとして送る
+        // （pull〜push間に別端末が割り込んで書き込んだ場合、GAS側で拒否させるため。
+        // fetch自体に失敗した場合はNoneのままとなり、従来通りチェック無しでpushする）。
+        let mut pulled_hash: Option<String> = None;
+        if let Some((ref u, ref s)) = url_secret {
+            if let Some(drive_content) = fetch_drive_events(u, s) {
+                pulled_hash = Some(sha256_hex(&drive_content));
+                if merge_or_adopt(events_path, &drive_content, cloud_gen) {
+                    *SESSION_CACHE.lock().unwrap() = None;
+                }
             }
         }
-    }
-    // 2. push直前に世代が変わっていないか再確認してからDriveにpush
-    let should_push = url_secret.as_ref()
-        .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
-        .unwrap_or(true);
-    if should_push {
-        if let Ok(content) = std::fs::read_to_string(events_path) {
-            let msg = match &pulled_hash {
-                Some(h) => backup_to_drive_checked(&content, h),
-                None => backup_to_drive(&content),
-            };
-            eprintln!("{} auto_backup: {}", TAG, msg);
+        // 2. push直前に世代が変わっていないか再確認してからDriveにpush
+        let should_push = url_secret.as_ref()
+            .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
+            .unwrap_or(true);
+        if !should_push {
+            eprintln!("{} auto_backup: skip upload (cloud generation advanced mid-sync)", TAG);
+            return;
         }
-    } else {
-        eprintln!("{} auto_backup: skip upload (cloud generation advanced mid-sync)", TAG);
+        let Ok(content) = std::fs::read_to_string(events_path) else { return };
+        let msg = match &pulled_hash {
+            Some(h) => backup_to_drive_checked(&content, h),
+            None => backup_to_drive(&content),
+        };
+        eprintln!("{} auto_backup #{}: {}", TAG, attempt, msg);
+        if !msg.contains("conflict") {
+            return;
+        }
+        if attempt < MAX_ATTEMPTS {
+            eprintln!("{} auto_backup: conflict — retrying ({}/{})", TAG, attempt + 1, MAX_ATTEMPTS);
+        }
     }
+    eprintln!("{} auto_backup: gave up after {} attempts (persistent conflict)", TAG, MAX_ATTEMPTS);
 }
 
 // Back up sleep_manual.txt to Drive after writes. 呼び出し側で std::thread::spawn すること。
@@ -722,37 +738,6 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
     // 1. Fetch settings (update THRESHOLD_SECS from Drive)
     let _ = super::config::fetch_settings_from_cloud();
 
-    // 2. Drive → local merge (sleep_events.txt and sleep_manual.txt)
-    let cfg = load_config_inner();
-    let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
-        if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
-    } else { None };
-    let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
-    // pull時点の内容のハッシュを覚えておき、push時にexpected_hashとして送る
-    // （pull〜push間に別端末が割り込んで書き込んだ場合、GAS側で拒否させるため。
-    // fetch自体に失敗した場合はNoneのままとなり、従来通りチェック無しでpushする）。
-    let mut events_pulled_hash: Option<String> = None;
-    let mut manual_pulled_hash: Option<String> = None;
-    if let Some((ref u, ref s)) = url_secret {
-        if let Some(drive_content) = fetch_drive_events(u, s) {
-            let kb = drive_content.len() as f64 / 1024.0;
-            eprintln!("{} sync_mobile_inner #{}: {:.1}KB events from Drive", TAG, n, kb);
-            events_pulled_hash = Some(sha256_hex(&drive_content));
-            if merge_or_adopt(&events_path, &drive_content, cloud_gen) {
-                *SESSION_CACHE.lock().unwrap() = None;
-            }
-        }
-        if let Some(drive_manual) = fetch_drive_manual(u, s) {
-            let kb = drive_manual.len() as f64 / 1024.0;
-            eprintln!("{} sync_mobile_inner #{}: {:.1}KB manual from Drive", TAG, n, kb);
-            manual_pulled_hash = Some(sha256_hex(&drive_manual));
-            if merge_or_adopt(&manual_path, &drive_manual, cloud_gen) {
-                *SESSION_CACHE.lock().unwrap() = None;
-            }
-            let _ = sort_manual_file(&manual_path);
-        }
-    }
-
     // 3. Pull mobile events from Sheet (LEAVE_HOME / ARRIVE_HOME / APP_USAGE_START / APP_USAGE_END)
     pull_mobile_events_inner();
 
@@ -761,18 +746,58 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
         let _ = sort_events_file(&events_path);
     }
 
-    // 5. push直前に世代が変わっていないか再確認する。pull時点より進んでいたら、
-    // このマージ結果は既に古くなっている可能性があるためpushを見送る。
-    let should_push = url_secret.as_ref()
-        .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
-        .unwrap_or(true);
-    if should_push {
+    // 2・5. Drive → local merge → push。ハッシュ競合（pull〜push間に別端末が割り込んで
+    // 書き込んだ）の場合だけ即座に再試行する（詳細はauto_backup_after_event参照）。
+    let cfg = load_config_inner();
+    let url_secret = if let (Some(u), Some(s)) = (cfg.mobile_url, cfg.mobile_secret) {
+        if !u.is_empty() && !s.is_empty() { Some((u, s)) } else { None }
+    } else { None };
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut conflict = false;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let cloud_gen = url_secret.as_ref().and_then(|(u, s)| fetch_cloud_generation(u, s));
+        // pull時点の内容のハッシュを覚えておき、push時にexpected_hashとして送る
+        // （fetch自体に失敗した場合はNoneのままとなり、従来通りチェック無しでpushする）。
+        let mut events_pulled_hash: Option<String> = None;
+        let mut manual_pulled_hash: Option<String> = None;
+        if let Some((ref u, ref s)) = url_secret {
+            if let Some(drive_content) = fetch_drive_events(u, s) {
+                let kb = drive_content.len() as f64 / 1024.0;
+                eprintln!("{} sync_mobile_inner #{}: {:.1}KB events from Drive", TAG, n, kb);
+                events_pulled_hash = Some(sha256_hex(&drive_content));
+                if merge_or_adopt(&events_path, &drive_content, cloud_gen) {
+                    *SESSION_CACHE.lock().unwrap() = None;
+                }
+            }
+            if let Some(drive_manual) = fetch_drive_manual(u, s) {
+                let kb = drive_manual.len() as f64 / 1024.0;
+                eprintln!("{} sync_mobile_inner #{}: {:.1}KB manual from Drive", TAG, n, kb);
+                manual_pulled_hash = Some(sha256_hex(&drive_manual));
+                if merge_or_adopt(&manual_path, &drive_manual, cloud_gen) {
+                    *SESSION_CACHE.lock().unwrap() = None;
+                }
+                let _ = sort_manual_file(&manual_path);
+            }
+        }
+
+        // push直前に世代が変わっていないか再確認する。pull時点より進んでいたら、
+        // このマージ結果は既に古くなっている可能性があるためpushを見送る。
+        let should_push = url_secret.as_ref()
+            .map(|(u, s)| generation_unchanged_since(u, s, cloud_gen))
+            .unwrap_or(true);
+        if !should_push {
+            eprintln!("{} sync_mobile_inner #{}: skip upload (cloud generation advanced mid-sync)", TAG, n);
+            break;
+        }
+
+        conflict = false;
         if let Ok(content) = std::fs::read_to_string(&events_path) {
             let drive_msg = match &events_pulled_hash {
                 Some(h) => backup_to_drive_checked(&content, h),
                 None => backup_to_drive(&content),
             };
             eprintln!("{} sync_mobile_inner #{}: upload events: {}", TAG, n, drive_msg);
+            conflict |= drive_msg.contains("conflict");
         }
         if let Ok(manual_content) = std::fs::read_to_string(&manual_path) {
             let manual_msg = match &manual_pulled_hash {
@@ -780,9 +805,15 @@ pub fn sync_mobile_inner() -> Vec<super::events::Session> {
                 None => backup_manual_to_drive(&manual_content),
             };
             eprintln!("{} sync_mobile_inner #{}: upload manual: {}", TAG, n, manual_msg);
+            conflict |= manual_msg.contains("conflict");
         }
-    } else {
-        eprintln!("{} sync_mobile_inner #{}: skip upload (cloud generation advanced mid-sync)", TAG, n);
+        if !conflict || attempt == MAX_ATTEMPTS {
+            break;
+        }
+        eprintln!("{} sync_mobile_inner #{}: conflict — retrying ({}/{})", TAG, n, attempt + 1, MAX_ATTEMPTS);
+    }
+    if conflict {
+        eprintln!("{} sync_mobile_inner #{}: gave up after {} attempts (persistent conflict)", TAG, n, MAX_ATTEMPTS);
     }
 
     // 6. Parse sessions (rebuild cache)
