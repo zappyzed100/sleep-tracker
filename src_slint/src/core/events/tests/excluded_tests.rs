@@ -12,11 +12,11 @@ use crate::core::events::parsing::parse_sessions_from_str;
 const MIN: i64 = 60;
 
 fn sessions(raw: &str, min_secs: i64) -> Vec<Session> {
-    parse_sessions_from_str(raw, None, None, min_secs).0
+    parse_sessions_from_str(raw, None, None, min_secs, MIN).0
 }
 
 fn sessions_with_manual(raw: &str, manual: &str, min_secs: i64) -> Vec<Session> {
-    parse_sessions_from_str(raw, Some(manual), None, min_secs).0
+    parse_sessions_from_str(raw, Some(manual), None, min_secs, MIN).0
 }
 
 #[test]

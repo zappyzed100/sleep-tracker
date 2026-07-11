@@ -1282,6 +1282,7 @@ component SettingsPanel {
     in-out property <string> mobile-url: "";
     in-out property <string> mobile-secret: "";
     in-out property <int> night-type-boundary-hour: 14;
+    in-out property <int> min-screen-on-minutes: 5;
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
     in property <string> shortcut-message: "";
@@ -1402,6 +1403,24 @@ component SettingsPanel {
                     Text { text: "時台としてグラフ上でも夜型判定"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
                 }
                 SettingsNote { text: "週間チャートの就寝/起床の折れ線と、昼型/夜型バッジの判定に使う基準時刻です（デフォルト14時）"; }
+                HorizontalLayout {
+                    alignment: start;
+                    SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
+                }
+                if root.save-message != "": SettingsNote { text: root.save-message; kind: root.save-kind; }
+            }
+
+            // ── タブレット画面ON区間の無視しきい値 ──
+            SettingsSection {
+                title: "タブレット画面ONの無視しきい値";
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text { text: "画面ONが"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
+                    NumSpin { spin-width: 74px; minimum: 0; maximum: 60; value: root.min-screen-on-minutes; edited(v) => { root.min-screen-on-minutes = v; } }
+                    Text { text: "分未満なら睡眠判定では無視する"; color: #cdd6f4; font-size: 16px; vertical-alignment: center; }
+                }
+                SettingsNote { text: "タブレットの画面が一瞬ついただけ（通知確認等）を「起きていた」と誤判定しないための最小時間です（デフォルト5分）"; }
                 HorizontalLayout {
                     alignment: start;
                     SettingsBtn { text: "保存"; btn-width: 80px; primary: true; clicked => { root.save-settings(); } }
@@ -1655,6 +1674,7 @@ export component MainWindow inherits Window {
     in-out property <string> mobile-url: "";
     in-out property <string> mobile-secret: "";
     in-out property <int> night-type-boundary-hour: 14;
+    in-out property <int> min-screen-on-minutes: 5;
     in property <string> connection-status: "";
     in property <bool> connection-ok: false;
     in property <string> shortcut-message: "";
@@ -1864,6 +1884,7 @@ export component MainWindow inherits Window {
             mobile-url <=> root.mobile-url;
             mobile-secret <=> root.mobile-secret;
             night-type-boundary-hour <=> root.night-type-boundary-hour;
+            min-screen-on-minutes <=> root.min-screen-on-minutes;
             connection-status: root.connection-status;
             connection-ok: root.connection-ok;
             shortcut-message: root.shortcut-message;

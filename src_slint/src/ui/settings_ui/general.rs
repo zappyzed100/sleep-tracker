@@ -28,6 +28,9 @@ pub fn load_into_window(window: &MainWindow) {
     window.set_night_type_boundary_hour(
         cfg.night_type_boundary_hour.unwrap_or(config::NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT) as i32
     );
+    window.set_min_screen_on_minutes(
+        cfg.min_screen_on_minutes.unwrap_or(config::MIN_SCREEN_ON_MINUTES_DEFAULT) as i32
+    );
     window.set_sync_paused(cloud::is_sync_paused());
 }
 
@@ -46,7 +49,8 @@ pub fn save(window: &MainWindow) {
     let secret = window.get_mobile_secret().to_string();
     let target = current_target_wake(window);
     let night_boundary = Some(window.get_night_type_boundary_hour() as f64);
-    match config::save_config(idle, url, secret, target, None, night_boundary) {
+    let min_screen_on_minutes = window.get_min_screen_on_minutes() as u32;
+    match config::save_config(idle, url, secret, target, None, night_boundary, min_screen_on_minutes) {
         Ok(()) => {
             window.set_save_message(format!("✓ 保存しました ({})", now_hms()).into());
             window.set_save_kind(KIND_SUCCESS.into());

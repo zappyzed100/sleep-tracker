@@ -124,14 +124,15 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
 }
 
 // SCREEN_ON区間（タブレットのUsageStatsManager由来、画面が実際にONだった区間）の
-// フィルタ用しきい値。旧APP_USAGE方式の scratchpad/sync_design_test 検証時の値を
-// そのまま踏襲している。
-const MIN_SCREEN_ON_SECS: i64 = 60;           // これ未満の点灯は「通知で一瞬光っただけ」として無視
-const SCREEN_ON_MERGE_GAP_SECS: i64 = 120;    // この間隔以内の点灯は1回の利用として統合してから判定する
+// 統合間隔。この間隔以内の点灯は1回の利用として統合してから判定する
+// （画面ロック→即再開のような細切れ検知対策）。「これ未満は無視する」最小時間
+// （旧MIN_SCREEN_ON_SECS）は設定画面から変更できるようcrate::MIN_SCREEN_ON_SECS
+// （crate::config::save_configが更新）に移した。
+const SCREEN_ON_MERGE_GAP_SECS: i64 = 120;
 
 // 近接するSCREEN_ON区間を統合し（画面ロック→即再開のような細切れ検知対策）、
-// 統合後もなお短すぎる区間（通知で一瞬点灯しただけ等）は除外する。
-pub(super) fn coalesce_and_filter_screen_on(mut pairs: Vec<(i64, String, i64, String)>) -> Vec<(i64, String, i64, String)> {
+// 統合後もなお`min_screen_on_secs`未満の短すぎる区間（通知で一瞬点灯しただけ等）は除外する。
+pub(super) fn coalesce_and_filter_screen_on(mut pairs: Vec<(i64, String, i64, String)>, min_screen_on_secs: i64) -> Vec<(i64, String, i64, String)> {
     pairs.sort_by_key(|(s, _, _, _)| *s);
     let mut merged: Vec<(i64, String, i64, String)> = Vec::new();
     for (s, s_ts, e, e_ts) in pairs {
@@ -146,7 +147,7 @@ pub(super) fn coalesce_and_filter_screen_on(mut pairs: Vec<(i64, String, i64, St
         }
         merged.push((s, s_ts, e, e_ts));
     }
-    merged.into_iter().filter(|(s, _, e, _)| e - s >= MIN_SCREEN_ON_SECS).collect()
+    merged.into_iter().filter(|(s, _, e, _)| e - s >= min_screen_on_secs).collect()
 }
 
 fn ts_to_epoch(s: &str) -> Option<i64> {
@@ -178,10 +179,11 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed) + 1;
 
-    let events_path    = crate::data_dir().join("sleep_events.txt");
-    let heartbeat_path = crate::data_dir().join("sleep_heartbeat.txt");
-    let manual_path    = crate::data_dir().join("sleep_manual.txt");
-    let min_sleep_secs = crate::THRESHOLD_SECS.load(Ordering::Relaxed) as i64;
+    let events_path      = crate::data_dir().join("sleep_events.txt");
+    let heartbeat_path   = crate::data_dir().join("sleep_heartbeat.txt");
+    let manual_path      = crate::data_dir().join("sleep_manual.txt");
+    let min_sleep_secs     = crate::THRESHOLD_SECS.load(Ordering::Relaxed) as i64;
+    let min_screen_on_secs = crate::MIN_SCREEN_ON_SECS.load(Ordering::Relaxed) as i64;
 
     if !events_path.exists() {
         eprintln!("{} parse_sessions #{}: cache MISS — no file", TAG, n);
@@ -198,6 +200,7 @@ pub fn parse_sessions_rust() -> Result<Vec<Session>, String> {
         manual_raw.as_deref(),
         heartbeat_raw.as_deref(),
         min_sleep_secs,
+        min_screen_on_secs,
     );
     let ms = t0.elapsed().as_millis();
     eprintln!("{} parse_sessions #{}: cache MISS — {} events → {} sessions ({:.1}KB)  (+{}ms)",
@@ -215,6 +218,7 @@ pub(super) fn parse_sessions_from_str(
     manual_raw: Option<&str>,
     heartbeat_raw: Option<&str>,
     min_sleep_secs: i64,
+    min_screen_on_secs: i64,
 ) -> (Vec<Session>, usize) {
     // Heartbeat (for POWER_LOSS start-time correction)
     let mut hb_epoch: i64 = 0;
@@ -351,7 +355,7 @@ pub(super) fn parse_sessions_from_str(
 
     // SCREEN_ON区間の統合・フィルタ（画面ロック→即再開のような細切れ検知対策と、
     // 通知で一瞬点灯しただけ等のノイズ除去）。詳細はコメント参照。
-    let screen_on_pairs = coalesce_and_filter_screen_on(screen_on_pairs);
+    let screen_on_pairs = coalesce_and_filter_screen_on(screen_on_pairs, min_screen_on_secs);
 
     // Pass 2 ─────────────────────────────────────────────────────────────────────
     let mut sessions: Vec<Session> = Vec::new();

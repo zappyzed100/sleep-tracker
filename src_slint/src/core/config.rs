@@ -17,6 +17,10 @@ const TAG: &str = "[config]";
 // utils::single_day_summaryの就寝/起床チャート用スケール変換に使う。
 pub const NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT: f64 = 14.0;
 
+// SCREEN_ON区間のうち、これ未満は「一瞬触れただけ」として睡眠判定から無視する
+// 最小時間のデフォルト値（分）。core::events::parsing::coalesce_and_filter_screen_on参照。
+pub const MIN_SCREEN_ON_MINUTES_DEFAULT: u32 = 5;
+
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct AppConfig {
     pub idle_threshold_minutes: Option<u32>,
@@ -25,6 +29,7 @@ pub struct AppConfig {
     pub target_wake_time: Option<String>,
     pub screen_on_enabled: Option<bool>,
     pub night_type_boundary_hour: Option<f64>,
+    pub min_screen_on_minutes: Option<u32>,
 }
 
 // Subset of config synced between PC and Android via Drive.
@@ -33,6 +38,7 @@ struct SyncSettings {
     idle_threshold_minutes: Option<u32>,
     target_wake_time: Option<String>,
     night_type_boundary_hour: Option<f64>,
+    min_screen_on_minutes: Option<u32>,
 }
 
 pub fn load_config_inner() -> AppConfig {
@@ -55,6 +61,7 @@ pub fn save_config(
     target_wake_time: Option<String>,
     screen_on_enabled: Option<bool>,
     night_type_boundary_hour: Option<f64>,
+    min_screen_on_minutes: u32,
 ) -> Result<(), String> {
     let t0 = std::time::Instant::now();
     let cfg = AppConfig {
@@ -64,10 +71,12 @@ pub fn save_config(
         target_wake_time: target_wake_time.filter(|s| !s.is_empty()),
         screen_on_enabled,
         night_type_boundary_hour,
+        min_screen_on_minutes: Some(min_screen_on_minutes),
     };
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     std::fs::write(crate::config_path(), json).map_err(|e| e.to_string())?;
     crate::THRESHOLD_SECS.store(idle_threshold_minutes as u64 * 60, Ordering::Relaxed);
+    crate::MIN_SCREEN_ON_SECS.store(min_screen_on_minutes as u64 * 60, Ordering::Relaxed);
     *super::events::SESSION_CACHE.lock().unwrap() = None;
 
     let ms = t0.elapsed().as_millis();
@@ -90,6 +99,7 @@ pub fn push_settings_to_drive_inner(cfg: &AppConfig) {
         idle_threshold_minutes: cfg.idle_threshold_minutes,
         target_wake_time: cfg.target_wake_time.clone(),
         night_type_boundary_hour: cfg.night_type_boundary_hour,
+        min_screen_on_minutes: cfg.min_screen_on_minutes,
     };
     let Ok(body) = serde_json::to_string(&sync) else { return };
     let url = format!("{}?secret={}&action=set_settings", base_url.trim_end_matches('/'), secret);
@@ -131,6 +141,11 @@ pub fn fetch_settings_from_cloud() -> Result<(), String> {
     }
     if let Some(v) = sync.target_wake_time { local.target_wake_time = Some(v); }
     if let Some(v) = sync.night_type_boundary_hour { local.night_type_boundary_hour = Some(v); }
+    if let Some(v) = sync.min_screen_on_minutes {
+        local.min_screen_on_minutes = Some(v);
+        crate::MIN_SCREEN_ON_SECS.store(v as u64 * 60, Ordering::Relaxed);
+        *super::events::SESSION_CACHE.lock().unwrap() = None;
+    }
     let json = serde_json::to_string_pretty(&local).map_err(|e| e.to_string())?;
     std::fs::write(crate::config_path(), json).map_err(|e| e.to_string())?;
     let ms = t0.elapsed().as_millis();

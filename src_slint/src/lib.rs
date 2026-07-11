@@ -53,10 +53,13 @@ pub fn run() {
         }
     }
 
-    // 起動時初期化: config.jsonからTHRESHOLD_SECSを読み込み
+    // 起動時初期化: config.jsonからTHRESHOLD_SECS/MIN_SCREEN_ON_SECSを読み込み
     let cfg = config::load_config_inner();
     if let Some(m) = cfg.idle_threshold_minutes {
         THRESHOLD_SECS.store(m as u64 * 60, Ordering::Relaxed);
+    }
+    if let Some(m) = cfg.min_screen_on_minutes {
+        MIN_SCREEN_ON_SECS.store(m as u64 * 60, Ordering::Relaxed);
     }
 
     let window = MainWindow::new().expect("ウィンドウの作成に失敗しました");

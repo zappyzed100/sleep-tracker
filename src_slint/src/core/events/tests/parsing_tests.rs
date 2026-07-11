@@ -15,11 +15,11 @@ use crate::core::events::parsing::{parse_sessions_from_str, is_out_from_content,
 const MIN: i64 = 60; // テスト用のゆるいしきい値（1分）。特にことわりが無い限りこれを使う。
 
 fn sessions(raw: &str, min_secs: i64) -> Vec<Session> {
-    parse_sessions_from_str(raw, None, None, min_secs).0
+    parse_sessions_from_str(raw, None, None, min_secs, MIN).0
 }
 
 fn sessions_with_manual(raw: &str, manual: &str, min_secs: i64) -> Vec<Session> {
-    parse_sessions_from_str(raw, Some(manual), None, min_secs).0
+    parse_sessions_from_str(raw, Some(manual), None, min_secs, MIN).0
 }
 
 fn hours(s: &Session) -> f64 { (s.duration_hours * 100.0).round() / 100.0 }
@@ -428,7 +428,7 @@ fn is_out_from_content_device_on_also_cancels_out() {
 #[test]
 fn coalesce_filters_out_short_isolated_usage() {
     let pairs = vec![(0i64, "t0".to_string(), 30i64, "t1".to_string())];
-    assert_eq!(coalesce_and_filter_screen_on(pairs).len(), 0);
+    assert_eq!(coalesce_and_filter_screen_on(pairs, MIN).len(), 0);
 }
 
 #[test]
@@ -438,7 +438,7 @@ fn coalesce_merges_close_pairs_and_keeps_if_combined_long_enough() {
         (100i64, "c".to_string(), 130i64, "d".to_string()),
     ];
     // gap = 100-40 = 60秒 <= 120秒 → 統合。統合後の長さ = 130 = 60秒以上 → 採用。
-    let merged = coalesce_and_filter_screen_on(pairs);
+    let merged = coalesce_and_filter_screen_on(pairs, MIN);
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].0, 0);
     assert_eq!(merged[0].2, 130);
@@ -450,5 +450,14 @@ fn coalesce_keeps_far_apart_pairs_separate() {
         (0i64, "a".to_string(), 90i64, "b".to_string()),
         (1000i64, "c".to_string(), 1090i64, "d".to_string()),
     ];
-    assert_eq!(coalesce_and_filter_screen_on(pairs).len(), 2);
+    assert_eq!(coalesce_and_filter_screen_on(pairs, MIN).len(), 2);
+}
+
+#[test]
+fn coalesce_filter_threshold_is_configurable() {
+    // min_screen_on_secsを300秒（設定画面のデフォルト5分）にすると、
+    // 60秒のMIN定数では通っていた区間も無視されるようになる。
+    let pairs = vec![(0i64, "t0".to_string(), 200i64, "t1".to_string())];
+    assert_eq!(coalesce_and_filter_screen_on(pairs.clone(), MIN).len(), 1, "60秒しきい値なら200秒は残る");
+    assert_eq!(coalesce_and_filter_screen_on(pairs, 300).len(), 0, "300秒しきい値なら200秒は無視される");
 }

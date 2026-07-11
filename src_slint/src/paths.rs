@@ -6,8 +6,9 @@
 //!        （接続プーリング）を提供する。lib.rsから`pub use paths::*`で再公開され、
 //!        crate全体から`crate::data_dir()`等でそのまま呼べる。
 //!
-//! 公開 : `THRESHOLD_SECS`, `data_dir`, `config_path`, `backups_base_dir`, `http_client`,
-//!        `init_android_app_dir`, `init_android_external_dir`, `android_external_dir`（Android専用）
+//! 公開 : `THRESHOLD_SECS`, `MIN_SCREEN_ON_SECS`, `data_dir`, `config_path`, `backups_base_dir`,
+//!        `http_client`, `init_android_app_dir`, `init_android_external_dir`,
+//!        `android_external_dir`（Android専用）
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -15,6 +16,11 @@ use std::sync::OnceLock;
 
 // Shared threshold: updated instantly by save_config, read by monitor thread.
 pub static THRESHOLD_SECS: AtomicU64 = AtomicU64::new(3600);
+
+// SCREEN_ON区間のうち、この秒数未満は「一瞬触れただけ」として睡眠判定から無視する。
+// save_configから更新され、core::events::parsingが都度ファイルを読まずに使える
+// （THRESHOLD_SECSと同じパターン）。
+pub static MIN_SCREEN_ON_SECS: AtomicU64 = AtomicU64::new(300);
 
 static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
 
