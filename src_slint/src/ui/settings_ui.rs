@@ -6,13 +6,12 @@
 //!        共通の確認待ちフラグ・メッセージ種別・完了時刻フォーマットもここで
 //!        定義し、`super::`経由で各サブモジュールから使う。
 //!
-//! 依存 : crate::{MainWindow, BackupEntryVM, UsagePackageVM}, config, platform, cloud, events
+//! 依存 : crate::{MainWindow, BackupEntryVM}, config, platform, cloud, events
 //! 公開 : `load_into_window`, `save`, `test_connection`, `toggle_startup`,
 //!        `create_shortcut`, `export_csv`, `clear_all_data`, `clear_all_data_and_cloud`,
 //!        `compact_data`, `clear_backups`, `sync_now`, `backup`, `restore`,
 //!        `open_backup_list`, `close_backup_list`, `restore_from_backup`,
-//!        `restore_via_external_picker`, `clear_stale_confirmations`,
-//!        `load_usage_packages`, `toggle_usage_package`
+//!        `restore_via_external_picker`, `clear_stale_confirmations`
 
 use crate::MainWindow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,7 +67,7 @@ mod export;
 mod backup_restore;
 mod data_management;
 
-pub use general::{load_into_window, load_usage_packages, toggle_usage_package, save, toggle_startup, create_shortcut, test_connection, sync_now};
+pub use general::{load_into_window, save, toggle_startup, create_shortcut, test_connection, sync_now};
 pub use export::export_csv;
 pub use backup_restore::{backup, restore, open_backup_list, close_backup_list, restore_from_backup, restore_via_external_picker};
 pub use data_management::{clear_all_data, clear_all_data_and_cloud, compact_data, clear_backups};

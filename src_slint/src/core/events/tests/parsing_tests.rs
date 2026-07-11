@@ -10,7 +10,7 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 use crate::core::events::Session;
-use crate::core::events::parsing::{parse_sessions_from_str, is_out_from_content, coalesce_and_filter_app_usage};
+use crate::core::events::parsing::{parse_sessions_from_str, is_out_from_content, coalesce_and_filter_screen_on};
 
 const MIN: i64 = 60; // テスト用のゆるいしきい値（1分）。特にことわりが無い限りこれを使う。
 
@@ -114,9 +114,9 @@ fn real_world_regression_overnight_device_on_noise() {
 2024-01-01 02:35:47,DEVICE_ON
 2024-01-01 04:05:38,DEVICE_ON
 2024-01-01 04:39:13,DEVICE_ON
-2024-01-01 06:42:52,APP_USAGE_START
+2024-01-01 06:42:52,SCREEN_ON_START
 2024-01-01 06:42:55,DEVICE_ON
-2024-01-01 06:47:19,APP_USAGE_END
+2024-01-01 06:47:19,SCREEN_ON_END
 2024-01-01 07:52:34,DEVICE_ON
 ";
     // IDLE_RESUMEがまだ無い＝進行中。完了セッションとしては0件が正しい
@@ -210,14 +210,14 @@ fn unclosed_out_start_is_ignored_not_treated_as_gap() {
     assert_eq!(hours(&s[0]), 8.0);
 }
 
-// ── APP_USAGE区間（タブレット実利用）による分割 ───────────────────────────────
+// ── SCREEN_ON区間（タブレット画面が実際にONだった区間）による分割 ─────────────
 
 #[test]
-fn app_usage_gap_splits_session_same_as_out() {
+fn screen_on_gap_splits_session_same_as_out() {
     let raw = "\
 2024-01-01 00:00:00,IDLE_START
-2024-01-01 02:00:00,APP_USAGE_START
-2024-01-01 02:30:00,APP_USAGE_END
+2024-01-01 02:00:00,SCREEN_ON_START
+2024-01-01 02:30:00,SCREEN_ON_END
 2024-01-01 08:00:00,IDLE_RESUME
 ";
     let s = sessions(raw, MIN);
@@ -227,14 +227,14 @@ fn app_usage_gap_splits_session_same_as_out() {
 }
 
 #[test]
-fn app_usage_shorter_than_60s_is_noise_and_ignored() {
+fn screen_on_shorter_than_60s_is_noise_and_ignored() {
     let raw = "\
 2024-01-01 00:00:00,IDLE_START
-2024-01-01 02:00:00,APP_USAGE_START
-2024-01-01 02:00:30,APP_USAGE_END
+2024-01-01 02:00:00,SCREEN_ON_START
+2024-01-01 02:00:30,SCREEN_ON_END
 2024-01-01 08:00:00,IDLE_RESUME
 ";
-    // 30秒の利用はMIN_APP_USAGE_SECS(60秒)未満なのでギャップとして扱われず、
+    // 30秒の点灯はMIN_SCREEN_ON_SECS(60秒)未満なのでギャップとして扱われず、
     // セッションは分割されない。
     let s = sessions(raw, MIN);
     assert_eq!(s.len(), 1);
@@ -242,33 +242,33 @@ fn app_usage_shorter_than_60s_is_noise_and_ignored() {
 }
 
 #[test]
-fn app_usage_close_together_are_coalesced_into_one_gap() {
+fn screen_on_close_together_are_coalesced_into_one_gap() {
     let raw = "\
 2024-01-01 00:00:00,IDLE_START
-2024-01-01 02:00:00,APP_USAGE_START
-2024-01-01 02:00:40,APP_USAGE_END
-2024-01-01 02:01:30,APP_USAGE_START
-2024-01-01 02:02:00,APP_USAGE_END
+2024-01-01 02:00:00,SCREEN_ON_START
+2024-01-01 02:00:40,SCREEN_ON_END
+2024-01-01 02:01:30,SCREEN_ON_START
+2024-01-01 02:02:00,SCREEN_ON_END
 2024-01-01 08:00:00,IDLE_RESUME
 ";
     // 個々は40秒・30秒で単独ならノイズ扱いだが、90秒しか離れておらず
-    // (APP_USAGE_MERGE_GAP_SECS=120秒以内)、統合後は120秒(60秒以上)なので
+    // (SCREEN_ON_MERGE_GAP_SECS=120秒以内)、統合後は120秒(60秒以上)なので
     // 1つの有効なギャップとして扱われ、セッションが分割される。
     let s = sessions(raw, MIN);
     assert_eq!(s.len(), 2);
 }
 
 #[test]
-fn out_and_app_usage_overlapping_do_not_double_count() {
+fn out_and_screen_on_overlapping_do_not_double_count() {
     let raw = "\
 2024-01-01 00:00:00,IDLE_START
 2024-01-01 02:00:00,OUT_START
-2024-01-01 03:00:00,APP_USAGE_START
-2024-01-01 03:30:00,APP_USAGE_END
+2024-01-01 03:00:00,SCREEN_ON_START
+2024-01-01 03:30:00,SCREEN_ON_END
 2024-01-01 04:00:00,OUT_END
 2024-01-01 08:00:00,IDLE_RESUME
 ";
-    // OUT(02:00-04:00)とAPP_USAGE(03:00-03:30)は重なっている。重複部分が
+    // OUT(02:00-04:00)とSCREEN_ON(03:00-03:30)は重なっている。重複部分が
     // 二重に切り出されて余計な断片が生まれないことを確認する（2分割のまま）。
     let s = sessions(raw, MIN);
     assert_eq!(s.len(), 2);
@@ -416,19 +416,19 @@ fn is_out_from_content_false_after_out_end() {
 
 #[test]
 fn is_out_from_content_device_on_also_cancels_out() {
-    // DEVICE_ON / APP_USAGE_START は「在宅解除」専用として扱われるため、
+    // DEVICE_ON / SCREEN_ON_START は「在宅解除」専用として扱われるため、
     // 外出フラグを解除する（睡眠セッションの分割には使わないのと別軸の話）。
     assert!(!is_out_from_content(
         "2024-01-01 00:00:00,OUT_START\n2024-01-01 01:00:00,DEVICE_ON\n"
     ));
 }
 
-// ── coalesce_and_filter_app_usage ──────────────────────────────────────────────
+// ── coalesce_and_filter_screen_on ──────────────────────────────────────────────
 
 #[test]
 fn coalesce_filters_out_short_isolated_usage() {
     let pairs = vec![(0i64, "t0".to_string(), 30i64, "t1".to_string())];
-    assert_eq!(coalesce_and_filter_app_usage(pairs).len(), 0);
+    assert_eq!(coalesce_and_filter_screen_on(pairs).len(), 0);
 }
 
 #[test]
@@ -438,7 +438,7 @@ fn coalesce_merges_close_pairs_and_keeps_if_combined_long_enough() {
         (100i64, "c".to_string(), 130i64, "d".to_string()),
     ];
     // gap = 100-40 = 60秒 <= 120秒 → 統合。統合後の長さ = 130 = 60秒以上 → 採用。
-    let merged = coalesce_and_filter_app_usage(pairs);
+    let merged = coalesce_and_filter_screen_on(pairs);
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].0, 0);
     assert_eq!(merged[0].2, 130);
@@ -450,5 +450,5 @@ fn coalesce_keeps_far_apart_pairs_separate() {
         (0i64, "a".to_string(), 90i64, "b".to_string()),
         (1000i64, "c".to_string(), 1090i64, "d".to_string()),
     ];
-    assert_eq!(coalesce_and_filter_app_usage(pairs).len(), 2);
+    assert_eq!(coalesce_and_filter_screen_on(pairs).len(), 2);
 }

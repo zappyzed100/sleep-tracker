@@ -5,7 +5,7 @@
 //!        保持する共有状態(AppState)の定義、期間タブ(Period)、週送り・全体再読み込み
 //!        (refresh_all)を担当する。
 //!
-//! 依存 : super::{stats, chart}, crate::{MainWindow}, crate::ui::settings_ui
+//! 依存 : super::{stats, chart}, crate::{MainWindow}
 
 use crate::MainWindow;
 use chrono::{Datelike, NaiveDate};
@@ -123,9 +123,6 @@ pub fn refresh_all(window: &MainWindow, state: &SharedState) {
     super::stats::compute_stats(window, state);
     super::stats::recompute_prediction(window);
     super::chart::update_chart(window, state);
-    // 同期で他端末が検知した「睡眠判定に使うアプリ」も届くため、同期後の
-    // 再読み込みのたびに一覧も更新する。
-    crate::ui::settings_ui::load_usage_packages(window);
 }
 
 pub fn adjust_week(state: &SharedState, days: i64) {

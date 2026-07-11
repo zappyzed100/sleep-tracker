@@ -181,7 +181,6 @@ pub fn current_sleep_start() -> Option<String> {
 // 残して作り直すため、ここに載っていないタグの行は圧縮のたびに失われる。
 // 新しい種類のマーカーを追加する時はここに足すだけでよい。
 const PRESERVED_METADATA_TAG_PREFIXES: &[&str] = &[
-    "USAGE_APP_SEEN:", "USAGE_APP_ALLOWED:", "USAGE_APP_DENIED:",
     "DAY_EXCLUDED:", "DAY_INCLUDED:",
 ];
 
@@ -214,10 +213,9 @@ pub fn compact_data() -> Result<String, String> {
     let raw = std::fs::read_to_string(&events_path).unwrap_or_default();
     let (open_idle, open_out) = detect_open_idle_and_out(&raw);
 
-    // 「睡眠判定に使うアプリ」の検知履歴・ON/OFF設定と、各日の計測対象外設定
-    // （DAY_EXCLUDED/DAY_INCLUDED）はセッションではないため圧縮対象外とし、そのまま
-    // 引き継ぐ（消すとユーザーが設定したON/OFFや計測対象外設定が圧縮のたびに
-    // 失われてしまうため）。
+    // 各日の計測対象外設定（DAY_EXCLUDED/DAY_INCLUDED）はセッションではないため
+    // 圧縮対象外とし、そのまま引き継ぐ（消すとユーザーが設定した計測対象外設定が
+    // 圧縮のたびに失われてしまうため）。
     let metadata_lines = extract_preserved_metadata_lines(&raw);
 
     let mut lines: Vec<String> = Vec::with_capacity(sessions.len() * 2 + 2 + metadata_lines.len());

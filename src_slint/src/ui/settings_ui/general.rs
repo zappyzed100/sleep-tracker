@@ -7,9 +7,9 @@
 //!        crate::core::{cloud, config, events}, crate::platform::windows
 
 use super::{clear_stale_confirmations, now_hms, KIND_ERROR, KIND_SUCCESS, KIND_WARN};
-use crate::core::{cloud, config, events};
+use crate::core::{cloud, config};
 use crate::platform::windows as platform;
-use crate::{MainWindow, UsagePackageVM};
+use crate::MainWindow;
 
 pub fn load_into_window(window: &MainWindow) {
     let cfg = config::load_config_inner();
@@ -29,26 +29,6 @@ pub fn load_into_window(window: &MainWindow) {
         cfg.night_type_boundary_hour.unwrap_or(config::NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT) as i32
     );
     window.set_sync_paused(cloud::is_sync_paused());
-    load_usage_packages(window);
-}
-
-// 「睡眠判定に使うアプリ」一覧を読み込んでウィンドウへ反映する。sleep_events.txt経由の
-// 通常同期で他端末の検知結果も届くため、起動時だけでなくhome::refresh_all（同期後の
-// 再読み込み）からも呼ばれる。
-pub fn load_usage_packages(window: &MainWindow) {
-    let entries: Vec<UsagePackageVM> = events::list_usage_packages().into_iter()
-        .map(|e| UsagePackageVM { package: e.package.into(), label: e.label.into(), allowed: e.allowed })
-        .collect();
-    window.set_usage_packages(slint::ModelRc::new(slint::VecModel::from(entries)));
-}
-
-// 設定画面のトグルから呼ぶ。ON/OFFを反映し、一覧を再読み込みする。
-pub fn toggle_usage_package(weak: slint::Weak<MainWindow>, package: String, new_allowed: bool) {
-    let Some(window) = weak.upgrade() else { return };
-    if let Err(e) = events::set_usage_package_allowed(&package, new_allowed) {
-        eprintln!("[app] toggle_usage_package: ERROR {}", e);
-    }
-    load_usage_packages(&window);
 }
 
 fn current_target_wake(window: &MainWindow) -> Option<String> {

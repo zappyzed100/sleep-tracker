@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
 // ならないため、睡眠判定の材料としては信頼できないと判断した
 // （scratchpad/sync_design_testでの検証・議論、および実際にDEVICE_ONが
 // 睡眠セッションを誤って短く打ち切るバグを引き起こした件を参照）。
-// 代わりにUsageReporterがUsageStatsManager由来の実際のアプリ利用区間を送信する。
+// 代わりにUsageReporterがUsageStatsManager由来の画面ON（SCREEN_INTERACTIVE）区間を送信する。
 //
 // 15分ごとの定期バックグラウンド送信（PeriodicWorkRequestBuilder）は上記の理由で
 // 一度廃止したが、今回はDEVICE_ON送信としてではなく「Drive同期をキックするだけ」の

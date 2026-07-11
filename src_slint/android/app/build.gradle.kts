@@ -9,7 +9,9 @@ android {
 
     defaultConfig {
         applicationId = "com.sleeptracker.app"
-        minSdk = 24
+        // SCREEN_INTERACTIVE/SCREEN_NON_INTERACTIVE（UsageReporter.kt、画面ON区間検出）が
+        // API 28以降のみ提供のため、24から引き上げた。
+        minSdk = 28
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"

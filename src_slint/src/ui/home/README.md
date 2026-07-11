@@ -16,7 +16,7 @@
 
 ## 依存関係
 
-- 依存する（import する）フォルダ：`../../core`、`../../`(`MainWindow`等のVM型)、`../settings_ui`（`refresh_all`から`load_usage_packages`を呼ぶ）
+- 依存する（import する）フォルダ：`../../core`、`../../`(`MainWindow`等のVM型)
 - 依存される（import される）フォルダ：なし（`../home.rs`経由でのみ外部から使われる）
 
 ## 内部モジュール間の依存

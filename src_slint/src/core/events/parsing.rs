@@ -21,7 +21,7 @@ pub fn is_out_from_content(content: &str) -> bool {
         if let Some(c) = line.trim().find(',') {
             match &line.trim()[c + 1..] {
                 "OUT_START" => out = true,
-                "OUT_END" | "IN_HOUSE" | "DEVICE_ON" | "APP_USAGE_START" => out = false,
+                "OUT_END" | "IN_HOUSE" | "DEVICE_ON" | "SCREEN_ON_START" => out = false,
                 _ => {}
             }
         }
@@ -74,8 +74,8 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
         "LEAVE_HOME" | "LEAVE"                       => "OUT_START",
         "ARRIVE_HOME" | "ARRIVE"                     => "OUT_END",
         "DEVICE_ON"                                   => "DEVICE_ON",
-        "APP_USAGE_START"                             => "APP_USAGE_START",
-        "APP_USAGE_END"                               => "APP_USAGE_END",
+        "SCREEN_ON_START"                             => "SCREEN_ON_START",
+        "SCREEN_ON_END"                               => "SCREEN_ON_END",
         other                                         => return Err(format!("不明タグ: {}", other)),
     };
 
@@ -104,7 +104,7 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
 
     // Tablet activity while marked as out → insert IN_HOUSE to cancel the out-state.
     // is_out_from_content returns false once IN_HOUSE is in the file, so only one is inserted.
-    let need_in_house = matches!(event_type, "DEVICE_ON" | "APP_USAGE_START") && is_out_from_content(&existing);
+    let need_in_house = matches!(event_type, "DEVICE_ON" | "SCREEN_ON_START") && is_out_from_content(&existing);
 
     // IN_HOUSE と DEVICE_ON を1回のファイルオープンで書き込む（競合防止）
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&events_path) {
@@ -123,19 +123,20 @@ pub fn apply_mobile_event_line(line: &str) -> Result<String, String> {
     Ok(format!("追加: {}", new_line))
 }
 
-// APP_USAGE区間（タブレットのUsageStatsManager由来）のフィルタ用しきい値。
-// scratchpad/sync_design_test で18シナリオ検証した設計をそのまま採用している。
-const MIN_APP_USAGE_SECS: i64 = 60;           // これ未満の単発利用は「一瞬触れただけ」として無視
-const APP_USAGE_MERGE_GAP_SECS: i64 = 120;    // この間隔以内の利用は1回の利用として統合してから判定する
+// SCREEN_ON区間（タブレットのUsageStatsManager由来、画面が実際にONだった区間）の
+// フィルタ用しきい値。旧APP_USAGE方式の scratchpad/sync_design_test 検証時の値を
+// そのまま踏襲している。
+const MIN_SCREEN_ON_SECS: i64 = 60;           // これ未満の点灯は「通知で一瞬光っただけ」として無視
+const SCREEN_ON_MERGE_GAP_SECS: i64 = 120;    // この間隔以内の点灯は1回の利用として統合してから判定する
 
-// 近接するAPP_USAGE区間を統合し（画面ロック→即再開のような細切れ検知対策）、
-// 統合後もなお短すぎる区間（通知を一瞬見ただけ等）は除外する。
-pub(super) fn coalesce_and_filter_app_usage(mut pairs: Vec<(i64, String, i64, String)>) -> Vec<(i64, String, i64, String)> {
+// 近接するSCREEN_ON区間を統合し（画面ロック→即再開のような細切れ検知対策）、
+// 統合後もなお短すぎる区間（通知で一瞬点灯しただけ等）は除外する。
+pub(super) fn coalesce_and_filter_screen_on(mut pairs: Vec<(i64, String, i64, String)>) -> Vec<(i64, String, i64, String)> {
     pairs.sort_by_key(|(s, _, _, _)| *s);
     let mut merged: Vec<(i64, String, i64, String)> = Vec::new();
     for (s, s_ts, e, e_ts) in pairs {
         if let Some(last) = merged.last_mut() {
-            if s - last.2 <= APP_USAGE_MERGE_GAP_SECS {
+            if s - last.2 <= SCREEN_ON_MERGE_GAP_SECS {
                 if e > last.2 {
                     last.2 = e;
                     last.3 = e_ts;
@@ -145,7 +146,7 @@ pub(super) fn coalesce_and_filter_app_usage(mut pairs: Vec<(i64, String, i64, St
         }
         merged.push((s, s_ts, e, e_ts));
     }
-    merged.into_iter().filter(|(s, _, e, _)| e - s >= MIN_APP_USAGE_SECS).collect()
+    merged.into_iter().filter(|(s, _, e, _)| e - s >= MIN_SCREEN_ON_SECS).collect()
 }
 
 fn ts_to_epoch(s: &str) -> Option<i64> {
@@ -262,29 +263,29 @@ pub(super) fn parse_sessions_from_str(
     // 閉じていないペアは一切無視する（IN_HOUSE も使わない）。
     //   IDLE pair       : IDLE_START       → 次の IDLE_RESUME
     //   OUT pair        : OUT_START        → 次の OUT_END（iPhoneのGPS由来、信頼できる）
-    //   APP_USAGE pair  : APP_USAGE_START  → 次の APP_USAGE_END
-    //                     （タブレットのUsageStatsManager由来のアプリ利用区間）
+    //   SCREEN_ON pair   : SCREEN_ON_START  → 次の SCREEN_ON_END
+    //                     （タブレットのUsageStatsManager由来、画面が実際にONだった区間）
     //
     // DEVICE_ONはもう睡眠セッションの分割には使わない。「タブレットに一瞬触れた」
     // だけでは起きていた証拠にならないため（詳細はplatform/android/bg.rsのコメント参照）。
-    // 代わりにAPP_USAGE区間（実際にアプリを使っていた区間）をOUT区間と全く同じ
+    // 代わりにSCREEN_ON区間（画面が実際にONだった区間）をOUT区間と全く同じ
     // 「除外ギャップ」として扱う。DEVICE_ONは在宅/外出の解除（IN_HOUSE挿入）専用。
     //
     // Pass 1: 閉じたペアを収集する。
-    // Pass 2: 各 IDLE ペア内から OUT 期間・APP_USAGE 期間で区切った細切れを作り、
+    // Pass 2: 各 IDLE ペア内から OUT 期間・SCREEN_ON 期間で区切った細切れを作り、
     //         規定時間以上のものを睡眠セッションとして記録する。
 
     // Pass 1 ─────────────────────────────────────────────────────────────────────
     // (start_ep, start_ts, end_ep, end_ts)
     let mut idle_pairs:      Vec<(i64, String, i64, String)> = Vec::new();
     let mut out_pairs:       Vec<(i64, String, i64, String)> = Vec::new();
-    let mut app_usage_pairs: Vec<(i64, String, i64, String)> = Vec::new();
+    let mut screen_on_pairs: Vec<(i64, String, i64, String)> = Vec::new();
     // POWER session tracking: (start_ep, start_ts, end_ep, end_ts, type)
     let mut power_sessions: Vec<(i64, String, i64, String, String)> = Vec::new();
     {
         let mut idle_pend:      Option<(i64, String)> = None;
         let mut out_pend:       Option<(i64, String)> = None;
-        let mut app_usage_pend: Option<(i64, String)> = None;
+        let mut screen_on_pend: Option<(i64, String)> = None;
         let mut power_pend:     Option<(i64, String)> = None;
         let mut prev_ep: i64 = 0;
 
@@ -303,10 +304,10 @@ pub(super) fn parse_sessions_from_str(
                         out_pairs.push((oep, ots, ep, ts.to_string()));
                     }
                 }
-                "APP_USAGE_START" => { app_usage_pend = Some((ep, ts.to_string())); }
-                "APP_USAGE_END"   => {
-                    if let Some((aep, ats)) = app_usage_pend.take() {
-                        app_usage_pairs.push((aep, ats, ep, ts.to_string()));
+                "SCREEN_ON_START" => { screen_on_pend = Some((ep, ts.to_string())); }
+                "SCREEN_ON_END"   => {
+                    if let Some((aep, ats)) = screen_on_pend.take() {
+                        screen_on_pairs.push((aep, ats, ep, ts.to_string()));
                     }
                 }
                 "SUSPEND" | "SHUTDOWN" => {
@@ -343,22 +344,22 @@ pub(super) fn parse_sessions_from_str(
         // ここでは完了扱いにしない。以前はここでDEVICE_ONを見つけて仮クローズしていたが、
         // 一晩の間に混じる無関係なDEVICE_ON（タブレット画面が一瞬ついただけ等）を
         // 拾って実際の睡眠時間より大幅に短いセッションを捏造してしまうバグがあった
-        // （DEVICE_ON単体は「起きていた証拠」にならない、というAPP_USAGE方式への
+        // （DEVICE_ON単体は「起きていた証拠」にならない、というSCREEN_ON方式への
         // 移行時の設計方針と矛盾していた）。進行中セッションの表示は
         // current_sleep_start()（暫定睡眠時間）が別途担当する。
     }
 
-    // APP_USAGE区間の統合・フィルタ（画面ロック→即再開のような細切れ検知対策と、
-    // 通知を一瞬見ただけ等のノイズ除去）。詳細はコメント参照。
-    let app_usage_pairs = coalesce_and_filter_app_usage(app_usage_pairs);
+    // SCREEN_ON区間の統合・フィルタ（画面ロック→即再開のような細切れ検知対策と、
+    // 通知で一瞬点灯しただけ等のノイズ除去）。詳細はコメント参照。
+    let screen_on_pairs = coalesce_and_filter_screen_on(screen_on_pairs);
 
     // Pass 2 ─────────────────────────────────────────────────────────────────────
     let mut sessions: Vec<Session> = Vec::new();
 
     for (idle_start, idle_start_ts, idle_end, idle_end_ts) in &idle_pairs {
-        // OUT・APP_USAGEいずれも「起きていた証拠」として全く同じ除外ギャップ扱いにする。
+        // OUT・SCREEN_ONいずれも「起きていた証拠」として全く同じ除外ギャップ扱いにする。
         let mut gaps: Vec<(i64, String, i64, String)> = out_pairs.iter()
-            .chain(app_usage_pairs.iter())
+            .chain(screen_on_pairs.iter())
             .filter_map(|(os, os_ts, oe, oe_ts)| {
                 let s = (*os).max(*idle_start);
                 let e = (*oe).min(*idle_end);
@@ -392,7 +393,7 @@ pub(super) fn parse_sessions_from_str(
         }
 
         // ギャップを時系列順に処理し、cur_epより後ろにあるギャップだけを切り出す。
-        // 重複・隣接するギャップ（OUTとAPP_USAGEが重なる等）は自然に併合される
+        // 重複・隣接するギャップ（OUTとSCREEN_ONが重なる等）は自然に併合される
         // （cur_epをmaxで前進させるだけなので、二重に切り出されることはない）。
         for (gs, gs_ts, ge, ge_ts) in &gaps {
             if *gs > cur_ep {

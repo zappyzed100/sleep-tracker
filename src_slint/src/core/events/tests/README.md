@@ -8,14 +8,13 @@
 
 | ファイル | 役割 |
 |---------|------|
-| `parsing_tests.rs` | `parsing.rs`のテスト。`parse_sessions_from_str`（睡眠セッション再構築ロジック）・`is_out_from_content`・`coalesce_and_filter_app_usage` |
+| `parsing_tests.rs` | `parsing.rs`のテスト。`parse_sessions_from_str`（睡眠セッション再構築ロジック）・`is_out_from_content`・`coalesce_and_filter_screen_on` |
 | `excluded_tests.rs` | `excluded.rs`のテスト。`excluded_dates_from_content`と、その結果が`parse_sessions_from_str`のSession.excludedに反映されるかの統合的な検証 |
-| `usage_packages_tests.rs` | `usage_packages.rs`のテスト。`usage_packages_from_content` |
 | `backup_tests.rs` | `backup.rs`のテスト。`detect_open_idle_and_out`・`extract_preserved_metadata_lines` |
 
 ## 依存関係
 
-- 依存する（import する）フォルダ：`../`（`core::events::{parsing, excluded, usage_packages, backup}`の`pub(super)`関数を直接参照する）
+- 依存する（import する）フォルダ：`../`（`core::events::{parsing, excluded, backup}`の`pub(super)`関数を直接参照する）
 - 依存される（import される）フォルダ：なし（テストからのみ使われる）
 
 ## 注意

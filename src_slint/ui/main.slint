@@ -103,12 +103,6 @@ export struct BackupEntryVM {
     label: string,
 }
 
-export struct UsagePackageVM {
-    package: string,
-    label: string,
-    allowed: bool,
-}
-
 export struct SessionVM {
     start: string,
     end: string,
@@ -1233,43 +1227,6 @@ component CheckRow {
     }
 }
 
-// 「睡眠判定に使うアプリ」一覧。件数が多くなっても際限なく伸びないよう、
-// 最大10件ぶんの高さに固定し、それを超える分はスクロールで見る
-// （呼び出し側でチェック済みを先頭にソート済みなので、常に上部に表示される）。
-component UsageAppList {
-    in property <[UsagePackageVM]> packages;
-    callback toggled(string, bool);
-
-    property <length> row-h: 30px;
-    property <int> max-visible-rows: 10;
-    property <length> list-h: min(root.packages.length, root.max-visible-rows) * root.row-h;
-
-    height: root.list-h;
-
-    flick := Flickable {
-        width: parent.width - 12px;
-        height: root.list-h;
-        viewport-height: root.packages.length * root.row-h;
-        VerticalLayout {
-            for pkg in root.packages: CheckRow {
-                checked: pkg.allowed;
-                label: pkg.label;
-                toggled => { root.toggled(pkg.package, !pkg.allowed); }
-            }
-        }
-    }
-
-    // スクロールバー（表示しきれない件数がある時だけ出す）
-    if root.packages.length > root.max-visible-rows: Rectangle {
-        x: parent.width - 6px;
-        y: -flick.viewport-y * root.list-h / flick.viewport-height;
-        width: 4px;
-        height: max(root.list-h * root.list-h / flick.viewport-height, 16px);
-        background: rgba(255, 255, 255, 0.25);
-        border-radius: 2px;
-    }
-}
-
 // wrap:word-wrapを使うとwidth:100%の解決前に高さが計算され、
 // 「カードは少し大きくなるのに文字が見えない」不具合になっていたため、
 // ステータス表示は折り返しなしの1行に変更し、高さも明示する。
@@ -1358,7 +1315,6 @@ component SettingsPanel {
     in property <bool> compact-in-progress: false;
     in property <bool> backups-clear-in-progress: false;
     in-out property <bool> sync-paused: false;
-    in property <[UsagePackageVM]> usage-packages: [];
 
     callback toggle-startup(bool);
     callback toggle-sync-paused();
@@ -1376,8 +1332,6 @@ component SettingsPanel {
     callback clear-all-data-and-cloud();
     callback compact-data();
     callback clear-backups();
-    callback toggle-usage-package(string, bool);
-    callback refresh-usage-packages();
 
     Flickable {
         VerticalLayout {
@@ -1609,35 +1563,6 @@ component SettingsPanel {
                 if root.backups-clear-message != "": SettingsNote { text: root.backups-clear-message; kind: root.backups-clear-kind; }
                 SettingsNote { text: "日次ローカル自動バックアップ(data/backups/)は自動削除されないため、ここで手動削除できます。"; }
             }
-
-            // ── 睡眠判定に使うアプリ（Android実機でタブレットの利用状況を検知する
-            //    機能のためAndroidのみ表示。UsageReporter.kt参照） ──
-            // タブレットでこのアプリ自身やランチャー等が一瞬フォアグラウンドに来ただけでも
-            // 「使用した」と誤判定されることがあったため、ユーザーがどのアプリを
-            // 「使っている間は起きている」の根拠にするか選べるようにする。
-            // sleep_events.txt経由の通常同期でPC側にも設定は伝わるが、切り替え自体は
-            // Android版の設定画面からのみ行う。
-            if root.is-mobile: SettingsSection {
-                title: "睡眠判定に使うアプリ";
-                SettingsNote { text: "検知されたアプリがここに一覧表示されます。チェックを入れたアプリを使っている間は「起きている」とみなします。"; }
-                HorizontalLayout {
-                    alignment: start;
-                    SettingsBtn {
-                        text: "アプリ一覧を更新";
-                        btn-width: 150px;
-                        clicked => { root.refresh-usage-packages(); }
-                    }
-                }
-                if root.usage-packages.length == 0: Text {
-                    text: "まだ検知されたアプリがありません。";
-                    color: #a6adc8;
-                    font-size: 13px;
-                }
-                UsageAppList {
-                    packages: root.usage-packages;
-                    toggled(pkg, new-allowed) => { root.toggle-usage-package(pkg, new-allowed); }
-                }
-            }
         }
     }
 }
@@ -1762,7 +1687,6 @@ export component MainWindow inherits Window {
     in-out property <bool> compact-in-progress: false;
     in-out property <bool> backups-clear-in-progress: false;
     in-out property <bool> sync-paused: false;
-    in property <[UsagePackageVM]> usage-packages: [];
 
     callback toggle-startup(bool);
     callback create-shortcut();
@@ -1780,8 +1704,6 @@ export component MainWindow inherits Window {
     callback clear-all-data-and-cloud();
     callback compact-data();
     callback clear-backups();
-    callback toggle-usage-package(string, bool);
-    callback refresh-usage-packages();
 
     callback period-changed(string);
     callback bedtime-edited(int, int);
@@ -1974,7 +1896,6 @@ export component MainWindow inherits Window {
             compact-in-progress: root.compact-in-progress;
             backups-clear-in-progress: root.backups-clear-in-progress;
             sync-paused: root.sync-paused;
-            usage-packages: root.usage-packages;
             toggle-sync-paused => { root.toggle-sync-paused(); }
             toggle-startup(v) => { root.startup-enabled = v; root.toggle-startup(v); }
             create-shortcut => { root.create-shortcut(); }
@@ -2036,8 +1957,6 @@ export component MainWindow inherits Window {
                     root.clear-backups();
                 }
             }
-            toggle-usage-package(pkg, new-allowed) => { root.toggle-usage-package(pkg, new-allowed); }
-            refresh-usage-packages => { root.refresh-usage-packages(); }
         }
 
         if root.tab == "home": homeScroll := TouchArea {

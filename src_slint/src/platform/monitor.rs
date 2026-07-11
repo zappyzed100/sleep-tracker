@@ -377,7 +377,7 @@ fn run(data_dir: PathBuf, weak: slint::Weak<MainWindow>, on_session_recorded: im
             append_event(&events_path, &now_str(), "IDLE_RESUME");
             eprintln!("{} IDLE_RESUME: was sleeping {}s", TAG, idle);
             sleeping = false;
-            // Driveからモバイルイベント(APP_USAGE等)を即座にpull → キャッシュ無効化 → push
+            // Driveからモバイルイベント(SCREEN_ON等)を即座にpull → キャッシュ無効化 → push
             // （「同期を停止」中はこのpull/pushだけスキップする）
             if !crate::core::cloud::is_sync_paused() {
                 let ep = events_path.clone();

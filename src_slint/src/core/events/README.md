@@ -10,7 +10,6 @@
 |---------|------|
 | `parsing.rs` | イベント行→睡眠セッション変換のステートマシン本体。ファイルソート・モバイルイベント取り込み・キャッシュ付き取得(`get_sessions`) |
 | `excluded.rs` | 計測対象外の日（`DAY_EXCLUDED`/`DAY_INCLUDED`）の読み書き |
-| `usage_packages.rs` | 「睡眠判定に使うアプリ」（`USAGE_APP_SEEN`/`ALLOWED`/`DENIED`）の記録・許可状態管理 |
 | `session_ops.rs` | 手動セッションの追加・削除（CRUD） |
 | `backup.rs` | バックアップ・復元・全削除・データ圧縮(`compact_data`)・進行中セッション検出 |
 | `csv.rs` | CSVエクスポート・インポート |
@@ -24,6 +23,6 @@
 ## 内部モジュール間の依存
 
 同じ`events`配下の兄弟モジュール間は`super::`または`crate::core::events::`で
-直接参照し合う（例: `excluded.rs`/`usage_packages.rs`/`session_ops.rs`/`backup.rs`は
-いずれも`parsing::sort_events_file`等を使う）。`parsing.rs`は`excluded.rs`の
+直接参照し合う（例: `excluded.rs`/`session_ops.rs`/`backup.rs`はいずれも
+`parsing::sort_events_file`等を使う）。`parsing.rs`は`excluded.rs`の
 `excluded_dates_from_content`を使う（除外判定はセッション構築時に行うため）。

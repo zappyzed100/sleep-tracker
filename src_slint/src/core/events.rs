@@ -1,7 +1,7 @@
 //! events.rs — sleep_events.txt のパース・セッション管理（エントリポイント）
 //!
 //! 役割 : Session/SessionCache の型定義と、実装を委譲する各サブモジュール
-//!        （parsing/excluded/usage_packages/session_ops/backup/csv）の公開関数を
+//!        （parsing/excluded/session_ops/backup/csv）の公開関数を
 //!        束ねて再公開する。内部ファイルへの直接importは禁止、ここ経由でのみ使う。
 //!
 //! 依存 : crate::data_dir, crate::THRESHOLD_SECS, crate::core::cloud
@@ -11,9 +11,7 @@
 //!        `current_sleep_start`, `maybe_auto_backup`, `clear_backups`, `list_backups`, `BackupEntry`,
 //!        `export_csv`, `write_csv_file`, `import_csv`,
 //!        `is_out_from_content`, `apply_mobile_event_line`,
-//!        `excluded_dates_from_content`, `get_excluded_dates`, `set_day_excluded`,
-//!        `UsagePackageEntry`, `list_usage_packages`,
-//!        `set_usage_package_allowed`, `record_usage_package_seen`
+//!        `excluded_dates_from_content`, `get_excluded_dates`, `set_day_excluded`
 
 const TAG: &str = "[events]";
 
@@ -46,7 +44,6 @@ pub static EVENTS_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod parsing;
 mod excluded;
-mod usage_packages;
 mod session_ops;
 mod backup;
 mod csv;
@@ -55,7 +52,6 @@ mod csv;
 mod tests {
     mod parsing_tests;
     mod excluded_tests;
-    mod usage_packages_tests;
     mod backup_tests;
 }
 
@@ -64,9 +60,6 @@ pub use parsing::{
     parse_sessions_rust, get_sessions,
 };
 pub use excluded::{excluded_dates_from_content, get_excluded_dates, set_day_excluded};
-pub use usage_packages::{
-    UsagePackageEntry, list_usage_packages, set_usage_package_allowed, record_usage_package_seen,
-};
 pub use session_ops::{add_session, delete_session};
 pub use backup::{
     get_events_content, restore_events, maybe_auto_backup, clear_backups, BackupEntry,

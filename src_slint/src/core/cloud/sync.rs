@@ -201,7 +201,7 @@ pub fn sync_mobile_inner() -> Vec<crate::core::events::Session> {
     // 1. Fetch settings (update THRESHOLD_SECS from Drive)
     let _ = crate::core::config::fetch_settings_from_cloud();
 
-    // 3. Pull mobile events from Sheet (LEAVE_HOME / ARRIVE_HOME / APP_USAGE_START / APP_USAGE_END)
+    // 3. Pull mobile events from Sheet (LEAVE_HOME / ARRIVE_HOME / SCREEN_ON_START / SCREEN_ON_END)
     pull_mobile_events_inner();
 
     // 4. Sort + dedup
