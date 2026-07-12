@@ -16,18 +16,23 @@ use std::time::Instant;
 pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     let sessions = events::get_sessions().unwrap_or_default();
     let period = state.lock().unwrap().period;
+    let excluded_dates = events::get_excluded_dates();
 
     let now = now_iso();
-    let recent: Vec<&Session> = match period.days() {
-        Some(days) => {
-            use chrono::{Duration, Local};
-            let cutoff_ts = (Local::now() - Duration::days(days)).format("%Y-%m-%d %H:%M:%S").to_string();
-            sessions.iter().filter(|s| s.start.as_str() >= cutoff_ts.as_str()).collect()
-        }
-        None => sessions.iter().collect(),
+    // 「今日の睡眠日」はまだ終わっていない（これから寝る／進行中の）可能性があるため、
+    // 平均の対象は昨日までの完了済みの日に限る。今日を含めてしまうと、まだ寝ていない
+    // だけなのに0hとして平均を押し下げてしまう。
+    let today_sleep_day = utils::sleep_day(chrono::Local::now().naive_local());
+    let period_end_day = today_sleep_day - chrono::Duration::days(1);
+    let period_start_day = match period.days() {
+        Some(days) => Some(period_end_day - chrono::Duration::days(days - 1)),
+        None => sessions.iter()
+            .filter_map(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
+            .map(utils::sleep_day)
+            .min(),
     };
 
-    // 平均睡眠は「セッション数」ではなく「記録日数」で割る。1日に複数セッション
+    // 平均睡眠は「セッション数」ではなく「睡眠日」で割る。1日に複数セッション
     // （昼寝＋本睡眠など）があると、セッション単位の平均では1日あたりの睡眠時間が
     // 薄まって過小評価されてしまうため、日ごとに睡眠時間を合算してから平均する。
     // PC/Android両方から記録された重複区間は merge_intervals で1本にまとめてから
@@ -35,21 +40,39 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // 日ごとの集計キーは暦日ではなく「睡眠日」（開始時刻から導出、境界は午前4時）を使う。
     // 深夜1:33開始の睡眠が体感通り前日側に計上されるようにするため。
     let mut per_day_intervals: std::collections::HashMap<NaiveDate, Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>> = std::collections::HashMap::new();
-    for s in recent.iter().filter(|s| !s.excluded) {
+    for s in sessions.iter().filter(|s| !s.excluded) {
         if let (Ok(st), Ok(en)) = (
             chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S"),
             chrono::NaiveDateTime::parse_from_str(s.end.trim(), "%Y-%m-%d %H:%M:%S"),
         ) {
-            per_day_intervals.entry(utils::sleep_day(st)).or_default().push((st, en));
+            let day = utils::sleep_day(st);
+            if day <= period_end_day && period_start_day.is_some_and(|s0| day >= s0) {
+                per_day_intervals.entry(day).or_default().push((st, en));
+            }
         }
     }
-    let per_day: std::collections::HashMap<NaiveDate, f64> = per_day_intervals.into_iter()
-        .map(|(day, intervals)| {
-            let merged = utils::merge_intervals(intervals);
-            let hours: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
-            (day, hours)
-        })
-        .collect();
+    // 「記録日数」は実際にセッションがある日の数（従来通り）。平均の分母とは別に扱う。
+    let days_recorded = per_day_intervals.len();
+
+    // 期間内の睡眠日をまず0hで埋めてから、実データがある日を上書きする。セッションが
+    // 1件も無い日（寝なかった日）が分母から抜け落ちて平均が過大評価されるバグが
+    // あったため、これで期間内の全日を平均の対象にする。ただし計測対象外(DAY_EXCLUDED)
+    // の日は、セッションの有無によらず平均の対象外のまま除く。
+    let mut per_day: std::collections::HashMap<NaiveDate, f64> = std::collections::HashMap::new();
+    if let Some(start_day) = period_start_day {
+        let mut d = start_day;
+        while d <= period_end_day {
+            if !excluded_dates.contains(&d.format("%Y-%m-%d").to_string()) {
+                per_day.insert(d, 0.0);
+            }
+            d += chrono::Duration::days(1);
+        }
+    }
+    for (day, intervals) in per_day_intervals {
+        let merged = utils::merge_intervals(intervals);
+        let hours: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
+        per_day.insert(day, hours);
+    }
     let avg = if !per_day.is_empty() {
         Some(per_day.values().sum::<f64>() / per_day.len() as f64)
     } else {
@@ -94,7 +117,7 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
         .and_then(|merged| merged.iter().max_by(|a, b| (a.1 - a.0).cmp(&(b.1 - b.0))))
         .map(|(_, e)| e.format("%H:%M").to_string());
 
-    window.set_days_recorded(format!("{}日", per_day.len()).into());
+    window.set_days_recorded(format!("{}日", days_recorded).into());
     window.set_avg_sleep(avg.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
     window.set_wake_time(wake_time.unwrap_or_else(|| "—".to_string()).into());
 
