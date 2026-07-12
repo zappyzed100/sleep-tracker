@@ -10,13 +10,14 @@ use super::chart::update_chart;
 use super::state::{awake_color, bed_time_to_iso, now_iso, SharedState, StatsBaseline};
 use crate::core::{events, prediction, utils, Session};
 use crate::MainWindow;
-use chrono::NaiveDate;
 use std::time::Instant;
 
 pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     let sessions = events::get_sessions().unwrap_or_default();
     let period = state.lock().unwrap().period;
     let excluded_dates = events::get_excluded_dates();
+    let night_boundary = crate::core::config::load_config_inner().night_type_boundary_hour
+        .unwrap_or(crate::core::config::NIGHT_TYPE_BOUNDARY_HOUR_DEFAULT);
 
     let now = now_iso();
     // 「今日の睡眠日」はまだ終わっていない（これから寝る／進行中の）可能性があるため、
@@ -24,57 +25,51 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // だけなのに0hとして平均を押し下げてしまう。
     let today_sleep_day = utils::sleep_day(chrono::Local::now().naive_local());
     let period_end_day = today_sleep_day - chrono::Duration::days(1);
+    // 記録が実在する最初の睡眠日。Week/Month/Yearの固定日数ウィンドウが記録開始前まで
+    // 遡ってしまうと、「記録が無いだけの日」まで0hとして平均に含めてしまうバグになる
+    // （実データで発覚：アプリ導入前の日を大量に0h扱いし、平均を過小評価していた）。
+    let earliest_tracked_day = sessions.iter()
+        .filter_map(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
+        .map(utils::sleep_day)
+        .min();
     let period_start_day = match period.days() {
-        Some(days) => Some(period_end_day - chrono::Duration::days(days - 1)),
-        None => sessions.iter()
-            .filter_map(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
-            .map(utils::sleep_day)
-            .min(),
+        Some(days) => {
+            let window_start = period_end_day - chrono::Duration::days(days - 1);
+            Some(match earliest_tracked_day {
+                Some(earliest) => window_start.max(earliest),
+                None => window_start,
+            })
+        }
+        None => earliest_tracked_day,
     };
 
     // 平均睡眠は「セッション数」ではなく「睡眠日」で割る。1日に複数セッション
     // （昼寝＋本睡眠など）があると、セッション単位の平均では1日あたりの睡眠時間が
     // 薄まって過小評価されてしまうため、日ごとに睡眠時間を合算してから平均する。
-    // PC/Android両方から記録された重複区間は merge_intervals で1本にまとめてから
-    // 合算する（重なった分の二重計上を防ぐ）。
-    // 日ごとの集計キーは暦日ではなく「睡眠日」（開始時刻から導出、境界は午前4時）を使う。
-    // 深夜1:33開始の睡眠が体感通り前日側に計上されるようにするため。
-    let mut per_day_intervals: std::collections::HashMap<NaiveDate, Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>> = std::collections::HashMap::new();
-    for s in sessions.iter().filter(|s| !s.excluded) {
-        if let (Ok(st), Ok(en)) = (
-            chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S"),
-            chrono::NaiveDateTime::parse_from_str(s.end.trim(), "%Y-%m-%d %H:%M:%S"),
-        ) {
-            let day = utils::sleep_day(st);
-            if day <= period_end_day && period_start_day.is_some_and(|s0| day >= s0) {
-                per_day_intervals.entry(day).or_default().push((st, en));
-            }
-        }
-    }
-    // 「記録日数」は実際にセッションがある日の数（従来通り）。平均の分母とは別に扱う。
-    let days_recorded = per_day_intervals.len();
-
-    // 期間内の睡眠日をまず0hで埋めてから、実データがある日を上書きする。セッションが
-    // 1件も無い日（寝なかった日）が分母から抜け落ちて平均が過大評価されるバグが
-    // あったため、これで期間内の全日を平均の対象にする。ただし計測対象外(DAY_EXCLUDED)
-    // の日は、セッションの有無によらず平均の対象外のまま除く。
-    let mut per_day: std::collections::HashMap<NaiveDate, f64> = std::collections::HashMap::new();
+    // 各日の睡眠時間・「その日に属するか」の判定は週間チャートのバーと全く同じ
+    // utils::single_day_summary を使う（表示と平均で数値がズレないようにするため。
+    // 内部でmerge_intervalsによりPC/Android重複区間の二重計上も防いでいる）。
+    // セッションが1件も無い日（寝なかった日）も0hとして平均に含める。計測対象外
+    // (DAY_EXCLUDED)の日は、セッションの有無によらず平均の対象外のまま除く。
+    let mut days_recorded = 0usize;
+    let mut total_hours = 0.0_f64;
+    let mut day_count = 0usize;
     if let Some(start_day) = period_start_day {
         let mut d = start_day;
         while d <= period_end_day {
-            if !excluded_dates.contains(&d.format("%Y-%m-%d").to_string()) {
-                per_day.insert(d, 0.0);
+            let summary = utils::single_day_summary(&sessions, d, &excluded_dates, night_boundary);
+            if !summary.excluded {
+                total_hours += summary.total_hours;
+                day_count += 1;
+                if summary.total_hours > 0.0 {
+                    days_recorded += 1;
+                }
             }
             d += chrono::Duration::days(1);
         }
     }
-    for (day, intervals) in per_day_intervals {
-        let merged = utils::merge_intervals(intervals);
-        let hours: f64 = merged.iter().map(|(s, e)| (*e - *s).num_seconds() as f64 / 3600.0).sum();
-        per_day.insert(day, hours);
-    }
-    let avg = if !per_day.is_empty() {
-        Some(per_day.values().sum::<f64>() / per_day.len() as f64)
+    let avg = if day_count > 0 {
+        Some(total_hours / day_count as f64)
     } else {
         None
     };
