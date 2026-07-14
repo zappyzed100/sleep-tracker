@@ -1112,6 +1112,8 @@ component PredictionCard {
 
         if root.has-data: StatCol { value: root.predicted-duration; label: "予測睡眠時間"; value-color: #89b4fa; }
 
+        if root.has-data: Divider { }
+
         if root.has-data: VerticalLayout {
             alignment: center;
             TextInput {
