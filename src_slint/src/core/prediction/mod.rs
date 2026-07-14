@@ -137,18 +137,18 @@ fn heuristic(sessions: &[Session], bh: f64) -> (f64, String) {
 
     if similar.len() >= 3 {
         let avg = similar.iter().sum::<f64>() / similar.len() as f64;
-        return (avg, format!("Heuristic ({} similar sessions)", similar.len()));
+        return (avg, format!("類似{}件", similar.len()));
     }
 
     let mut all: Vec<f64> = sessions.iter().map(|s| s.duration_hours).collect();
     if all.is_empty() {
-        return (7.5, "Default".to_string());
+        return (7.5, "初期値".to_string());
     }
     all.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let lo = all.len() / 10;
     let hi = (all.len() - all.len() / 10).max(lo + 1);
     let avg = all[lo..hi].iter().sum::<f64>() / (hi - lo) as f64;
-    (avg, "Heuristic (global avg)".to_string())
+    (avg, "全体平均".to_string())
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -287,7 +287,7 @@ pub fn predict(sessions: &[Session], now: &str) -> PredictionResult {
         Ok(model) => match model.predict(&x_q) {
             Ok(preds) => PredictionResult {
                 duration_hours: preds[0].clamp(1.0, 18.0),
-                method: format!("Machine Learning (awake {:.1}h, hist {:.1}h)", awake_h, hist),
+                method: "機械学習".to_string(),
                 awake_hours: awake_h,
             },
             Err(_) => {

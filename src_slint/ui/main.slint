@@ -1112,8 +1112,6 @@ component PredictionCard {
 
         if root.has-data: StatCol { value: root.predicted-duration; label: "予測睡眠時間"; value-color: #89b4fa; }
 
-        if root.has-data && root.sleep-cycle-label != "": StatCol { value: root.sleep-cycle-label; label: "睡眠周期（カイ二乗ペリオドグラム）"; value-color: #f9e2af; }
-
         if root.has-data: VerticalLayout {
             alignment: center;
             TextInput {
@@ -1125,6 +1123,8 @@ component PredictionCard {
                 single-line: true;
             }
         }
+
+        if root.has-data && root.sleep-cycle-label != "": StatCol { value: root.sleep-cycle-label; label: "睡眠周期（カイ二乗ペリオドグラム）"; value-color: #f9e2af; }
 
         if root.has-data && root.predicted-method != "": Divider { }
 
