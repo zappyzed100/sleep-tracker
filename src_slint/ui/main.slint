@@ -1018,6 +1018,8 @@ component PredictionCard {
     in property <string> predicted-duration: "—";
     in property <string> predicted-wake-time: "--:--";
     in property <string> predicted-method: "";
+    // 睡眠周期（カイ二乗ペリオドグラムによる検出）。データ不足・周期不明瞭なら空文字。
+    in property <string> sleep-cycle-label: "";
     in property <bool> has-data: false;
     // "now" | "optimal" | ""。今すぐ/最適睡眠は排他的な選択状態として色で示す。
     in property <string> bedtime-source: "";
@@ -1109,6 +1111,8 @@ component PredictionCard {
         if root.has-data: Divider { }
 
         if root.has-data: StatCol { value: root.predicted-duration; label: "予測睡眠時間"; value-color: #89b4fa; }
+
+        if root.has-data && root.sleep-cycle-label != "": StatCol { value: root.sleep-cycle-label; label: "睡眠周期（カイ二乗ペリオドグラム）"; value-color: #f9e2af; }
 
         if root.has-data: VerticalLayout {
             alignment: center;
@@ -1619,6 +1623,7 @@ export component MainWindow inherits Window {
     in property <string> predicted-duration: "—";
     in property <string> predicted-wake-time: "--:--";
     in property <string> predicted-method: "";
+    in property <string> sleep-cycle-label: "";
     in property <bool> has-prediction: false;
 
     // 週間チャート用のプロパティ
@@ -2016,6 +2021,7 @@ export component MainWindow inherits Window {
                     predicted-duration: root.predicted-duration;
                     predicted-wake-time: root.predicted-wake-time;
                     predicted-method: root.predicted-method;
+                    sleep-cycle-label: root.sleep-cycle-label;
                     has-data: root.has-prediction;
                     bedtime-source: root.bedtime-source;
                     bedtime-edited(h, m) => {

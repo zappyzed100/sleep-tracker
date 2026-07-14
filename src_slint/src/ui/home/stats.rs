@@ -193,5 +193,12 @@ pub fn recompute_prediction(window: &MainWindow) {
     window.set_predicted_duration(utils::format_duration(pred.duration_hours).into());
     window.set_predicted_wake_time(format!("{:02}:{:02}", wake_h, wake_m).into());
     window.set_predicted_method(pred.method.into());
+
+    let excluded_dates = events::get_excluded_dates();
+    let cycle_label = prediction::estimate_sleep_cycle(&sessions, &excluded_dates)
+        .map(|c| format!("約{}", utils::format_duration(c.period_hours)))
+        .unwrap_or_default();
+    window.set_sleep_cycle_label(cycle_label.into());
+
     window.set_has_prediction(true);
 }

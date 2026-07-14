@@ -1,11 +1,12 @@
-//! prediction.rs — 睡眠時間・最適入眠時刻の機械学習予測
+//! prediction/mod.rs — 睡眠時間・最適入眠時刻の機械学習予測
 //!
 //! 役割 : 過去の睡眠セッションを特徴量に変換し、ランダムフォレスト回帰で
 //!        予測睡眠時間を計算する。セッション数が少ない場合はヒューリスティックで代替。
 //!        Tauri版 src-tauri/src/prediction.rs の移植（変更なし）。
 //!
 //! 依存 : crate::Session, smartcore, std::f64::consts::PI
-//! 公開 : `PredictionResult`, `OptimalResult`, `predict`, `find_optimal`
+//! 公開 : `PredictionResult`, `OptimalResult`, `predict`, `find_optimal`,
+//!        `CycleResult`, `estimate_sleep_cycle`（cycle.rsに実装）
 
 use std::f64::consts::PI;
 use smartcore::ensemble::random_forest_regressor::{
@@ -14,6 +15,9 @@ use smartcore::ensemble::random_forest_regressor::{
 use smartcore::linalg::basic::matrix::DenseMatrix;
 
 use crate::Session;
+
+mod cycle;
+pub use cycle::{CycleResult, estimate_sleep_cycle};
 
 #[derive(serde::Serialize, Clone)]
 pub struct PredictionResult {
