@@ -1128,24 +1128,6 @@ component PredictionCard {
 
         if root.has-data && root.sleep-cycle-label != "": StatCol { value: root.sleep-cycle-label; label: "睡眠周期（カイ二乗ペリオドグラム）"; value-color: #f9e2af; }
 
-        if root.has-data && root.predicted-method != "": Divider { }
-
-        // 予測方法（Heuristic (global avg)など）は他のstrip-colと同じ
-        // 「小さいラベル＋値」の左詰め形式にする。何を表しているかが
-        // わかるよう「予測方法」ラベルを付ける。
-        if root.has-data && root.predicted-method != "": VerticalLayout {
-            alignment: center;
-            spacing: 2px;
-            Text { text: "予測方法"; color: #6c7086; font-size: 11px; }
-            TextInput {
-                text: root.predicted-method;
-                color: #a6adc8;
-                font-size: 13px;
-                read-only: true;
-                single-line: true;
-            }
-        }
-
         if !root.has-data: Text {
             text: "データなし";
             color: #a6adc8;

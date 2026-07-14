@@ -116,9 +116,10 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     window.set_avg_sleep(avg.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
     window.set_wake_time(wake_time.unwrap_or_else(|| "—".to_string()).into());
 
-    // 予測計算も計測対象外の日を除外したセッションだけで行う。
+    // 予測計算も計測対象外の日を除外したセッションだけで行う。ここでの予測は
+    // awake_hoursの取得だけが目的なので、周期(cycle)はNoneでよい。
     let for_prediction: Vec<Session> = sessions.iter().filter(|s| !s.excluded).cloned().collect();
-    let pred = prediction::predict(&for_prediction, &now);
+    let pred = prediction::predict(&for_prediction, &now, None);
 
     {
         let mut st = state.lock().unwrap();
@@ -183,8 +184,13 @@ pub fn recompute_prediction(window: &MainWindow) {
         window.set_has_prediction(false);
         return;
     }
+    // 睡眠周期は表示ラベルと予測の特徴量の両方で使うので先に求めておく。
+    let excluded_dates = events::get_excluded_dates();
+    let cycle = prediction::estimate_sleep_cycle(&sessions, &excluded_dates);
+    let cycle_period = cycle.map(|c| c.period_hours);
+
     let now_at_bedtime = bed_time_to_iso(h, m);
-    let pred = prediction::predict(&sessions, &now_at_bedtime);
+    let pred = prediction::predict(&sessions, &now_at_bedtime, cycle_period);
 
     let wake_total_min = h * 60 + m + (pred.duration_hours * 60.0) as i32;
     let wake_h = (wake_total_min / 60).rem_euclid(24);
@@ -194,8 +200,7 @@ pub fn recompute_prediction(window: &MainWindow) {
     window.set_predicted_wake_time(format!("{:02}:{:02}", wake_h, wake_m).into());
     window.set_predicted_method(pred.method.into());
 
-    let excluded_dates = events::get_excluded_dates();
-    let cycle_label = prediction::estimate_sleep_cycle(&sessions, &excluded_dates)
+    let cycle_label = cycle
         .map(|c| format!("約{}", utils::format_duration(c.period_hours)))
         .unwrap_or_default();
     window.set_sleep_cycle_label(cycle_label.into());

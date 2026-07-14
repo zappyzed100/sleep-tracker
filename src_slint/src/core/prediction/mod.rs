@@ -2,7 +2,9 @@
 //!
 //! 役割 : 過去の睡眠セッションを特徴量に変換し、ランダムフォレスト回帰で
 //!        予測睡眠時間を計算する。セッション数が少ない場合はヒューリスティックで代替。
-//!        Tauri版 src-tauri/src/prediction.rs の移植（変更なし）。
+//!        特徴量は入眠時刻・連続起床時間・その時刻帯の過去平均・直前24h/48hの
+//!        睡眠量（睡眠負債）・検出済み睡眠周期の位相・曜日。説明性より予測精度を
+//!        優先し、周期(cycle.rs)の検出結果も入力に取り込んでいる。
 //!
 //! 依存 : crate::Session, smartcore, std::f64::consts::PI
 //! 公開 : `PredictionResult`, `OptimalResult`, `predict`, `find_optimal`,
@@ -107,22 +109,92 @@ fn hist_avg_at(sessions: &[Session], bh: f64) -> f64 {
     }
 }
 
-// Features (11 total):
-//   0-1  : sin/cos of bed hour (24h cycle)
-//   2    : hours awake before this sleep
-//   3    : historical avg duration at this bedtime (explicit bedtime→duration signal)
-//   4-10 : weekday one-hot (Mon=0 … Sun=6)
-fn make_features(bh: f64, awake_h: f64, wd: usize, hist_avg: f64) -> Vec<f64> {
-    let mut f = vec![
-        (bh * 2.0 * PI / 24.0).sin(),
-        (bh * 2.0 * PI / 24.0).cos(),
-        awake_h,
-        hist_avg,
+// 1件の睡眠を予測するための入力。学習時は過去の各セッションから、予測時は
+// 「これから寝る候補」から、それぞれ同じ形で組み立てる。
+struct FeatureInputs {
+    bed_hour: f64,      // 入眠時刻（0-23.99）
+    awake_h: f64,       // 直前の睡眠からの連続起床時間
+    weekday: usize,     // 行動上の曜日（Mon=0 … Sun=6）
+    hist_avg: f64,      // 同じ入眠時刻帯（±2h）での過去平均睡眠時間
+    past24: f64,        // 直前24hの累計睡眠時間（恒常性: 睡眠負債／寝すぎ）
+    past48: f64,        // 直前48hの累計睡眠時間
+    cycle_sin: f64,     // 検出した睡眠周期における位相のsin（周期未検出なら0）
+    cycle_cos: f64,     // 同cos
+}
+
+// Features (17 total):
+//   0-1   : sin/cos of bed hour (24h cycle)
+//   2     : hours awake before this sleep
+//   3     : historical avg duration at this bedtime
+//   4     : total sleep in the past 24h (homeostatic pressure / oversleep)
+//   5     : total sleep in the past 48h
+//   6-7   : sin/cos of phase within the detected multi-day sleep cycle
+//   8     : whether a cycle was detected (1) or not (0)
+//   9-15  : weekday one-hot (Mon=0 … Sun=6)
+fn make_features(f: &FeatureInputs) -> Vec<f64> {
+    let has_cycle = if f.cycle_sin != 0.0 || f.cycle_cos != 0.0 { 1.0 } else { 0.0 };
+    let mut v = vec![
+        (f.bed_hour * 2.0 * PI / 24.0).sin(),
+        (f.bed_hour * 2.0 * PI / 24.0).cos(),
+        f.awake_h,
+        f.hist_avg,
+        f.past24,
+        f.past48,
+        f.cycle_sin,
+        f.cycle_cos,
+        has_cycle,
     ];
     for i in 0..7 {
-        f.push(if i == wd { 1.0 } else { 0.0 });
+        v.push(if i == f.weekday { 1.0 } else { 0.0 });
     }
-    f
+    v
+}
+
+// 指定時刻(before_epoch)より前、window_secs以内に始まった睡眠の合計時間。
+// 睡眠負債（直前にどれだけ寝ているか）を表す特徴量。
+fn past_sleep_hours(sessions: &[Session], before_epoch: i64, window_secs: i64) -> f64 {
+    sessions.iter().filter_map(|s| {
+        let st = rough_epoch(&s.start);
+        if st < before_epoch && st >= before_epoch - window_secs {
+            Some(s.duration_hours)
+        } else {
+            None
+        }
+    }).sum()
+}
+
+// 検出済みの睡眠周期(period_hours)における、bed_epochの位相をsin/cosで表す。
+// anchorは最初の記録の開始時刻を0とする基準。周期が未検出なら(0,0)を返し、
+// make_features側で「周期なし」フラグに変換される。
+fn cycle_sincos(bed_epoch: i64, anchor: i64, period_hours: Option<f64>) -> (f64, f64) {
+    match period_hours {
+        Some(p) if p > 0.0 => {
+            let hours = (bed_epoch - anchor) as f64 / 3600.0;
+            let frac = (hours / p).rem_euclid(1.0);
+            ((frac * 2.0 * PI).sin(), (frac * 2.0 * PI).cos())
+        }
+        _ => (0.0, 0.0),
+    }
+}
+
+// 学習用: 各セッションから特徴量ベクトルを組み立てる（predict/find_optimal共通）。
+fn build_training_rows(sessions: &[Session], anchor: i64, cycle_period: Option<f64>) -> Vec<Vec<f64>> {
+    sessions.iter().enumerate().map(|(i, s)| {
+        let aw = if i == 0 { 16.0 } else { awake_between(&sessions[i - 1].end, &s.start) };
+        let sbh = bed_hour(&s.start);
+        let st = rough_epoch(&s.start);
+        let (cs, cc) = cycle_sincos(st, anchor, cycle_period);
+        make_features(&FeatureInputs {
+            bed_hour: sbh,
+            awake_h: aw,
+            weekday: weekday_idx(&s.start),
+            hist_avg: hist_avg_at(sessions, sbh),
+            past24: past_sleep_hours(sessions, st, 24 * 3600),
+            past48: past_sleep_hours(sessions, st, 48 * 3600),
+            cycle_sin: cs,
+            cycle_cos: cc,
+        })
+    }).collect()
 }
 
 fn heuristic(sessions: &[Session], bh: f64) -> (f64, String) {
@@ -164,7 +236,7 @@ pub struct OptimalResult {
 // the shortest predicted sleep duration.  This avoids selecting nap-right-after-waking
 // scenarios and encodes "which bedtime lets you wake at the right time most efficiently."
 // Falls back to global min-duration if no candidate fits the window.
-pub fn find_optimal(sessions: &[Session], now: &str, target_wake_hhmm: Option<&str>) -> Option<OptimalResult> {
+pub fn find_optimal(sessions: &[Session], now: &str, target_wake_hhmm: Option<&str>, cycle_period: Option<f64>) -> Option<OptimalResult> {
     if sessions.is_empty() {
         return None;
     }
@@ -173,6 +245,8 @@ pub fn find_optimal(sessions: &[Session], now: &str, target_wake_hhmm: Option<&s
     let now_m: i64 = now.get(14..16).unwrap_or("0").parse().unwrap_or(0);
     let wd_base = weekday_idx(now);
     let awake_h = sessions.last().map(|s| awake_between(&s.end, now)).unwrap_or(16.0);
+    let now_epoch = rough_epoch(now);
+    let anchor = sessions.iter().map(|s| rough_epoch(&s.start)).min().unwrap_or(now_epoch);
 
     // Determine target wake hour
     let target_wake: f64 = if let Some(hhmm) = target_wake_hhmm {
@@ -197,19 +271,24 @@ pub fn find_optimal(sessions: &[Session], now: &str, target_wake_hhmm: Option<&s
         .collect();
 
     let durations: Vec<f64> = if sessions.len() >= 10 {
-        let x_rows: Vec<Vec<f64>> = sessions
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let aw = if i == 0 { 16.0 } else { awake_between(&sessions[i - 1].end, &s.start) };
-                let bh = bed_hour(&s.start);
-                make_features(bh, aw, weekday_idx(&s.start), hist_avg_at(sessions, bh))
-            })
-            .collect();
+        let x_rows = build_training_rows(sessions, anchor, cycle_period);
         let y: Vec<f64> = sessions.iter().map(|s| s.duration_hours).collect();
         let feat_list: Vec<Vec<f64>> = candidates
             .iter()
-            .map(|c| make_features(c.bh, awake_h, c.wd, hist_avg_at(sessions, c.bh)))
+            .map(|c| {
+                let cand_epoch = now_epoch + c.slot_mins * 60;
+                let (cs, cc) = cycle_sincos(cand_epoch, anchor, cycle_period);
+                make_features(&FeatureInputs {
+                    bed_hour: c.bh,
+                    awake_h,
+                    weekday: c.wd,
+                    hist_avg: hist_avg_at(sessions, c.bh),
+                    past24: past_sleep_hours(sessions, cand_epoch, 24 * 3600),
+                    past48: past_sleep_hours(sessions, cand_epoch, 48 * 3600),
+                    cycle_sin: cs,
+                    cycle_cos: cc,
+                })
+            })
             .collect();
         let x_mat = DenseMatrix::from_2d_vec(&x_rows);
         let x_q   = DenseMatrix::from_2d_vec(&feat_list);
@@ -257,7 +336,7 @@ pub fn find_optimal(sessions: &[Session], now: &str, target_wake_hhmm: Option<&s
     })
 }
 
-pub fn predict(sessions: &[Session], now: &str) -> PredictionResult {
+pub fn predict(sessions: &[Session], now: &str, cycle_period: Option<f64>) -> PredictionResult {
     let bh      = bed_hour(now);
     let wd      = weekday_idx(now);
     let awake_h = sessions.last().map(|s| awake_between(&s.end, now)).unwrap_or(16.0);
@@ -267,20 +346,25 @@ pub fn predict(sessions: &[Session], now: &str) -> PredictionResult {
         return PredictionResult { duration_hours: dur.clamp(1.0, 18.0), method, awake_hours: awake_h };
     }
 
-    let hist = hist_avg_at(sessions, bh);
-    let x_rows: Vec<Vec<f64>> = sessions
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let aw  = if i == 0 { 16.0 } else { awake_between(&sessions[i - 1].end, &s.start) };
-            let sbh = bed_hour(&s.start);
-            make_features(sbh, aw, weekday_idx(&s.start), hist_avg_at(sessions, sbh))
-        })
-        .collect();
+    let now_epoch = rough_epoch(now);
+    let anchor = sessions.iter().map(|s| rough_epoch(&s.start)).min().unwrap_or(now_epoch);
+    let x_rows = build_training_rows(sessions, anchor, cycle_period);
     let y: Vec<f64> = sessions.iter().map(|s| s.duration_hours).collect();
 
+    let (cs, cc) = cycle_sincos(now_epoch, anchor, cycle_period);
+    let q = make_features(&FeatureInputs {
+        bed_hour: bh,
+        awake_h,
+        weekday: wd,
+        hist_avg: hist_avg_at(sessions, bh),
+        past24: past_sleep_hours(sessions, now_epoch, 24 * 3600),
+        past48: past_sleep_hours(sessions, now_epoch, 48 * 3600),
+        cycle_sin: cs,
+        cycle_cos: cc,
+    });
+
     let x_mat = DenseMatrix::from_2d_vec(&x_rows);
-    let x_q   = DenseMatrix::from_2d_vec(&vec![make_features(bh, awake_h, wd, hist)]);
+    let x_q   = DenseMatrix::from_2d_vec(&vec![q]);
     let params = RandomForestRegressorParameters { n_trees: 50, ..Default::default() };
 
     match RandomForestRegressor::fit(&x_mat, &y, params) {

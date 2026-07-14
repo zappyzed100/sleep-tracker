@@ -111,7 +111,10 @@ pub fn run() {
                 if sessions.is_empty() { return; }
                 let cfg = config::load_config_inner();
                 let target = cfg.target_wake_time;
-                if let Some(opt) = prediction::find_optimal(&sessions, &home::now_iso(), target.as_deref()) {
+                let excluded_dates = events::get_excluded_dates();
+                let cycle_period = prediction::estimate_sleep_cycle(&sessions, &excluded_dates)
+                    .map(|c| c.period_hours);
+                if let Some(opt) = prediction::find_optimal(&sessions, &home::now_iso(), target.as_deref(), cycle_period) {
                     let parts: Vec<&str> = opt.best_bed_time.splitn(2, ':').collect();
                     if parts.len() == 2 {
                         w.set_bed_hour(parts[0].parse().unwrap_or(22));
