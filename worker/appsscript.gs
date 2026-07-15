@@ -27,6 +27,7 @@
 
 const SECRET = PropertiesService.getScriptProperties().getProperty("SECRET");
 const GENERATION_PROP = "GENERATION";
+const HISTORY_FOLDER_ID_PROP = "HISTORY_FOLDER_ID";
 
 const BACKUP_FILE         = "sleep_events_backup.txt";
 const MANUAL_BACKUP_FILE  = "sleep_manual_backup.txt";
@@ -117,9 +118,24 @@ function looksLikeEventsContent_(content) {
 
 // ── C. 世代バックアップ ────────────────────────────────────────────
 
+// backup_history フォルダを取得する。毎回名前で検索すると遅い上、同名フォルダが
+// 複数できるリスクもあるため、一度見つけた（または作成した）フォルダのIDを
+// Script Propertiesに保存し、以後はIDで直接アクセスする。
 function getHistoryFolder_(folder) {
+  const props = PropertiesService.getScriptProperties();
+  const savedId = props.getProperty(HISTORY_FOLDER_ID_PROP);
+  if (savedId) {
+    try {
+      return DriveApp.getFolderById(savedId);
+    } catch (e) {
+      // 保存済みIDが無効（手動削除等）だった場合は名前検索にフォールバック
+    }
+  }
+
   const it = folder.getFoldersByName(HISTORY_FOLDER);
-  return it.hasNext() ? it.next() : folder.createFolder(HISTORY_FOLDER);
+  const found = it.hasNext() ? it.next() : folder.createFolder(HISTORY_FOLDER);
+  props.setProperty(HISTORY_FOLDER_ID_PROP, found.getId());
+  return found;
 }
 
 // 上書き前に既存内容を退避し、古い世代を削除する
