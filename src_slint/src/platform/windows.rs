@@ -166,16 +166,53 @@ pub fn set_startup(enable: bool) -> Result<(), String> {
         let run = hkcu
             .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_WRITE)
             .map_err(|e| e.to_string())?;
-        return if enable {
+        // Runキーへ登録/削除する。加えてStartupApproved\Runの有効/無効フラグも
+        // 同期させる — ここを合わせないと、過去にタスクマネージャーの
+        // 「スタートアップ」で無効化された履歴が残っている場合、Runキーに登録しても
+        // Windowsが起動時にアプリを飛ばしてしまう（フラグ 03=無効 / 02=有効）。
+        let approved = set_startup_approved(enable);
+        let result = if enable {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            run.set_value(STARTUP_REG_VALUE, &exe.to_string_lossy().as_ref())
-                .map_err(|e| e.to_string())
+            // パスにスペースが含まれる場合（C:\Program Files\... など）、
+            // ダブルクォートで囲まないとWindowsが最初のスペースで切り取ってしまい
+            // 起動に失敗する。Runキーは文字列型(REG_SZ)でコマンドラインとして解釈される。
+            let quoted = format!("\"{}\"", exe.to_string_lossy());
+            run.set_value(STARTUP_REG_VALUE, &quoted).map_err(|e| e.to_string())
         } else {
             run.delete_value(STARTUP_REG_VALUE).or(Ok(()))
         };
+        // Runキーの書き込みが成功しても、StartupApprovedの更新に失敗していると
+        // 「登録はあるのに起動しない」が再発するため、そちらのエラーも優先して返す。
+        return result.and(approved);
     }
     #[allow(unreachable_code)]
     Ok(())
+}
+
+// StartupApproved\Run の有効/無効フラグを書き換える。
+// Runキーだけでは「タスクマネージャーのスタートアップで無効化された」状態を
+// 上書きできず、アプリが自動起動しないため、これも明示的に管理する。
+// 形式: 先頭1バイトが状態(02=有効, 03=無効)、続く3バイトは0、末尾8バイトはFILETIME。
+// 有効化時はTask Managerと同じくタイムスタンプ0で12バイト書き込む。
+#[cfg(windows)]
+fn set_startup_approved(enabled: bool) -> Result<(), String> {
+    use winreg::{RegKey, RegValue, enums::{HKEY_CURRENT_USER, KEY_WRITE, REG_BINARY}};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+    // 通常は存在するが、無ければ作成する。
+    let key = match hkcu.open_subkey_with_flags(path, KEY_WRITE) {
+        Ok(k) => k,
+        Err(_) => {
+            let (k, _) = hkcu.create_subkey(path).map_err(|e| e.to_string())?;
+            k
+        }
+    };
+    let flag: u8 = if enabled { 0x02 } else { 0x03 };
+    let val = RegValue {
+        bytes: vec![flag, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        vtype: REG_BINARY,
+    };
+    key.set_raw_value(STARTUP_REG_VALUE, &val).map_err(|e| e.to_string())
 }
 
 // 戻り値: Ok(true) = 新規作成、Ok(false) = 既存のショートカットを上書き。
