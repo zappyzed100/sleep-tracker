@@ -24,8 +24,34 @@ WebViewを使わないため、Tauri版で問題になっていたAndroidのWebV
 
 ### デスクトップ（Windows）
 
+リポジトリルートから、releaseビルドは次のスクリプトで実行できる。
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+既存のアプリを終了してからビルドし、完了後に起動する場合は次を使う。
+
+```powershell
+.\scripts\build-windows.ps1 -Launch
+```
+
+`-StopRunning`を付けると既存プロセスだけを終了して、起動せずにビルドする。
+
+```powershell
+.\scripts\build-windows.ps1 -StopRunning
+```
+
+スクリプト内部では、依存関係を固定した次のコマンドを実行している。
+
+```powershell
+cargo build --locked --release
+```
+
+手動で実行する場合は、`src_slint`ディレクトリで同じコマンドを実行する。
+
 ```bash
-cargo build --release
+cargo build --locked --release
 ./target/release/sleep_tracker.exe
 ```
 
