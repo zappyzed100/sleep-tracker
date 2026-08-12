@@ -31,16 +31,16 @@ pub fn setup(window: &MainWindow) {
     let _ = menu.append(&quit_item);
 
     // TrayIcon はドロップされるとアイコンが消えるため、Box::leak でプロセス終了まで保持する。
-    let tray: &'static TrayIcon = match TrayIconBuilder::new()
+    let tray: Option<&'static TrayIcon> = match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_icon(load_icon())
         .with_tooltip("睡眠トラッカー")
         .build()
     {
-        Ok(tray) => Box::leak(Box::new(tray)),
+        Ok(tray) => Some(Box::leak(Box::new(tray))),
         Err(error) => {
             eprintln!("[platform] ERROR tray: トレイアイコンを作成できないため、トレイなしで起動します: {:?}", error);
-            return;
+            None
         }
     };
     let _ = tray;
