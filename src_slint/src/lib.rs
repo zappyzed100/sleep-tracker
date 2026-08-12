@@ -12,6 +12,8 @@ mod core;
 mod platform;
 mod ui;
 mod paths;
+#[cfg(not(target_os = "android"))]
+mod mcp;
 
 use core::{cloud, config, events, prediction};
 use ui::{home, settings_ui};
@@ -445,6 +447,11 @@ pub fn run() {
     // フォアグラウンド定期同期・onResume()経由の同期キック（Androidのみ）
     #[cfg(target_os = "android")]
     platform::android::setup(&window, &state);
+
+    // MCP はアプリが生きている間だけ、localhost から睡眠データを読み取れるようにする。
+    // Android ではローカル MCP クライアントとの接続用途がないため起動しない。
+    #[cfg(not(target_os = "android"))]
+    mcp::start();
 
     // window.run() は「最後のウィンドウが隠れたら」イベントループごと終了してしまうため、
     // トレイに閉じるだけのWindowsデスクトップでは使えない

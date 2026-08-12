@@ -10,6 +10,7 @@ Rustソース一式。`core/`（ビジネスロジック）・`platform/`（OS�
 | `lib.rs` | エントリポイント共通ロジック。Slintウィンドウの起動と全コールバック配線(`run`) |
 | `main.rs` | デスクトップ版エントリポイント（`lib.rs::run()` を呼ぶだけ） |
 | `paths.rs` | データ/設定ファイルの保存先パス解決（`data_dir`/`config_path`等）・共有HTTPクライアント |
+| `mcp.rs` | 起動中のみ `127.0.0.1:32123/mcp` で睡眠データを返す MCP エンドポイント |
 | `core/` | ビジネスロジック（config/events/cloud/prediction/utils）。詳細は `core/README.md` |
 | `platform/` | OS固有機能（windows/monitor/tray/android）。詳細は `platform/README.md` |
 | `ui/` | 画面ロジック（home/settings_ui）。詳細は `ui/README.md` |
