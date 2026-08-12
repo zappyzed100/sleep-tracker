@@ -45,8 +45,8 @@ pub fn setup(window: &MainWindow) -> bool {
     };
     let tray_available = tray.is_some();
 
-    // トレイが使える場合は閉じるボタン → 終了せずウィンドウを隠す。
-    // トレイが使えない場合は、隠したまま常駐する経路がないため終了する。
+    // トレイが使える場合は、閉じるボタンでウィンドウを隠して常駐させる。
+    // トレイが使えない場合は、閉じる操作でイベントループも終了させる。
     if tray_available {
         window.window().on_close_requested(|| slint::CloseRequestResponse::HideWindow);
     } else {
@@ -62,15 +62,17 @@ pub fn setup(window: &MainWindow) -> bool {
     let menu_rx = MenuEvent::receiver();
     let wake_event = win::create_wake_event();
     let weak = window.as_weak();
+    let mut initial_show_pending = true;
     let timer = slint::Timer::default();
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(150), move || {
         let Some(w) = weak.upgrade() else { return };
 
-        // トレイが作れない環境では、Windowsのイベントループ開始時に
-        // Slintのウィンドウが一度隠れることがある。イベントループ上で再表示し、
-        // タスクバーからの起動でも必ず本体を見える状態にする。
-        if !tray_available {
+        // Windowsのイベントループ上で最初のネイティブウィンドウを作成する。
+        // 起動元がタスクバーのShellでも、可視ウィンドウ登録前にループが終了しない。
+        if initial_show_pending {
+            initial_show_pending = false;
             let _ = w.window().show();
+            win::bring_to_foreground(w.window());
         }
 
         while let Ok(event) = tray_rx.try_recv() {

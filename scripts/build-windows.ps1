@@ -72,5 +72,10 @@ if ($Launch) {
     }
 
     Write-Host "タスクバーの正規ショートカットを起動します: $taskbarShortcut"
+    # .lnkをStart-Processに渡すと、Windowsのショートカット解決を使って起動できる。
+    # Shell.Application.InvokeVerb()はCOMサーバー経由の起動となり、起動後に
+    # アプリのHWNDだけが破棄される環境があるため使用しない。
     Start-Process -FilePath $taskbarShortcut
+    # ショートカット起動は非同期なので、初期ウィンドウ作成を待つ。
+    Start-Sleep -Seconds 2
 }

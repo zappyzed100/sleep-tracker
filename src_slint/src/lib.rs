@@ -453,14 +453,11 @@ pub fn run() {
     #[cfg(not(target_os = "android"))]
     mcp::start();
 
-    // window.run() は「最後のウィンドウが隠れたら」イベントループごと終了してしまうため、
-    // トレイに閉じるだけのWindowsデスクトップでは使えない
-    // （閉じるボタン → HideWindow のつもりが、実質的にアプリごと終了してしまう）。
-    // run_event_loop_until_quit() はトレイの「終了」メニューが呼ぶ quit_event_loop() まで
-    // 生き続けるので、こちらを使う。
+    // Windowsでは、トレイの有無に関係なく最初の表示をイベントループへ登録し、
+    // until_quit()で最初のTimer tickまでループを維持する。トレイ作成に失敗した
+    // 環境で通常ループを使うと、表示登録の競合時にウィンドウだけが消えて監視/MCP
+    // のスレッドだけ残る不可視プロセスになる。
     window.show().expect("ウィンドウの表示に失敗しました");
-    #[cfg(windows)]
-    platform::windows::bring_to_foreground(window.window());
     #[cfg(windows)]
     slint::run_event_loop_until_quit().expect("イベントループの実行に失敗しました");
     #[cfg(not(windows))]
