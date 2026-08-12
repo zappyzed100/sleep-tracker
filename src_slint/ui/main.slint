@@ -557,37 +557,21 @@ component LineDot inherits Rectangle {
     border-radius: 5px;
 }
 
-// 隣り合う2つのCurvePointVMを太い回転矩形で繋ぎ、点の連なりではなく
-// 途切れない実線に見せる（Slintの Path はアスペクト比維持スケールで横長
-// チャートに使えなかったため、細かい線分を回転させて繋ぐ方式を採る）。
-// ルート要素に明示のx/y/幅/高さ0を持たせないと、内部Imageの回転原点が
-// 親のレイアウト位置ぶんずれて描画される（過去にLineSegで踏んだバグ）。
-component CurveSeg {
-    in property <float> x1;
-    in property <float> y1;
-    in property <float> x2;
-    in property <float> y2;
-    in property <color> seg-color;
-    in property <bool> connected: true;
+// Catmull-Romの密なサンプル点を重ね、回転矩形を使わずに曲線を描く。
+// 回転矩形による線分接続は、Slintのソフトウェアレンダラーで線分の境界に
+// サブピクセルの隙間が生じ、曲線がとぎれとぎれに見えることがある。
+// 以前の正常な実装と同じく、点を十分に大きくして隣接点を重ねる。
+component CurveDot inherits Rectangle {
+    in property <float> cx;
+    in property <float> cy;
+    in property <color> dot-color;
 
-    x: 0px;
-    y: 0px;
-    width: 0px;
-    height: 0px;
-
-    property <float> seg-dx: root.x2 - root.x1;
-    property <float> seg-dy: root.y2 - root.y1;
-    property <float> seg-len: sqrt(root.seg-dx * root.seg-dx + root.seg-dy * root.seg-dy);
-
-    if root.connected: Rectangle {
-        x: root.x1 * 1px;
-        y: root.y1 * 1px - 1.5px;
-        width: root.seg-len * 1px;
-        height: 3px;
-        background: root.seg-color;
-        transform-rotation: atan2(root.seg-dy, root.seg-dx);
-        transform-origin: { x: 0px, y: 1.5px };
-    }
+    x: root.cx * 1px - 3.5px;
+    y: root.cy * 1px - 3.5px;
+    width: 7px;
+    height: 7px;
+    border-radius: 3.5px;
+    background: root.dot-color;
 }
 
 component WeeklyChart {
@@ -770,21 +754,15 @@ component WeeklyChart {
         root.legend-h-px + frac * root.bars-h-px
     }
 
-    for pt[i] in root.bedtime-curve: CurveSeg {
-        x1: root.curve-px-x(pt.x);
-        y1: root.curve-px-y(pt.y);
-        x2: i + 1 < root.bedtime-curve.length ? root.curve-px-x(root.bedtime-curve[i + 1].x) : self.x1;
-        y2: i + 1 < root.bedtime-curve.length ? root.curve-px-y(root.bedtime-curve[i + 1].y) : self.y1;
-        connected: i + 1 < root.bedtime-curve.length && !root.bedtime-curve[i + 1].new-run;
-        seg-color: #f9e2af;
+    for pt in root.bedtime-curve: CurveDot {
+        cx: root.curve-px-x(pt.x);
+        cy: root.curve-px-y(pt.y);
+        dot-color: #f9e2af;
     }
-    for pt[i] in root.waketime-curve: CurveSeg {
-        x1: root.curve-px-x(pt.x);
-        y1: root.curve-px-y(pt.y);
-        x2: i + 1 < root.waketime-curve.length ? root.curve-px-x(root.waketime-curve[i + 1].x) : self.x1;
-        y2: i + 1 < root.waketime-curve.length ? root.curve-px-y(root.waketime-curve[i + 1].y) : self.y1;
-        connected: i + 1 < root.waketime-curve.length && !root.waketime-curve[i + 1].new-run;
-        seg-color: #a6e3a1;
+    for pt in root.waketime-curve: CurveDot {
+        cx: root.curve-px-x(pt.x);
+        cy: root.curve-px-y(pt.y);
+        dot-color: #a6e3a1;
     }
     for day[i] in root.week: LineDot {
         cx: root.day-cx(i);
