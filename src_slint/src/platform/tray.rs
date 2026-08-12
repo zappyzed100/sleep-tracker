@@ -45,9 +45,15 @@ pub fn setup(window: &MainWindow) -> bool {
     };
     let tray_available = tray.is_some();
 
-    // 閉じるボタン → 終了せずウィンドウを隠す
+    // トレイが使える場合は閉じるボタン → 終了せずウィンドウを隠す。
+    // トレイが使えない場合は、隠したまま常駐する経路がないため終了する。
     if tray_available {
         window.window().on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+    } else {
+        window.window().on_close_requested(|| {
+            let _ = slint::quit_event_loop();
+            slint::CloseRequestResponse::HideWindow
+        });
     }
 
     // トレイアイコン/メニューのイベントはポーリング専用チャンネルで受け取る
