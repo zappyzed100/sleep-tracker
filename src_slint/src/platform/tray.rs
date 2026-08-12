@@ -23,7 +23,7 @@ fn load_icon() -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(img.into_raw(), w, h).expect("トレイアイコンの作成に失敗しました")
 }
 
-pub fn setup(window: &MainWindow) {
+pub fn setup(window: &MainWindow) -> bool {
     let open_item = MenuItem::with_id("open", "開く", true, None);
     let quit_item = MenuItem::with_id("quit", "終了", true, None);
     let menu = Menu::new();
@@ -43,10 +43,12 @@ pub fn setup(window: &MainWindow) {
             None
         }
     };
-    let _ = tray;
+    let tray_available = tray.is_some();
 
     // 閉じるボタン → 終了せずウィンドウを隠す
-    window.window().on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+    if tray_available {
+        window.window().on_close_requested(|| slint::CloseRequestResponse::HideWindow);
+    }
 
     // トレイアイコン/メニューのイベントはポーリング専用チャンネルで受け取る
     // （winitイベントループに直接フックしない、Slintの標準runループと共存させるため）。
@@ -85,4 +87,5 @@ pub fn setup(window: &MainWindow) {
     });
     // timer をリークして保持する（main() のスコープを抜けても動き続けるように）。
     std::mem::forget(timer);
+    tray_available
 }

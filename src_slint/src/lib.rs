@@ -442,7 +442,7 @@ pub fn run() {
 
     // システムトレイ（Windowsデスクトップのみ）: 閉じるボタンでトレイに常駐
     #[cfg(windows)]
-    platform::tray::setup(&window);
+    let has_tray = platform::tray::setup(&window);
 
     // フォアグラウンド定期同期・onResume()経由の同期キック（Androidのみ）
     #[cfg(target_os = "android")]
@@ -460,7 +460,11 @@ pub fn run() {
     // 生き続けるので、こちらを使う。
     window.show().expect("ウィンドウの表示に失敗しました");
     #[cfg(windows)]
-    slint::run_event_loop_until_quit().expect("イベントループの実行に失敗しました");
+    if has_tray {
+        slint::run_event_loop_until_quit().expect("イベントループの実行に失敗しました");
+    } else {
+        slint::run_event_loop().expect("イベントループの実行に失敗しました");
+    }
     #[cfg(not(windows))]
     slint::run_event_loop().expect("イベントループの実行に失敗しました");
 }
