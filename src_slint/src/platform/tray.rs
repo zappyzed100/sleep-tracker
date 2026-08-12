@@ -66,6 +66,13 @@ pub fn setup(window: &MainWindow) -> bool {
     timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(150), move || {
         let Some(w) = weak.upgrade() else { return };
 
+        // トレイが作れない環境では、Windowsのイベントループ開始時に
+        // Slintのウィンドウが一度隠れることがある。イベントループ上で再表示し、
+        // タスクバーからの起動でも必ず本体を見える状態にする。
+        if !tray_available {
+            let _ = w.window().show();
+        }
+
         while let Ok(event) = tray_rx.try_recv() {
             if matches!(event, TrayIconEvent::Click { .. } | TrayIconEvent::DoubleClick { .. }) {
                 let _ = w.window().show();
