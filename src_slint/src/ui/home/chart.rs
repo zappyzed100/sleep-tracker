@@ -10,6 +10,7 @@ use super::state::SharedState;
 use crate::core::{config, events, utils};
 use crate::{CurvePointVM, DaySummaryVM, MainWindow};
 use chrono::{Datelike, NaiveDate};
+use std::fmt::Write as FmtWrite;
 
 const DAYS_JA: [&str; 7] = ["月", "火", "水", "木", "金", "土", "日"];
 
@@ -124,6 +125,20 @@ fn clip_to_unit_x(points: Vec<CurvePointVM>) -> Vec<CurvePointVM> {
     out
 }
 
+// SlintのPathに渡すSVGパス文字列を作る。new_runの位置ではMで移動し、
+// それ以外はLで連続線にすることで、欠損日の区間を線で結ばない。
+fn build_path_commands(points: &[CurvePointVM]) -> String {
+    let mut commands = String::new();
+    for point in points {
+        if point.new_run {
+            let _ = write!(&mut commands, "M {:.6} {:.6}", point.x, point.y);
+        } else {
+            let _ = write!(&mut commands, " L {:.6} {:.6}", point.x, point.y);
+        }
+    }
+    commands
+}
+
 pub fn update_chart(window: &MainWindow, state: &SharedState) {
     let (week_base, selected, open_sleep_start) = {
         let s = state.lock().unwrap();
@@ -200,8 +215,12 @@ pub fn update_chart(window: &MainWindow, state: &SharedState) {
         .chain(days.iter().enumerate().map(|(i, d)| d.waketime_h.map(|h| ((i as f32 + 0.5) / 7.0, y_frac(h)))))
         .chain(std::iter::once(next_day_summary.waketime_h.map(|h| (7.5 / 7.0, y_frac(h)))))
         .collect();
-    window.set_bedtime_curve(slint::ModelRc::new(slint::VecModel::from(build_curve(&bedtime_pts))));
-    window.set_waketime_curve(slint::ModelRc::new(slint::VecModel::from(build_curve(&waketime_pts))));
+    let bedtime_curve = build_curve(&bedtime_pts);
+    let waketime_curve = build_curve(&waketime_pts);
+    window.set_bedtime_curve(slint::ModelRc::new(slint::VecModel::from(bedtime_curve.clone())));
+    window.set_waketime_curve(slint::ModelRc::new(slint::VecModel::from(waketime_curve.clone())));
+    window.set_bedtime_path(build_path_commands(&bedtime_curve).into());
+    window.set_waketime_path(build_path_commands(&waketime_curve).into());
 
     window.set_week(slint::ModelRc::new(slint::VecModel::from(vm)));
 

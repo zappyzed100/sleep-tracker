@@ -557,29 +557,14 @@ component LineDot inherits Rectangle {
     border-radius: 5px;
 }
 
-// Catmull-Romの密なサンプル点を重ね、回転矩形を使わずに曲線を描く。
-// 回転矩形による線分接続は、Slintのソフトウェアレンダラーで線分の境界に
-// サブピクセルの隙間が生じ、曲線がとぎれとぎれに見えることがある。
-// 以前の正常な実装と同じく、点を十分に大きくして隣接点を重ねる。
-component CurveDot inherits Rectangle {
-    in property <float> cx;
-    in property <float> cy;
-    in property <color> dot-color;
-
-    x: root.cx * 1px - 3.5px;
-    y: root.cy * 1px - 3.5px;
-    width: 7px;
-    height: 7px;
-    border-radius: 3.5px;
-    background: root.dot-color;
-}
-
 component WeeklyChart {
     in property <[DaySummaryVM]> week;
     in property <[string]> y-labels;
     in property <[string]> y2-labels;
     in property <[CurvePointVM]> bedtime-curve;
     in property <[CurvePointVM]> waketime-curve;
+    in property <string> bedtime-path;
+    in property <string> waketime-path;
     callback day-clicked(string);
     // Android実機でのタッチ操作向け。棒グラフ上での左右スワイプで週送りする。
     callback swipe-prev();
@@ -723,9 +708,9 @@ component WeeklyChart {
     }
 
     // ── 入眠・起床の折れ線（棒グラフの上に重ねる） ──
-    // Rust側でCatmull-Romスプライン補間したサンプル点を小さい点で密に並べて曲線に
-    // 見せる（Slintの Path はviewboxをアスペクト比維持でスケールするため横長の
-    // チャートでは使えなかった）。実データのある曜日には別途大きめの点を重ねる。
+    // Rust側でCatmull-Romスプラインの点列を1本のPathに変換し、strokeで連続線として
+    // 描画する。Pathのviewboxは列間隔を含む実データ位置に合わせ、左右端だけを
+    // チャート領域でクリップする。
     property <float> chart-w-px: (root.width - root.axis-l - root.axis-r) / 1px;
     property <float> bars-h-px: root.bars-h / 1px;
     property <float> axis-l-px: root.axis-l / 1px;
@@ -742,27 +727,44 @@ component WeeklyChart {
         root.axis-l-px + idx * (root.col-w-px + root.col-spacing-px) + root.col-w-px / 2
     }
 
-    // frac は (idx + 0.5) / 7 の形の「列位置」（0.0〜1.0、連続値も取りうる）。
-    // 週境界をまたぐスタブ線分（frac<0 または >1）は、Rust側のbuild_curveで
-    // 既にx=0.0〜1.0にクランプ済みなので、ここでは特別な扱いは不要
-    // （以前はSlintのclip:trueでクリップしていたが、Android実機のレンダリング
-    // バックエンドで効かないことが判明したため、Rust側でのクランプに一本化した）。
-    function curve-px-x(frac: float) -> float {
-        root.axis-l-px + (frac * 7 - 0.5) * (root.col-w-px + root.col-spacing-px) + root.col-w-px / 2
-    }
-    function curve-px-y(frac: float) -> float {
-        root.legend-h-px + frac * root.bars-h-px
-    }
+    // データ点は (idx + 0.5) / 7 に置かれる。Pathのviewboxを少し狭めることで、
+    // x=0/1の境界線分が列間隔の半分だけ外側へ伸びる座標変換を表現する。
+    property <float> path-viewbox-x: root.col-spacing-px / (2 * (root.chart-w-px + root.col-spacing-px));
+    property <float> path-viewbox-w: root.chart-w-px / (root.chart-w-px + root.col-spacing-px);
 
-    for pt in root.bedtime-curve: CurveDot {
-        cx: root.curve-px-x(pt.x);
-        cy: root.curve-px-y(pt.y);
-        dot-color: #f9e2af;
+    Path {
+        x: root.axis-l;
+        y: root.legend-h;
+        width: root.width - root.axis-l - root.axis-r;
+        height: root.bars-h;
+        viewbox-x: root.path-viewbox-x;
+        viewbox-y: 0;
+        viewbox-width: root.path-viewbox-w;
+        viewbox-height: 1;
+        fit: fill;
+        commands: root.bedtime-path;
+        fill: transparent;
+        stroke: #f9e2af;
+        stroke-width: 3px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
     }
-    for pt in root.waketime-curve: CurveDot {
-        cx: root.curve-px-x(pt.x);
-        cy: root.curve-px-y(pt.y);
-        dot-color: #a6e3a1;
+    Path {
+        x: root.axis-l;
+        y: root.legend-h;
+        width: root.width - root.axis-l - root.axis-r;
+        height: root.bars-h;
+        viewbox-x: root.path-viewbox-x;
+        viewbox-y: 0;
+        viewbox-width: root.path-viewbox-w;
+        viewbox-height: 1;
+        fit: fill;
+        commands: root.waketime-path;
+        fill: transparent;
+        stroke: #a6e3a1;
+        stroke-width: 3px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
     }
     for day[i] in root.week: LineDot {
         cx: root.day-cx(i);
@@ -1595,6 +1597,8 @@ export component MainWindow inherits Window {
     in property <[string]> y2-labels: [];
     in property <[CurvePointVM]> bedtime-curve: [];
     in property <[CurvePointVM]> waketime-curve: [];
+    in property <string> bedtime-path: "";
+    in property <string> waketime-path: "";
 
     // カレンダーピッカー用のプロパティ
     in property <bool> cal-open: false;
@@ -2131,6 +2135,8 @@ export component MainWindow inherits Window {
                     y2-labels: root.y2-labels;
                     bedtime-curve: root.bedtime-curve;
                     waketime-curve: root.waketime-curve;
+                    bedtime-path: root.bedtime-path;
+                    waketime-path: root.waketime-path;
                     day-clicked(d) => { root.day-clicked(d); }
                     swipe-prev => { root.prev-week(); }
                     swipe-next => { root.next-week(); }
