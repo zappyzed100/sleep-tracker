@@ -84,6 +84,8 @@ pub struct AppState {
     // 絶対時刻で持っているので、tickごとに Local::now() との差分を取り直すだけでよい
     // （awake_hoursのようにInstant経過分を毎回加算する必要がない）。
     pub(super) open_sleep_start: Option<chrono::NaiveDateTime>,
+    // 未来まで入力された手動睡眠。tickが区間内に入ったら「睡眠中」へ切り替える。
+    pub(super) planned_sleeps: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)>,
     // open_sleep_startが属する睡眠日の、確定済み（閉じた）セッションだけの合計時間。
     // 「最後の睡眠」表示はこれにapply_tickで進行中セッションの経過時間を足し合わせる
     // （compute_stats参照）。
@@ -102,6 +104,7 @@ pub fn new_shared_state() -> SharedState {
     Arc::new(Mutex::new(AppState {
         baseline: None,
         open_sleep_start: None,
+        planned_sleeps: Vec::new(),
         last_day_confirmed_hours: None,
         week_base: today,
         selected_date: None,

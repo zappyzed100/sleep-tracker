@@ -12,8 +12,27 @@ use crate::core::{events, prediction, utils, Session};
 use crate::MainWindow;
 use std::time::Instant;
 
+fn session_interval(s: &Session) -> Option<(chrono::NaiveDateTime, chrono::NaiveDateTime)> {
+    Some((
+        chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?,
+        chrono::NaiveDateTime::parse_from_str(s.end.trim(), "%Y-%m-%d %H:%M:%S").ok()?,
+    ))
+}
+
+fn completed_sessions_at(sessions: &[Session], now: chrono::NaiveDateTime) -> Vec<Session> {
+    sessions.iter().filter(|s| session_interval(s).is_some_and(|(_, end)| end <= now)).cloned().collect()
+}
+
+fn pending_sleep_intervals(sessions: &[Session], now: chrono::NaiveDateTime) -> Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> {
+    sessions.iter().filter_map(session_interval).filter(|(_, end)| *end > now).collect()
+}
+
 pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     let sessions = events::get_sessions().unwrap_or_default();
+    let current = chrono::Local::now().naive_local();
+    // 終了が未来の予定記録は、完了するまで平均・記録日数・予測学習に含めない。
+    let completed_sessions = completed_sessions_at(&sessions, current);
+    let planned_sleeps = pending_sleep_intervals(&sessions, current);
     let period = state.lock().unwrap().period;
     let excluded_dates = events::get_excluded_dates();
     let night_boundary = crate::core::config::load_config_inner().night_type_boundary_hour
@@ -28,7 +47,7 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // 記録が実在する最初の睡眠日。Week/Month/Yearの固定日数ウィンドウが記録開始前まで
     // 遡ってしまうと、「記録が無いだけの日」まで0hとして平均に含めてしまうバグになる
     // （実データで発覚：アプリ導入前の日を大量に0h扱いし、平均を過小評価していた）。
-    let earliest_tracked_day = sessions.iter()
+    let earliest_tracked_day = completed_sessions.iter()
         .filter_map(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
         .map(utils::sleep_day)
         .min();
@@ -57,7 +76,7 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     if let Some(start_day) = period_start_day {
         let mut d = start_day;
         while d <= period_end_day {
-            let summary = utils::single_day_summary(&sessions, d, &excluded_dates, night_boundary);
+            let summary = utils::single_day_summary(&completed_sessions, d, &excluded_dates, night_boundary);
             if !summary.excluded {
                 total_hours += summary.total_hours;
                 day_count += 1;
@@ -76,7 +95,10 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // 進行中（まだ閉じていない）睡眠セッションがあれば、暫定睡眠時間表示のために
     // 開始時刻を保持する。寝ている最中に一瞬起きてタブレットを確認する用途。
     let open_sleep_start = events::current_sleep_start()
-        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok());
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok())
+        .filter(|start| *start <= current);
+    let active_planned_start = planned_sleeps.iter()
+        .find(|(start, end)| *start <= current && current < *end).map(|(start, _)| *start);
 
     // 「最後の睡眠」は最後のセッション1件の duration_hours ではなく、その睡眠日に
     // 計上される確定済み（閉じた）セッションを合算した値にする。ある1回の連続した
@@ -87,12 +109,12 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
     // したときも、確定済み分だけの古い値ではなく、進行中セッションの経過時間を
     // 加えたライブの合計をapply_tickで表示するため。確定分はここではまだ加算
     // せず保持だけしておき、実際の加算はapply_tickが毎tick行う）。
-    let last_day = open_sleep_start.map(utils::sleep_day).or_else(|| {
-        sessions.last().and_then(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
+    let last_day = open_sleep_start.or(active_planned_start).map(utils::sleep_day).or_else(|| {
+        completed_sessions.last().and_then(|s| chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok())
             .map(utils::sleep_day)
     });
     let last_day_merged = last_day.map(|day| {
-        let intervals: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> = sessions.iter()
+        let intervals: Vec<(chrono::NaiveDateTime, chrono::NaiveDateTime)> = completed_sessions.iter()
             .filter_map(|s| {
                 let st = chrono::NaiveDateTime::parse_from_str(s.start.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
                 if utils::sleep_day(st) != day { return None; }
@@ -118,13 +140,14 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
 
     // 予測計算も計測対象外の日を除外したセッションだけで行う。ここでの予測は
     // awake_hoursの取得だけが目的なので、周期(cycle)はNoneでよい。
-    let for_prediction: Vec<Session> = sessions.iter().filter(|s| !s.excluded).cloned().collect();
+    let for_prediction: Vec<Session> = completed_sessions.iter().filter(|s| !s.excluded).cloned().collect();
     let pred = prediction::predict(&for_prediction, &now, None);
 
     {
         let mut st = state.lock().unwrap();
         st.baseline = Some(StatsBaseline { awake_hours: pred.awake_hours, computed_at: Instant::now() });
         st.open_sleep_start = open_sleep_start;
+        st.planned_sleeps = planned_sleeps;
         st.last_day_confirmed_hours = last_day_confirmed_hours;
     }
 
@@ -139,14 +162,29 @@ pub fn compute_stats(window: &MainWindow, state: &SharedState) {
 // （update_chartが担当、apply_tickからも再計算のため呼び出す）。
 pub fn apply_tick(window: &MainWindow, state: &SharedState) {
     window.set_current_time(now_hhmm().into());
+    let current = chrono::Local::now().naive_local();
+    // 予定睡眠の終了をまたいだ最初のtickでは、平均・記録日数・予測の基準も
+    // 完了済みデータとして更新する。compute_stats内のapply_tickでは終了済み区間が
+    // planned_sleepsから除かれているため再帰し続けることはない。
+    let planned_ended = state.lock().unwrap().planned_sleeps.iter().any(|(_, end)| *end <= current);
+    if planned_ended {
+        compute_stats(window, state);
+        return;
+    }
     let st = state.lock().unwrap();
-    let is_sleeping = st.open_sleep_start.is_some();
+    let active_planned = st.planned_sleeps.iter()
+        .find(|(start, end)| *start <= current && current < *end).copied();
+    let is_sleeping = st.open_sleep_start.is_some() || active_planned.is_some();
     if is_sleeping {
-        window.set_awake_since("—".into());
+        window.set_awake_since("睡眠中".into());
         window.set_awake_color(slint::Color::from_rgb_u8(0xa6, 0xad, 0xc8));
     } else if let Some(b) = st.baseline.as_ref() {
-        let elapsed_h = b.computed_at.elapsed().as_secs_f64() / 3600.0;
-        let awake = b.awake_hours + elapsed_h;
+        // tick中に予定睡眠が終了した場合は、終了時刻を新しい起床の起点にする。
+        let latest_planned_end = st.planned_sleeps.iter().map(|(_, end)| *end)
+            .filter(|end| *end <= current).max();
+        let awake = latest_planned_end
+            .map(|end| (current - end).num_seconds() as f64 / 3600.0)
+            .unwrap_or_else(|| b.awake_hours + b.computed_at.elapsed().as_secs_f64() / 3600.0);
         window.set_awake_since(utils::format_duration(awake).into());
         window.set_awake_color(awake_color(awake));
     }
@@ -154,12 +192,17 @@ pub fn apply_tick(window: &MainWindow, state: &SharedState) {
     // 2回目の睡眠が始まった直後、PCのIDLE_RESUME前にAndroidを確認したような場合でも、
     // 確定済み分だけの古い値ではなく暫定分を足したライブの合計を表示する
     // （compute_stats参照）。
-    let last_total = st.last_day_confirmed_hours.map(|confirmed| {
+    let last_total = if let Some((start, _)) = active_planned {
+        Some(((current - start).num_seconds() as f64 / 3600.0).max(0.0))
+    } else if let Some((start, end)) = st.planned_sleeps.iter()
+        .filter(|(_, end)| *end <= current).max_by_key(|(_, end)| *end) {
+        Some((*end - *start).num_seconds() as f64 / 3600.0)
+    } else { st.last_day_confirmed_hours.map(|confirmed| {
         let live_h = st.open_sleep_start
-            .map(|start| (chrono::Local::now().naive_local() - start).num_seconds() as f64 / 3600.0)
+            .map(|start| (current - start).num_seconds() as f64 / 3600.0)
             .unwrap_or(0.0);
         confirmed + live_h.max(0.0)
-    });
+    }) };
     drop(st);
     window.set_last_sleep(last_total.map(utils::format_duration).unwrap_or_else(|| "—".into()).into());
 
@@ -178,7 +221,8 @@ pub fn recompute_prediction(window: &MainWindow) {
     let m = window.get_bed_minute();
     window.set_bed_time_label(format!("{:02}:{:02}", h, m).into());
 
-    let sessions: Vec<Session> = events::get_sessions().unwrap_or_default()
+    let all_sessions = events::get_sessions().unwrap_or_default();
+    let sessions: Vec<Session> = completed_sessions_at(&all_sessions, chrono::Local::now().naive_local())
         .into_iter().filter(|s| !s.excluded).collect();
     if sessions.is_empty() {
         window.set_has_prediction(false);
@@ -206,4 +250,32 @@ pub fn recompute_prediction(window: &MainWindow) {
     window.set_sleep_cycle_label(cycle_label.into());
 
     window.set_has_prediction(true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn session(start: &str, end: &str) -> Session { Session {
+        start: start.into(), end: end.into(), duration_hours: 8.0,
+        session_type: "MANUAL".into(), excluded: false,
+    } }
+    fn at(s: &str) -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    #[test]
+    fn future_ending_sleep_is_not_a_completed_stat_session() {
+        let sessions = vec![session("2024-01-01 00:00:00", "2024-01-01 08:00:00"),
+            session("2024-01-02 00:00:00", "2024-01-02 08:00:00")];
+        let completed = completed_sessions_at(&sessions, at("2024-01-02 04:00:00"));
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].start, "2024-01-01 00:00:00");
+    }
+
+    #[test]
+    fn future_sleep_is_retained_for_tick_state_transitions() {
+        let sessions = vec![session("2024-01-02 22:00:00", "2024-01-03 06:00:00")];
+        let pending = pending_sleep_intervals(&sessions, at("2024-01-02 12:00:00"));
+        assert_eq!(pending, vec![(at("2024-01-02 22:00:00"), at("2024-01-03 06:00:00"))]);
+    }
 }
