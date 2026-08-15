@@ -325,6 +325,47 @@ fn manual_deleted_marker_excludes_manual_session() {
 }
 
 #[test]
+fn versioned_manual_add_can_restore_a_deleted_start_time() {
+    let manual = "\
+2024-01-01 13:00:00,2024-01-01 14:00:00
+2024-01-01 13:00:00,MANUAL_DELETED
+2024-01-01 13:00:00,2024-01-01 15:00:00,MANUAL_REV:100
+";
+    let s = sessions_with_manual("", manual, MIN);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].end, "2024-01-01 15:00:00");
+}
+
+#[test]
+fn legacy_unversioned_readds_after_delete_are_restored_by_one_versioned_add() {
+    // 旧バージョンのアプリが残した実ファイルと同じ形：版番号なしの追加(rev 0)→
+    // 旧形式の削除(rev 1)→版番号なしの再追加(rev 0、削除に負けて表示されない)が
+    // 並んだ後、新バージョンで一度だけ版番号付きの追加を行えばセッションが復活する。
+    let manual = "\
+2024-01-01 23:00:00,2024-01-02 07:00:00
+2024-01-01 23:00:00,MANUAL_DELETED
+2024-01-01 23:00:00,2024-01-02 07:00:00
+2024-01-01 23:00:00,2024-01-02 07:00:00
+2024-01-01 23:00:00,2024-01-02 07:00:00,MANUAL_REV:1784662870104000000
+";
+    let s = sessions_with_manual("", manual, MIN);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].start, "2024-01-01 23:00:00");
+}
+
+#[test]
+fn newest_versioned_manual_operation_wins_after_drive_union() {
+    let manual = "\
+2024-01-01 13:00:00,2024-01-01 14:00:00,MANUAL_REV:100
+2024-01-01 13:00:00,MANUAL_DELETED:200
+2024-01-01 13:00:00,2024-01-01 15:00:00,MANUAL_REV:300
+";
+    let s = sessions_with_manual("", manual, MIN);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].end, "2024-01-01 15:00:00");
+}
+
+#[test]
 fn manual_and_auto_sessions_coexist() {
     let raw = "2024-01-01 00:00:00,IDLE_START\n2024-01-01 08:00:00,IDLE_RESUME\n";
     let manual = "2024-01-01 13:00:00,2024-01-01 14:00:00\n";

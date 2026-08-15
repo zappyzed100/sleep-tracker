@@ -11,7 +11,13 @@ use std::fs::OpenOptions;
 use std::io::Write;
 
 use super::{TAG, SESSION_CACHE};
+use super::manual::manual_session_is_active;
 use super::parsing::{get_sessions, sort_manual_file, sort_events_file};
+
+fn operation_revision() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_nanos()
+}
 
 // 手動追加する睡眠時間が既存のセッションと重なっていないか確認する。
 // タイムスタンプは "YYYY-MM-DD HH:MM:SS" 固定長のため文字列比較がそのまま
@@ -29,7 +35,8 @@ pub fn add_session(start: String, end: String) -> Result<(), String> {
     }
     eprintln!("{} add_session: {} → {}", TAG, start, end);
     let path = crate::data_dir().join("sleep_manual.txt");
-    let line = format!("{},{}\n", start, end);
+    // 版番号はDriveの行union後にも追加と削除の前後関係を復元するために必要。
+    let line = format!("{},{},MANUAL_REV:{}\n", start, end, operation_revision());
     let mut f = OpenOptions::new().create(true).append(true).open(&path)
         .map_err(|e| e.to_string())?;
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
@@ -46,13 +53,10 @@ pub fn delete_session(start: String, _end: String) -> Result<(), String> {
     let manual_path = crate::data_dir().join("sleep_manual.txt");
     if manual_path.exists() {
         let content = std::fs::read_to_string(&manual_path).map_err(|e| e.to_string())?;
-        let is_manual = content.lines().any(|l| {
-            if let Some(c) = l.find(',') { &l[..c] == start.as_str() && &l[c+1..] != "MANUAL_DELETED" }
-            else { false }
-        });
+        let is_manual = manual_session_is_active(&content, &start);
         if is_manual {
             // Soft-delete: append MANUAL_DELETED marker so deletion survives Drive sync.
-            let marker = format!("{},MANUAL_DELETED\n", start);
+            let marker = format!("{},MANUAL_DELETED:{}\n", start, operation_revision());
             let mut f = OpenOptions::new().create(true).append(true).open(&manual_path)
                 .map_err(|e| e.to_string())?;
             f.write_all(marker.as_bytes()).map_err(|e| e.to_string())?;

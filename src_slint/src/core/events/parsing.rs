@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{Session, SessionCache, SESSION_CACHE, EVENTS_FILE_LOCK, TAG};
 use super::excluded::excluded_dates_from_content;
+use super::manual::manual_sessions_from_str;
 
 // Returns true if the last OUT_START in the file has no matching OUT_END / IN_HOUSE.
 pub fn is_out_from_content(content: &str) -> bool {
@@ -429,38 +430,17 @@ pub(super) fn parse_sessions_from_str(
     // Filter out soft-deleted sessions.
     sessions.retain(|s| !deleted_starts.contains(&s.start));
 
-    // Merge manual sessions from sleep_manual.txt (supports MANUAL_DELETED soft-delete)
+    // Merge manual sessions from sleep_manual.txt. 版付き操作により、削除した開始時刻を
+    // 後から再入力した場合は新しい追加操作が旧削除マーカーより優先される。
     if let Some(manual_raw) = manual_raw {
-        // First pass: collect soft-deleted start timestamps
-        let mut manual_deleted: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for line in manual_raw.lines() {
-            let line = line.trim().trim_start_matches('\u{FEFF}');
-            if let Some(c) = line.find(',') {
-                if &line[c+1..] == "MANUAL_DELETED" {
-                    manual_deleted.insert(line[..c].to_string());
-                }
-            }
-        }
-        // Second pass: add non-deleted sessions
-        for line in manual_raw.lines() {
-            let line = line.trim().trim_start_matches('\u{FEFF}');
-            if line.is_empty() { continue; }
-            if let Some(c) = line.find(',') {
-                let start = &line[..c];
-                let end   = &line[c+1..];
-                if end == "MANUAL_DELETED" { continue; }
-                if manual_deleted.contains(start) { continue; }
-                if let (Some(sep), Some(eep)) = (ts_to_epoch(start), ts_to_epoch(end)) {
-                    let dur = eep - sep;
-                    if dur > 0 {
-                        sessions.push(Session {
-                            excluded: is_excluded_at(start, &excluded_dates),
-                            start: start.to_string(),
-                            end: end.to_string(),
-                            duration_hours: dur as f64 / 3600.0,
-                            session_type: "MANUAL".to_string(),
-                        });
-                    }
+        for (start, end) in manual_sessions_from_str(manual_raw) {
+            if let (Some(sep), Some(eep)) = (ts_to_epoch(&start), ts_to_epoch(&end)) {
+                let dur = eep - sep;
+                if dur > 0 {
+                    sessions.push(Session {
+                        excluded: is_excluded_at(&start, &excluded_dates), start, end,
+                        duration_hours: dur as f64 / 3600.0, session_type: "MANUAL".to_string(),
+                    });
                 }
             }
         }

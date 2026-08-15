@@ -1,7 +1,7 @@
 //! events.rs — sleep_events.txt のパース・セッション管理（エントリポイント）
 //!
 //! 役割 : Session/SessionCache の型定義と、実装を委譲する各サブモジュール
-//!        （parsing/excluded/session_ops/backup/csv）の公開関数を
+//!        （parsing/manual/excluded/session_ops/backup/csv）の公開関数を
 //!        束ねて再公開する。内部ファイルへの直接importは禁止、ここ経由でのみ使う。
 //!
 //! 依存 : crate::data_dir, crate::THRESHOLD_SECS, crate::core::cloud
@@ -43,6 +43,7 @@ pub static SESSION_CACHE: std::sync::Mutex<Option<SessionCache>> = std::sync::Mu
 pub static EVENTS_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod parsing;
+mod manual;
 mod excluded;
 mod session_ops;
 mod backup;
