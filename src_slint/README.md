@@ -30,9 +30,9 @@ WebViewを使わないため、Tauri版で問題になっていたAndroidのWebV
 .\scripts\build-windows.ps1
 ```
 
-既存のアプリを終了してからビルドし、完了後に登録済みタスクバーショートカットを
-Shell経由で起動する場合は次を使う。exeを直接起動しないため、通常のダブルクリックと
-同じ起動経路になる。
+ビルド後にユーザーのスタートメニューへ `睡眠トラッカー.lnk` を登録し、既存のアプリを
+終了してからそのショートカットをShell経由で起動する場合は次を使う。ショートカットの
+アイコンは `assets/icon.ico` がrelease exeへ埋め込まれたリソースを使用する。
 
 ```powershell
 .\scripts\build-windows.ps1 -Launch

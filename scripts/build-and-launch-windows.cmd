@@ -2,7 +2,7 @@
 setlocal
 
 rem Explorerからダブルクリックして実行するWindows用エントリポイント。
-rem build-windows.ps1がreleaseビルド、既存のタスクバーショートカット経由の起動、
+rem build-windows.ps1がreleaseビルド、スタートメニューショートカットの登録と起動、
 rem 既存プロセスの終了をまとめて行う。
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-windows.ps1" -Launch
